@@ -152,7 +152,7 @@
                 </div>
                 <div class="modal-footer">
                     <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-                    <button class="btn btn-primary" onclick="submitNewProject()">Create Project</button>
+                    <button class="btn btn-primary" onclick="submitNewProject().catch(e => console.error('Error creating project:', e))">Create Project</button>
                 </div>
             </div>
         </div>

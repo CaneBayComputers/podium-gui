@@ -73,6 +73,7 @@ document.addEventListener('DOMContentLoaded', (): void => {
     // Initialize app components
     Promise.all([
         loadProjects(),
+        startServicesOnLoad(),
         loadServices()
     ]).then(() => {
         setupEventListeners();
@@ -334,6 +335,22 @@ function renderProjects(): void {
             </div>
         `;
     }).join('');
+}
+
+async function startServicesOnLoad(): Promise<void> {
+    try {
+        console.log('Starting services on dashboard load...');
+        const result = await ipcRenderer.invoke('execute-podium', 'start', ['services', '--no-coloring']);
+        
+        if (result.code !== 0) {
+            console.warn('Failed to start services:', result.stderr);
+        } else {
+            console.log('Services started successfully');
+        }
+    } catch (error) {
+        console.warn('Error starting services:', error);
+        // Don't fail the dashboard load if services fail to start
+    }
 }
 
 async function loadServices(): Promise<void> {
@@ -1081,6 +1098,8 @@ function clearFieldErrors(): void {
 }
 
 async function submitNewProject(): Promise<void> {
+    console.log('DEBUG: submitNewProject called');
+    
     // Clear any previous errors
     clearFieldErrors();
     
