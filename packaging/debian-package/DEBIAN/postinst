@@ -57,7 +57,7 @@ echo "   1. Log out and back in (or run: newgrp docker)"
 echo "   2. Launch Podium GUI from your applications menu"
 echo "   3. Or run: podium gui"
 echo ""
-echo "📖 Documentation: https://podium.dev/docs"
+echo "📖 Documentation: https://podiumdev.io/docs"
 echo ""
 
 exit 0

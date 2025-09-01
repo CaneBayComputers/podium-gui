@@ -67,13 +67,13 @@ npm run package
 
 This software is proprietary and requires a valid license for use. 
 
-For licensing information, visit: https://podium.dev/pricing
+For licensing information, visit: https://podiumdev.io/pricing
 
 ## Support
 
-- 📧 Email: support@canebaycomputers.com
+- 📧 Email: canebaycomputers@gmail.com
 - 🐛 Issues: https://github.com/CaneBayComputers/podium-gui/issues
-- 📖 Documentation: https://podium.dev/docs
+- 📖 Documentation: https://podiumdev.io/docs
 
 ---
 
