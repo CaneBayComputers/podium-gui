@@ -910,6 +910,14 @@ function createNewProject(): void {
     showModal('new-project-modal');
 }
 
+function handleCreateProject(): void {
+    console.log('DEBUG: handleCreateProject called');
+    submitNewProject().catch(error => {
+        console.error('Error creating project:', error);
+        showError(`Failed to create project: ${error.message}`);
+    });
+}
+
 function cloneProject(): void {
     showModal('clone-project-modal');
 }
@@ -1108,9 +1116,13 @@ async function submitNewProject(): Promise<void> {
     const projectEmoji = (document.getElementById('project-emoji') as HTMLSelectElement)?.value || '🚀';
     const projectType = (document.querySelector('input[name="project-type"]:checked') as HTMLInputElement)?.value;
     
+    console.log('DEBUG: Form values:', { projectName, projectDescription, projectEmoji, projectType });
+    
     // Validate project name
     const nameValidation = validateProjectName(projectName);
+    console.log('DEBUG: Name validation:', nameValidation);
     if (!nameValidation.valid) {
+        console.log('DEBUG: Name validation failed');
         showFieldError('project-name', nameValidation.error!);
         return;
     }
