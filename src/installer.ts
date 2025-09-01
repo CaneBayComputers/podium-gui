@@ -181,6 +181,10 @@ async function startInstallation(): Promise<void> {
         updateProgress(20, 'Configuring Podium environment...');
         await runPodiumConfig();
         
+        // Start services after configuration
+        updateProgress(80, 'Starting services...');
+        await startServicesAfterConfig();
+        
         // Installation complete
         updateProgress(100, 'Installation complete!');
         console.log('Installation process completed successfully');
@@ -212,6 +216,30 @@ function updateProgress(percentage: number, message: string): void {
 
 
 
+
+async function startServicesAfterConfig(): Promise<void> {
+    return new Promise((resolve, reject) => {
+        console.log('Starting Podium services after configuration...');
+        
+        const { ipcRenderer } = require('electron');
+        
+        // Run podium start-services command
+        ipcRenderer.invoke('execute-command-stream', 'podium', ['start-services', '--no-coloring']).then((result: StreamCommandResult) => {
+            console.log('Start services finished with result:', result);
+            
+            if (result.code === 0) {
+                resolve();
+            } else {
+                // Don't fail the installation if services don't start - just log it
+                console.warn('Services failed to start, but continuing...', result.stderr);
+                resolve();
+            }
+        }).catch((error: Error) => {
+            console.warn('Error starting services, but continuing...', error);
+            resolve();
+        });
+    });
+}
 
 async function runPodiumConfig(): Promise<void> {
     return new Promise((resolve, reject) => {
