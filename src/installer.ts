@@ -176,6 +176,12 @@ async function startInstallation(): Promise<void> {
     let progress: number = 0;
     
     try {
+        // Hide back button once installation starts
+        const backBtn = document.querySelector('.btn-secondary') as HTMLButtonElement;
+        if (backBtn && backBtn.textContent?.includes('Back')) {
+            backBtn.style.display = 'none';
+        }
+        
         // The deb/mac installer should have already installed Podium CLI globally
         // Just run the configuration
         updateProgress(20, 'Configuring Podium environment...');
@@ -229,7 +235,31 @@ async function startServicesAfterConfig(): Promise<void> {
         let serviceStarted = false;
         
         // Run podium start-services command with streaming output
-        ipcRenderer.invoke('execute-command-stream', 'podium', ['start-services', '--no-coloring']).then((result: StreamCommandResult) => {
+        const streamHandler = (data: any) => {
+            if (data.type === 'stdout' && data.data) {
+                const output = data.data.toString();
+                console.log('Service startup output:', output);
+                
+                // Parse Docker download progress
+                if (output.includes('Pulling')) {
+                    const match = output.match(/Pulling from (.+)/);
+                    if (match) {
+                        updateProgress(85, `Downloading ${match[1]}...`);
+                    }
+                } else if (output.includes('Pull complete')) {
+                    updateProgress(90, 'Download complete, starting services...');
+                } else if (output.includes('Creating') || output.includes('Starting')) {
+                    const match = output.match(/(Creating|Starting) (.+)/);
+                    if (match) {
+                        updateProgress(92, `${match[1]} ${match[2]}...`);
+                    }
+                } else if (output.includes('Started') || output.includes('Created')) {
+                    updateProgress(94, 'Services starting up...');
+                }
+            }
+        };
+        
+        ipcRenderer.invoke('execute-command-stream', 'podium', ['start-services', '--no-coloring'], { onData: streamHandler }).then((result: StreamCommandResult) => {
             console.log('Start services finished with result:', result);
             serviceStarted = true;
             

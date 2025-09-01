@@ -538,6 +538,9 @@ function showModal(modalId: string): void {
     }
 }
 
+// Make showModal available globally immediately
+(window as any).showModal = showModal;
+
 function hideModal(modalId: string): void {
     const modal: HTMLElement | null = document.getElementById(modalId);
     if (modal) {
@@ -897,9 +900,16 @@ async function stopAllProjects(): Promise<void> {
 function createNewProject(): void {
     console.log('DEBUG: createNewProject called');
     console.log('DEBUG: About to call showModal with new-project-modal');
+    
+    // Add a visual indicator that the function was called
+    alert('createNewProject function called!');
+    
     showModal('new-project-modal');
     console.log('DEBUG: showModal call completed');
 }
+
+// Make this function available globally immediately
+(window as any).createNewProject = createNewProject;
 
 function handleCreateProject(): void {
     console.log('DEBUG: handleCreateProject called');
@@ -1501,23 +1511,33 @@ function toggleDropdown(): void {
 }
 
 function showAboutModal(): void {
+    console.log('DEBUG: showAboutModal called');
     const modal = document.getElementById('about-modal');
+    console.log('DEBUG: about-modal element found:', !!modal);
     if (modal) {
         modal.classList.add('show');
+        console.log('DEBUG: about-modal show class added');
     }
-    // Close dropdown when opening modal
+    // Close dropdown when opening modal (if it exists)
     const dropdown = document.getElementById('help-dropdown');
     if (dropdown) {
         dropdown.classList.remove('show');
     }
 }
 
+// Make showAboutModal available globally immediately
+(window as any).showAboutModal = showAboutModal;
+
 function closeAboutModal(): void {
+    console.log('DEBUG: closeAboutModal called');
     const modal = document.getElementById('about-modal');
     if (modal) {
         modal.classList.remove('show');
     }
 }
+
+// Make closeAboutModal available globally immediately
+(window as any).closeAboutModal = closeAboutModal;
 
 // Close dropdown when clicking outside
 document.addEventListener('click', function(event: Event) {
