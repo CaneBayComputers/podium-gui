@@ -340,7 +340,7 @@ function renderProjects(): void {
 async function startServicesOnLoad(): Promise<void> {
     try {
         console.log('Starting services on dashboard load...');
-        const result = await ipcRenderer.invoke('execute-podium', 'start', ['services', '--no-coloring']);
+        const result = await ipcRenderer.invoke('execute-podium', 'start-services', ['--no-coloring']);
         
         if (result.code !== 0) {
             console.warn('Failed to start services:', result.stderr);
@@ -917,6 +917,17 @@ function handleCreateProject(): void {
         showError(`Failed to create project: ${error.message}`);
     });
 }
+
+// Make functions globally available
+(window as any).handleCreateProject = handleCreateProject;
+(window as any).createNewProject = createNewProject;
+(window as any).cloneProject = cloneProject;
+(window as any).startAllProjects = startAllProjects;
+(window as any).stopAllProjects = stopAllProjects;
+(window as any).closeModal = closeModal;
+(window as any).openUrl = openUrl;
+(window as any).toggleDropdown = toggleDropdown;
+(window as any).showAboutModal = showAboutModal;
 
 function cloneProject(): void {
     showModal('clone-project-modal');
