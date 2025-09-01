@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, IpcMainInvokeEvent } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, IpcMainInvokeEvent, Menu, shell } from 'electron';
 import * as path from 'path';
 import { spawn, ChildProcess, execSync } from 'child_process';
 import * as fs from 'fs';
@@ -53,6 +53,130 @@ function createWindow(): void {
     icon: path.join(__dirname, '../assets/icon.png'),
     title: 'Podium - PHP Development Platform'
   });
+
+  // Set up custom application menu
+  const template: any[] = [
+    {
+      label: 'File',
+      submenu: [
+        {
+          label: 'New Project',
+          accelerator: 'CmdOrCtrl+N',
+          click: () => {
+            mainWindow?.webContents.executeJavaScript('createNewProject()');
+          }
+        },
+        {
+          label: 'Clone Project',
+          accelerator: 'CmdOrCtrl+Shift+N',
+          click: () => {
+            mainWindow?.webContents.executeJavaScript('cloneProject()');
+          }
+        },
+        { type: 'separator' },
+        {
+          label: 'Quit',
+          accelerator: process.platform === 'darwin' ? 'Cmd+Q' : 'Ctrl+Q',
+          click: () => {
+            app.quit();
+          }
+        }
+      ]
+    },
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        { role: 'selectall' }
+      ]
+    },
+    {
+      label: 'View',
+      submenu: [
+        { role: 'reload' },
+        { role: 'forceReload' },
+        { role: 'toggleDevTools' },
+        { type: 'separator' },
+        { role: 'resetZoom' },
+        { role: 'zoomIn' },
+        { role: 'zoomOut' },
+        { type: 'separator' },
+        { role: 'togglefullscreen' }
+      ]
+    },
+    {
+      label: 'Window',
+      submenu: [
+        { role: 'minimize' },
+        { role: 'close' }
+      ]
+    },
+    {
+      label: 'Help',
+      submenu: [
+        {
+          label: 'About',
+          click: () => {
+            mainWindow?.webContents.executeJavaScript('openAboutModal()');
+          }
+        },
+        { type: 'separator' },
+        {
+          label: 'GitHub',
+          click: () => {
+            shell.openExternal('https://github.com/CaneBayComputers/podium');
+          }
+        },
+        {
+          label: 'Patreon',
+          click: () => {
+            shell.openExternal('https://patreon.com/canebaycomputers');
+          }
+        },
+        {
+          label: 'Donate',
+          click: () => {
+            shell.openExternal('https://securelink-prod.valorpaytech.com:4430/?redirect=1&uid=6e840752-8751-11f0-a74f-12a0879a85b1');
+          }
+        }
+      ]
+    }
+  ];
+
+  // macOS specific menu adjustments
+  if (process.platform === 'darwin') {
+    template.unshift({
+      label: app.getName(),
+      submenu: [
+        { role: 'about' },
+        { type: 'separator' },
+        { role: 'services', submenu: [] },
+        { type: 'separator' },
+        { role: 'hide' },
+        { role: 'hideothers' },
+        { role: 'unhide' },
+        { type: 'separator' },
+        { role: 'quit' }
+      ]
+    });
+
+    // Window menu
+    template[5].submenu = [
+      { role: 'close' },
+      { role: 'minimize' },
+      { role: 'zoom' },
+      { type: 'separator' },
+      { role: 'front' }
+    ];
+  }
+
+  const menu = Menu.buildFromTemplate(template);
+  Menu.setApplicationMenu(menu);
 
   // Check if Podium CLI is installed and configured
   const podiumStatus: string = checkPodiumStatus();

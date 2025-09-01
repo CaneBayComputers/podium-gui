@@ -809,6 +809,7 @@ span.status-indicator {
 
 .modal-footer {
     padding: 1rem 1.5rem;
+    margin-top: 2rem;
     border-top: 1px solid rgba(255, 255, 255, 0.2);
     display: flex;
     justify-content: flex-end;
