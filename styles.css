@@ -332,6 +332,14 @@ body::before {
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
 }
 
+.project-card.placeholder {
+    text-align: center;
+}
+
+.project-card.placeholder .btn {
+    margin-top: 1.5rem;
+}
+
 @media (max-width: 1400px) {
     .project-card {
         flex: 0 0 calc(50% - 0.5rem);
