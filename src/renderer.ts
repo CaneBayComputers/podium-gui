@@ -529,9 +529,12 @@ function showCreateProject(): void {
 
 // Modal management
 function showModal(modalId: string): void {
+    console.log('DEBUG: showModal called with modalId:', modalId);
     const modal: HTMLElement | null = document.getElementById(modalId);
+    console.log('DEBUG: modal element found:', !!modal);
     if (modal) {
         modal.classList.add('show');
+        console.log('DEBUG: modal show class added');
     }
 }
 
@@ -892,6 +895,7 @@ async function stopAllProjects(): Promise<void> {
 
 // Additional GUI functions
 function createNewProject(): void {
+    console.log('DEBUG: createNewProject called');
     showModal('new-project-modal');
 }
 
@@ -903,16 +907,7 @@ function handleCreateProject(): void {
     });
 }
 
-// Make functions globally available
-(window as any).handleCreateProject = handleCreateProject;
-(window as any).createNewProject = createNewProject;
-(window as any).cloneProject = cloneProject;
-(window as any).startAllProjects = startAllProjects;
-(window as any).stopAllProjects = stopAllProjects;
-(window as any).closeModal = closeModal;
-(window as any).openUrl = openUrl;
-(window as any).toggleDropdown = toggleDropdown;
-(window as any).showAboutModal = showAboutModal;
+// Functions made globally available at end of file
 
 function cloneProject(): void {
     showModal('clone-project-modal');
@@ -1554,6 +1549,8 @@ document.addEventListener('click', function(event: Event) {
 (window as any).closeModal = closeModal;
 (window as any).submitNewProject = submitNewProject;
 (window as any).submitCloneProject = submitCloneProject;
+(window as any).handleCreateProject = handleCreateProject;
 (window as any).toggleDropdown = toggleDropdown;
 (window as any).showAboutModal = showAboutModal;
 (window as any).closeAboutModal = closeAboutModal;
+(window as any).showModal = showModal;
