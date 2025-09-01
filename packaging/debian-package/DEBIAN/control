@@ -3,7 +3,7 @@ Version: 1.0.0-beta4
 Section: devel
 Priority: optional
 Architecture: amd64
-Depends: git, curl, ca-certificates, docker.io | docker-ce, nodejs (>= 16.0.0), npm
+Depends: git, curl, ca-certificates, gnupg, lsb-release, apt-transport-https, unzip, jq, software-properties-common, build-essential, mariadb-client, p7zip-full, trash-cli, net-tools, docker.io | docker-ce, nodejs (>= 16.0.0), npm
 Maintainer: Cane Bay Computers <info@canecomputers.com>
 Description: Podium GUI - Professional PHP Development Platform Interface
  Podium GUI is the premium graphical interface for the Podium development
