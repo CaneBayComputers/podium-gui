@@ -1,0 +1,40 @@
+#!/bin/bash
+set -e
+
+# Pre-removal script for Podium CLI
+
+echo "Removing Podium CLI..."
+
+# Stop any running Podium projects
+if [ -x /usr/local/bin/podium ]; then
+    echo "Stopping any running Podium services..."
+    
+    # Try to stop shared services gracefully
+    cd /usr/local/share/podium-cli 2>/dev/null || true
+    if [ -f "scripts/shutdown.sh" ]; then
+        bash scripts/shutdown.sh 2>/dev/null || true
+    fi
+    
+    # Stop any running project containers
+    if command -v docker >/dev/null 2>&1; then
+        echo "Stopping Podium project containers..."
+        docker ps --filter "label=podium" -q | xargs -r docker stop 2>/dev/null || true
+        docker ps -a --filter "label=podium" -q | xargs -r docker rm 2>/dev/null || true
+    fi
+fi
+
+# Remove symlink
+if [ -L /usr/local/bin/podium ]; then
+    echo "Removing podium command..."
+    rm -f /usr/local/bin/podium
+fi
+
+echo "Podium CLI removal preparation complete."
+echo ""
+echo "Note: Your project files and Docker images have been preserved."
+echo "To completely remove all Podium data:"
+echo "  - Remove project files manually from /usr/local/share/podium-cli/projects/"
+echo "  - Remove Docker images: docker image prune"
+echo ""
+
+exit 0

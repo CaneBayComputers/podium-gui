@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Podium - PHP Development Platform</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="app">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-content">
+                <div class="logo">
+                    <h1>Podium</h1>
+                    <span class="tagline">Professional PHP Development Platform</span>
+                    <span id="debug-indicator" class="debug-indicator" style="display: none;">DEBUG MODE - F5 to refresh</span>
+                </div>
+                <div class="header-actions">
+                    <button class="btn btn-success" onclick="startAllProjects()">Start All</button>
+                    <button class="btn btn-warning" onclick="stopAllProjects()">Stop All</button>
+                    <button class="btn btn-primary" onclick="createNewProject()">+ New Project</button>
+                    <button class="btn btn-primary" onclick="cloneProject()">📥 Clone</button>
+                    <button class="btn btn-secondary btn-small" onclick="openUrl('https://github.com/CaneBayComputers/podium')" title="View on GitHub">⭐ GitHub</button>
+                    <button class="btn btn-secondary btn-small" onclick="openUrl('https://patreon.com/canebaycomputers')" title="Support on Patreon">❤️ Patreon</button>
+                    <button class="btn btn-secondary btn-small" onclick="openUrl('https://securelink-prod.valorpaytech.com:4430/?redirect=1&uid=6e840752-8751-11f0-a74f-12a0879a85b1')" title="Donate">💳 Donate</button>
+                    <div class="dropdown">
+                        <button class="btn btn-secondary dropdown-toggle" onclick="toggleDropdown()">Help ▼</button>
+                        <div class="dropdown-menu" id="help-dropdown">
+                            <a href="#" onclick="showAboutModal()">About Podium</a>
+                            <a href="#" onclick="openUrl('https://github.com/CaneBayComputers/podium')">📖 Documentation</a>
+                            <a href="#" onclick="openUrl('https://github.com/CaneBayComputers/podium/issues')">🐛 Report Issue</a>
+                            <div class="dropdown-divider"></div>
+                            <a href="#" onclick="openUrl('https://patreon.com/canebaycomputers')">❤️ Support on Patreon</a>
+                            <a href="#" onclick="openUrl('https://securelink-prod.valorpaytech.com:4430/?redirect=1&uid=6e840752-8751-11f0-a74f-12a0879a85b1')">💳 Donate</a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Project Dashboard -->
+            <section class="dashboard">
+
+                <!-- Projects Grid -->
+                <div id="projects-grid" class="projects-grid">
+                    <!-- Projects will be loaded here -->
+                    <div class="project-card placeholder">
+                        <div class="project-icon">🚀</div>
+                        <h3>Create Your First Project</h3>
+                        <p>Get started by creating a new Laravel or WordPress project</p>
+                        <button class="btn btn-primary" onclick="createNewProject()">+ New Project</button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Services Status -->
+            <section class="services">
+                <div class="services-header">
+                    <h3>Shared Services</h3>
+                    <div class="services-controls">
+                        <button class="btn btn-success btn-small" onclick="startServices()">▶ Start Services</button>
+                        <button class="btn btn-warning btn-small" onclick="stopServices()">⏹ Stop Services</button>
+                        <button class="btn btn-primary btn-small" onclick="openUrl('http://phpmyadmin')">🗄️ phpMyAdmin</button>
+                        <button class="btn btn-primary btn-small" onclick="openUrl('http://localhost:8025')">📧 MailHog</button>
+                    </div>
+                </div>
+                <div id="services-grid" class="services-grid">
+                    <!-- Services will be loaded dynamically -->
+                </div>
+            </section>
+        </main>
+
+        <!-- Modals -->
+        <div id="new-project-modal" class="modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>Create New Project</h3>
+                    <button class="modal-close" onclick="closeModal()">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <form id="new-project-form">
+                        <div class="form-group">
+                            <label>Project Name</label>
+                            <input type="text" id="project-name" placeholder="My Awesome Project" required>
+                            <small class="form-help">Will be sanitized for container name (spaces→dashes, lowercase)</small>
+                        </div>
+
+                        <div class="form-group">
+                            <label>Description</label>
+                            <input type="text" id="project-description" placeholder="A brief description of your project">
+                            <small class="form-help">Optional description shown on the project tile</small>
+                        </div>
+
+                        <div class="form-group">
+                            <label>Project Emoji</label>
+                            <select id="project-emoji">
+                                <option value="🚀">🚀 Rocket</option>
+                                <option value="💻">💻 Computer</option>
+                                <option value="🌟">🌟 Star</option>
+                                <option value="🔥">🔥 Fire</option>
+                                <option value="⚡">⚡ Lightning</option>
+                                <option value="🎯">🎯 Target</option>
+                                <option value="🏆">🏆 Trophy</option>
+                                <option value="💎">💎 Diamond</option>
+                                <option value="🎨">🎨 Art</option>
+                                <option value="🔧">🔧 Wrench</option>
+                                <option value="📱">📱 Mobile</option>
+                                <option value="🌐">🌐 Globe</option>
+                                <option value="🎮">🎮 Game</option>
+                                <option value="📊">📊 Chart</option>
+                                <option value="🛡️">🛡️ Shield</option>
+                            </select>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label>Project Type</label>
+                            <div class="radio-group">
+                                <label><input type="radio" name="project-type" value="laravel" checked> Laravel</label>
+                                <label><input type="radio" name="project-type" value="wordpress"> WordPress</label>
+                                <label><input type="radio" name="project-type" value="php"> PHP</label>
+                            </div>
+                        </div>
+
+                        <div class="form-group" id="laravel-version-group">
+                            <label>Laravel Version</label>
+                            <input type="text" id="laravel-version" placeholder="latest" value="latest">
+                            <small class="form-help">Enter version (e.g., 11.2.1) or "latest" for newest release</small>
+                        </div>
+
+                        <div class="form-group" id="wordpress-version-group" style="display: none;">
+                            <label>WordPress Version</label>
+                            <input type="text" id="wordpress-version" placeholder="latest" value="latest">
+                            <small class="form-help">Enter version (e.g., 6.4.2) or "latest" for newest release</small>
+                        </div>
+
+                        <div class="form-group">
+                            <label>
+                                <input type="checkbox" id="create-github-repo" />
+                                Create GitHub repository
+                            </label>
+                        </div>
+
+                        <div class="form-group" id="github-options" style="display: none;">
+                            <label>GitHub Organization (Optional)</label>
+                            <input type="text" id="organization" placeholder="mycompany">
+                            <small class="form-help">Leave blank to create in your personal account</small>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+                    <button class="btn btn-primary" onclick="submitNewProject()">Create Project</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Remove Project Modal -->
+        <div id="remove-project-modal" class="modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>Remove Project</h3>
+                    <button class="modal-close" onclick="closeModal()">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <p>Are you sure you want to remove the project <strong id="remove-project-name"></strong>?</p>
+                    <div class="form-group" style="margin-top: 1.5rem;">
+                        <label>
+                            <input type="checkbox" id="preserve-database" />
+                            Preserve database (keep project data)
+                        </label>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+                    <button class="btn btn-danger" onclick="confirmRemoveProject()">Remove Project</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Edit Project Modal -->
+        <div id="edit-project-modal" class="modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>Edit Project</h3>
+                    <button class="modal-close" onclick="closeModal()">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <form id="edit-project-form">
+                        <div class="form-group">
+                            <label>Display Name</label>
+                            <input type="text" id="edit-display-name" required>
+                        </div>
+
+                        <div class="form-group">
+                            <label>Description</label>
+                            <input type="text" id="edit-description" placeholder="Optional description">
+                        </div>
+
+                        <div class="form-group">
+                            <label>Project Emoji</label>
+                            <select id="edit-emoji">
+                                <option value="🚀">🚀 Rocket</option>
+                                <option value="💻">💻 Computer</option>
+                                <option value="🌟">🌟 Star</option>
+                                <option value="🔥">🔥 Fire</option>
+                                <option value="⚡">⚡ Lightning</option>
+                                <option value="🎯">🎯 Target</option>
+                                <option value="🏆">🏆 Trophy</option>
+                                <option value="💎">💎 Diamond</option>
+                                <option value="🎨">🎨 Art</option>
+                                <option value="🔧">🔧 Wrench</option>
+                                <option value="📱">📱 Mobile</option>
+                                <option value="🌐">🌐 Globe</option>
+                                <option value="🎮">🎮 Game</option>
+                                <option value="📊">📊 Chart</option>
+                                <option value="🛡️">🛡️ Shield</option>
+                            </select>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+                    <button class="btn btn-primary" onclick="submitEditProject()">Save Changes</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Manage Service Modal -->
+        <div id="manage-service-modal" class="modal manage-modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3 id="manage-service-title">Manage Service</h3>
+                    <button class="modal-close" onclick="closeModal()">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="stats-grid" id="service-stats">
+                        <!-- Stats will be populated dynamically -->
+                    </div>
+                    
+                    <div class="flush-section">
+                        <h4>⚠️ Danger Zone</h4>
+                        <p>Flushing will permanently delete all data in this service.</p>
+                        <button class="btn btn-danger" onclick="flushServiceData()" id="flush-button">
+                            🗑️ Flush All Data
+                        </button>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" onclick="closeModal()">Close</button>
+                    <button class="btn btn-primary" onclick="refreshServiceStats()" id="refresh-stats-button">
+                        🔄 Refresh Stats
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Clone Project Modal -->
+        <div id="clone-project-modal" class="modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>📥 Clone Project</h3>
+                    <button class="modal-close" onclick="closeModal()">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <form id="clone-project-form">
+                        <div class="form-group">
+                            <label for="clone-repo-url">Git Repository URL:</label>
+                            <input type="url" id="clone-repo-url" name="repoUrl" required placeholder="https://github.com/user/repo.git">
+                            <span class="form-help">Enter the full Git repository URL to clone</span>
+                            <div class="field-error" id="clone-repo-url-error"></div>
+                        </div>
+                        <div class="form-group">
+                            <label for="clone-project-name">Local Project Name (optional):</label>
+                            <input type="text" id="clone-project-name" name="projectName" maxlength="50" placeholder="Leave empty to use repository name">
+                            <span class="form-help">If empty, will use the repository name</span>
+                            <div class="field-error" id="clone-project-name-error"></div>
+                        </div>
+                        <div class="form-actions">
+                            <button type="button" onclick="closeModal()">Cancel</button>
+                            <button type="submit">📥 Clone Project</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        <!-- Loading Overlay -->
+        <div id="loading-overlay" class="loading-overlay" style="display: none;">
+            <div class="loading-content">
+                <div class="loading-spinner"></div>
+                <h3 id="loading-message">Please wait...</h3>
+                <p id="loading-details">Processing your request</p>
+            </div>
+        </div>
+
+        <!-- Initial Loading Screen -->
+        <div id="initial-loading" class="initial-loading">
+            <div class="initial-loading-content">
+                <div class="loading-spinner large"></div>
+                <h2>Loading Podium</h2>
+                <p>Initializing your development environment...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- About Modal -->
+    <div id="about-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>About Podium</h2>
+                <span class="close" onclick="closeAboutModal()">&times;</span>
+            </div>
+            <div class="modal-body">
+                <div class="about-logo">
+                    <h1>Podium</h1>
+                    <span class="version">Version 1.0 Beta 4</span>
+                </div>
+                <p><strong>Professional PHP Development Platform</strong></p>
+                <p>Podium is a comprehensive Docker-based development environment for PHP projects, featuring both a powerful Command Line Interface (CLI) and an intuitive Graphical User Interface (GUI).</p>
+                
+                <div class="about-features">
+                    <h3>Features:</h3>
+                    <ul>
+                        <li>🚀 Multi-project support with isolated environments</li>
+                        <li>🗄️ Integrated database services (MySQL, PostgreSQL, MongoDB)</li>
+                        <li>⚡ Caching solutions (Redis, Memcached)</li>
+                        <li>📧 Email testing with MailHog</li>
+                        <li>🤖 Local AI integration with Ollama</li>
+                        <li>🌐 Instant LAN sharing for demos</li>
+                        <li>🎨 Modern GUI with retro synthwave theme</li>
+                    </ul>
+                </div>
+
+                <div class="about-links">
+                    <button class="btn btn-primary" onclick="openUrl('https://github.com/CaneBayComputers/podium')">
+                        ⭐ View on GitHub
+                    </button>
+                    <button class="btn btn-secondary" onclick="openUrl('https://patreon.com/canebaycomputers')">
+                        ❤️ Support on Patreon
+                    </button>
+                    <button class="btn btn-secondary" onclick="openUrl('https://securelink-prod.valorpaytech.com:4430/?redirect=1&uid=6e840752-8751-11f0-a74f-12a0879a85b1')">
+                        💳 Donate
+                    </button>
+                </div>
+
+                <div class="about-footer">
+                    <p><small>© 2024 Cane Bay Computers. Made with ❤️ for the PHP community.</small></p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="dist/renderer.js"></script>
+
+</body>
+</html>

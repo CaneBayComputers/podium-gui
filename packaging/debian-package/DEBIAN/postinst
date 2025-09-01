@@ -1,0 +1,52 @@
+#!/bin/bash
+set -e
+
+# Post-installation script for Podium CLI
+
+echo "Installing Podium CLI..."
+
+# Create symlink to make podium command available
+if [ ! -L /usr/local/bin/podium ]; then
+    ln -sf /usr/local/share/podium-cli/podium /usr/local/bin/podium
+fi
+
+# Make sure podium script is executable
+chmod +x /usr/local/share/podium-cli/podium
+
+# Add current user to docker group (if not root)
+if [ "$SUDO_USER" != "" ] && [ "$SUDO_USER" != "root" ]; then
+    echo "Adding user $SUDO_USER to docker group..."
+    usermod -aG docker "$SUDO_USER" || echo "Note: Could not add user to docker group. You may need to do this manually."
+fi
+
+# Enable and start Docker service
+if systemctl is-enabled docker.service >/dev/null 2>&1; then
+    echo "Docker service is already enabled"
+else
+    echo "Enabling Docker service..."
+    systemctl enable docker.service || echo "Note: Could not enable Docker service"
+fi
+
+if systemctl is-active docker.service >/dev/null 2>&1; then
+    echo "Docker service is already running"
+else
+    echo "Starting Docker service..."
+    systemctl start docker.service || echo "Note: Could not start Docker service"
+fi
+
+# Set proper permissions
+chown -R root:root /usr/local/share/podium-cli
+chmod -R 755 /usr/local/share/podium-cli
+chmod +x /usr/local/share/podium-cli/scripts/*.sh
+
+echo "✅ Podium CLI installed successfully!"
+echo ""
+echo "🚀 Next steps:"
+echo "   1. Log out and back in (or run: newgrp docker)"
+echo "   2. Run: podium config"
+echo "   3. Create your first project: podium new"
+echo ""
+echo "📖 Documentation: https://github.com/CaneBayComputers/podium-cli"
+echo ""
+
+exit 0

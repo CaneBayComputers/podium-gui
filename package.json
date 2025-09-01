@@ -1,0 +1,63 @@
+{
+  "name": "podium-gui",
+  "version": "1.0.0",
+  "description": "Professional GUI for Podium PHP Development Platform",
+  "main": "dist/main.js",
+  "scripts": {
+    "build-ts": "tsc",
+    "watch-ts": "tsc --watch",
+    "start": "npm run build-ts && electron dist/main.js",
+    "dev": "npm run build-ts && electron dist/main.js --dev",
+    "build": "npm run build-ts && electron-builder",
+    "build-mac": "npm run build-ts && electron-builder --mac",
+    "build-win": "npm run build-ts && electron-builder --win",
+    "build-linux": "npm run build-ts && electron-builder --linux",
+    "pack": "npm run build-ts && electron-builder --dir",
+    "dist": "npm run build-ts && electron-builder --publish=never",
+    "clean": "rm -rf dist",
+    "rebuild": "npm run clean && npm run build-ts"
+  },
+  "keywords": [
+    "php",
+    "laravel",
+    "wordpress",
+    "docker",
+    "development",
+    "gui"
+  ],
+  "author": "Cane Bay Computers",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.19.11",
+    "electron": "^28.0.0",
+    "electron-builder": "^24.0.0",
+    "typescript": "^5.9.2"
+  },
+  "dependencies": {
+    "ansi-to-html": "^0.7.2"
+  },
+  "build": {
+    "appId": "com.canebaycomputers.podium",
+    "productName": "Podium",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "dist/**/*",
+      "*.html",
+      "*.css",
+      "assets/**/*",
+      "node_modules/**/*"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": "dmg"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "linux": {
+      "target": "dir"
+    }
+  }
+}
