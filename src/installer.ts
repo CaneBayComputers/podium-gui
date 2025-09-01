@@ -1,7 +1,137 @@
-import * as fs from 'fs';
-import { ipcRenderer } from 'electron';
-import * as path from 'path';
+// Using lazy-loaded requires to avoid module initialization issues
 const Convert = require('ansi-to-html');
+
+// Docker progress parsing function
+function parseDockerProgress(logContent: string): { overall_percent: number; message: string } | null {
+    if (!logContent) return null;
+    
+    const lines = logContent.split('\n');
+    let pullingCount = 0;
+    let downloadedCount = 0;
+    let layerProgress = new Map<string, { current: number; total: number }>();
+    let downloadingLayers = new Set<string>();
+    let extractingLayers = new Map<string, { current: number; total: number }>();
+    
+    // Helper function to parse size strings like "45.2MB" to bytes
+    function parseBytes(sizeStr: string): number {
+        const match = sizeStr.match(/([0-9.]+)\s*([KMGT]?i?B)/i);
+        if (!match || !match[1] || !match[2]) return 0;
+        
+        const [, numStr, unit] = match;
+        const size = parseFloat(numStr);
+        
+        switch (unit.toUpperCase()) {
+            case 'B': return size;
+            case 'KB': return size * 1000;
+            case 'MB': return size * 1000000;
+            case 'GB': return size * 1000000000;
+            case 'KIB': return size * 1024;
+            case 'MIB': return size * 1024 * 1024;
+            case 'GIB': return size * 1024 * 1024 * 1024;
+            default: return size;
+        }
+    }
+    
+    for (const line of lines) {
+        // Count pulling operations
+        if (line.includes('Pulling from')) {
+            pullingCount++;
+        }
+        
+        // Count completed downloads
+        if (line.match(/(Downloaded|Pull complete|Already exists)/)) {
+            downloadedCount++;
+        }
+        
+        // Parse downloading progress: " df20fa9351a1 Downloading [====>    ] 901.3MB/1.092GB"
+        const downloadMatch = line.match(/^\s*([a-f0-9]{12})\s+Downloading\s+\[.*?\]\s+([0-9.]+[KMGT]?i?B)\/([0-9.]+[KMGT]?i?B)/i);
+        if (downloadMatch && downloadMatch[1] && downloadMatch[2] && downloadMatch[3]) {
+            const layerId = downloadMatch[1];
+            const current = parseBytes(downloadMatch[2]);
+            const total = parseBytes(downloadMatch[3]);
+            
+            layerProgress.set(layerId, { current: Math.min(current, total), total });
+            downloadingLayers.add(layerId);
+        }
+        
+        // Parse extracting progress: " df20fa9351a1 Extracting [====>    ] 901.3MB/1.092GB"  
+        const extractMatch = line.match(/^\s*([a-f0-9]{12})\s+Extracting\s+\[.*?\]\s+([0-9.]+[KMGT]?i?B)\/([0-9.]+[KMGT]?i?B)/i);
+        if (extractMatch && extractMatch[1] && extractMatch[2] && extractMatch[3]) {
+            const layerId = extractMatch[1];
+            const current = parseBytes(extractMatch[2]);
+            const total = parseBytes(extractMatch[3]);
+            
+            extractingLayers.set(layerId, { current: Math.min(current, total), total });
+        }
+        
+        // Mark download complete
+        const completeMatch = line.match(/^\s*([a-f0-9]{12})\s+(Download complete|Verifying Checksum)/i);
+        if (completeMatch && completeMatch[1]) {
+            const layerId = completeMatch[1];
+            const existing = layerProgress.get(layerId);
+            if (existing) {
+                layerProgress.set(layerId, { current: existing.total, total: existing.total });
+            }
+        }
+    }
+    
+    // Two-phase calculation: Downloads first (0-100%), then extractions
+    let totalDownloadBytes = 0;
+    let currentDownloadBytes = 0;
+    let totalExtractBytes = 0;
+    let currentExtractBytes = 0;
+    
+    // Calculate download progress
+    for (const [layerId, progress] of layerProgress) {
+        totalDownloadBytes += progress.total;
+        currentDownloadBytes += progress.current;
+    }
+    
+    // Calculate extraction progress
+    for (const [layerId, progress] of extractingLayers) {
+        totalExtractBytes += progress.total;
+        currentExtractBytes += progress.current;
+    }
+    
+    const downloadPercent = totalDownloadBytes > 0 ? (currentDownloadBytes / totalDownloadBytes) * 100 : 0;
+    const extractPercent = totalExtractBytes > 0 ? (currentExtractBytes / totalExtractBytes) * 100 : 0;
+    
+    console.log(`🔍 Downloads: ${layerProgress.size} layers, ${downloadPercent.toFixed(1)}%`);
+    console.log(`🔍 Extractions: ${extractingLayers.size} layers, ${extractPercent.toFixed(1)}%`);
+    
+    let percent = 0;
+    let message = 'Starting services...';
+    
+    if (downloadPercent < 100 && layerProgress.size > 0) {
+        // Phase 1: Downloading (0-100%)
+        percent = Math.min(Math.round(downloadPercent), 100);
+        const currentMB = (currentDownloadBytes / 1000000).toFixed(1);
+        const totalMB = (totalDownloadBytes / 1000000).toFixed(1);
+        message = `Downloading images: ${percent}% (${currentMB}MB/${totalMB}MB)`;
+        console.log(`📊 DOWNLOAD PHASE: ${percent}% (${currentMB}MB/${totalMB}MB)`);
+    } else if (extractingLayers.size > 0) {
+        // Phase 2: Extracting (continue from where downloads left off)
+        percent = Math.min(Math.round(extractPercent), 100);
+        const currentMB = (currentExtractBytes / 1000000).toFixed(1);
+        const totalMB = (totalExtractBytes / 1000000).toFixed(1);
+        message = `Extracting images: ${percent}% (${currentMB}MB/${totalMB}MB)`;
+        console.log(`📊 EXTRACT PHASE: ${percent}% (${currentMB}MB/${totalMB}MB)`);
+    } else if (pullingCount > 0) {
+        // Fallback: estimate progress based on pulling vs downloaded count
+        percent = downloadedCount > 0 ? Math.min(Math.round((downloadedCount / pullingCount) * 100), 90) : 10;
+        message = `Pulling Docker images... (${downloadedCount}/${pullingCount} completed)`;
+        console.log(`📊 FALLBACK: ${percent}% based on completed pulls`);
+    } else if (lines.some(line => line.includes('Creating') || line.includes('Starting'))) {
+        percent = 95;
+        message = 'Starting containers...';
+        console.log(`📊 CONTAINERS: Starting containers...`);
+    }
+    
+    // Ensure minimum progress
+    percent = Math.max(percent, 10);
+    
+    return { overall_percent: percent, message };
+}
 
 // IMMEDIATE TEST LOG - This should execute right away
 console.log('🔥 INSTALLER.TS: File loaded and executing!');
@@ -52,6 +182,7 @@ document.addEventListener('DOMContentLoaded', async (): Promise<void> => {
     console.log('🔄 Testing IPC communication...');
     try {
 
+        const { ipcRenderer } = require('electron');
         const testResult = await ipcRenderer.invoke('execute-command', 'echo', ['IPC test successful']);
         console.log('IPC test result:', testResult);
     } catch (error) {
@@ -82,6 +213,7 @@ document.addEventListener('DOMContentLoaded', async (): Promise<void> => {
 async function checkPodiumInstallation(): Promise<PodiumStatus> {
     try {
 
+        const { ipcRenderer } = require('electron');
         const result: CommandResult = await ipcRenderer.invoke('execute-command', 'podium', ['help', '--no-coloring']);
         if (result.code === 0) {
             // Check if configured by looking for docker-stack/.env
@@ -235,118 +367,66 @@ async function startServicesAfterConfig(): Promise<void> {
         updateProgress(80, 'Starting services...');
         
         let serviceStarted = false;
-        let downloadProgress = 80; // Start at 80%
-        const downloadedImages = new Set<string>();
+        let progressInterval: NodeJS.Timeout;
         
-        // Listen for Docker progress events (with real percentages)
-        const handleStreamProgress = (event: any, data: any) => {
-            if (data.command === 'podium' && data.progress) {
-                const progress = data.progress;
-                console.log('Docker progress update:', progress);
-                
-                // Map Docker progress percentage to installer progress (80-94%)
-                let installerProgress = 80;
-                
-                if (progress.type === 'pulling') {
-                    installerProgress = 80;
-                    updateProgress(installerProgress, progress.message);
-                } else if (progress.type === 'download') {
-                    // Map download progress 0-100% to installer progress 80-88%
-                    installerProgress = 80 + Math.round((progress.percentage / 100) * 8);
-                    updateProgress(installerProgress, progress.message);
-                } else if (progress.type === 'extract') {
-                    // Map extraction progress 0-100% to installer progress 88-92%
-                    installerProgress = 88 + Math.round((progress.percentage / 100) * 4);
-                    updateProgress(installerProgress, progress.message);
-                } else if (progress.type === 'complete') {
-                    installerProgress = 92;
-                    updateProgress(installerProgress, progress.message);
-                }
-                
-                // Update our tracking variable
-                downloadProgress = Math.max(downloadProgress, installerProgress);
+        // Set up progress polling from temp file
+        const { ipcRenderer } = require('electron');
+        
+        // Poll for progress updates by parsing the Docker log file directly
+        progressInterval = setInterval(async () => {
+            if (serviceStarted) {
+                clearInterval(progressInterval);
+                return;
             }
-        };
-        
-        // Listen for streaming data events (fallback parsing)
-        const handleStreamData = (event: any, data: any) => {
-            if (data.command === 'podium' && data.type === 'stdout' && data.data) {
-                const output = data.data.toString();
-                console.log('Service startup output:', output);
-                
-                // Fallback parsing if progress events don't work
-                if (output.includes('Creating') || output.includes('Starting')) {
-                    const match = output.match(/(Creating|Starting)\s+(.+)/);
-                    if (match) {
-                        const containerName = match[2].replace(/\.\.\.$/, '').trim();
-                        updateProgress(Math.min(downloadProgress + 1, 94), `${match[1]} ${containerName}...`);
-                        downloadProgress = Math.min(downloadProgress + 1, 94);
+            
+            try {
+                // Read the Docker progress log file directly
+                const fs = require('fs');
+                if (fs.existsSync('/tmp/podium-docker-progress.log')) {
+                    const logContent = fs.readFileSync('/tmp/podium-docker-progress.log', 'utf8');
+                    const progressData = parseDockerProgress(logContent);
+                    
+                    if (progressData) {
+                        // Map progress to installer range (80-94%)
+                        const dockerPercent = progressData.overall_percent || 0;
+                        const installerProgress = 80 + Math.round((dockerPercent / 100) * 14);
+                        
+                        console.log(`🐳 Docker progress: ${dockerPercent}% -> installer: ${installerProgress}%`);
+                        updateProgress(installerProgress, progressData.message || 'Starting services...');
                     }
-                } else if (output.includes('Started') || output.includes('Created')) {
-                    updateProgress(94, 'Services starting up...');
-                } else if (output.includes('done') || output.includes('ready')) {
-                    updateProgress(95, 'Services ready!');
                 }
+            } catch (error) {
+                console.log('Progress parsing error (normal during startup):', error);
             }
-        };
+        }, 2000); // Check every 2 seconds
         
-        // Listen for completion event
-        const handleStreamComplete = (event: any, data: any) => {
-            if (data.command === 'podium') {
-                console.log('Start services finished with result:', data.result);
-                serviceStarted = true;
-                
-                // Remove event listeners
-                ipcRenderer.removeListener('command-stream-progress', handleStreamProgress);
-                ipcRenderer.removeListener('command-stream-data', handleStreamData);
-                ipcRenderer.removeListener('command-stream-complete', handleStreamComplete);
-                ipcRenderer.removeListener('command-stream-error', handleStreamError);
-                
-                if (data.result.code === 0) {
-                    updateProgress(95, 'Services started successfully!');
-                    resolve();
-                } else {
-                    // Don't fail the installation if services don't start - just log it
-                    console.warn('Services failed to start, but continuing...', data.result.stderr);
-                    updateProgress(95, 'Services startup completed (some may have failed)');
-                    resolve();
-                }
+        // Start the service command with JSON output (which will create the log file)
+        ipcRenderer.invoke('execute-command', 'podium', ['start-services', '--json-output']).then((result: any) => {
+            console.log('Start services finished with result:', result);
+            serviceStarted = true;
+            
+            // Clear the progress polling
+            if (progressInterval) {
+                clearInterval(progressInterval);
             }
-        };
-        
-        // Listen for error event
-        const handleStreamError = (event: any, data: any) => {
-            if (data.command === 'podium') {
-                console.warn('Error starting services, but continuing...', data.error);
-                serviceStarted = true;
-                
-                // Remove event listeners
-                ipcRenderer.removeListener('command-stream-progress', handleStreamProgress);
-                ipcRenderer.removeListener('command-stream-data', handleStreamData);
-                ipcRenderer.removeListener('command-stream-complete', handleStreamComplete);
-                ipcRenderer.removeListener('command-stream-error', handleStreamError);
-                
-                updateProgress(95, 'Services startup completed');
+            
+            if (result.code === 0) {
+                updateProgress(95, 'Services started successfully!');
+                resolve();
+            } else {
+                // Don't fail the installation if services don't start - just log it
+                console.warn('Services failed to start, but continuing...', result.stderr);
+                updateProgress(95, 'Services startup completed (some may have failed)');
                 resolve();
             }
-        };
-        
-        // Set up event listeners
-        ipcRenderer.on('command-stream-progress', handleStreamProgress);
-        ipcRenderer.on('command-stream-data', handleStreamData);
-        ipcRenderer.on('command-stream-complete', handleStreamComplete);
-        ipcRenderer.on('command-stream-error', handleStreamError);
-        
-        // Start the command (removed --no-colors to allow Docker progress output)
-        ipcRenderer.invoke('execute-command-stream', 'podium', ['start-services']).catch((error: Error) => {
+        }).catch((error: Error) => {
             console.warn('Error invoking start-services command, but continuing...', error);
             serviceStarted = true;
             
-            // Remove event listeners
-            ipcRenderer.removeListener('command-stream-progress', handleStreamProgress);
-            ipcRenderer.removeListener('command-stream-data', handleStreamData);
-            ipcRenderer.removeListener('command-stream-complete', handleStreamComplete);
-            ipcRenderer.removeListener('command-stream-error', handleStreamError);
+            // Clear the progress polling
+            if (progressInterval) {
+                clearInterval(progressInterval);
+            }
             
             updateProgress(95, 'Services startup completed');
             resolve();
@@ -358,16 +438,15 @@ async function startServicesAfterConfig(): Promise<void> {
                 console.warn('Service startup timeout, continuing...');
                 serviceStarted = true;
                 
-                // Remove event listeners
-                ipcRenderer.removeListener('command-stream-progress', handleStreamProgress);
-                ipcRenderer.removeListener('command-stream-data', handleStreamData);
-                ipcRenderer.removeListener('command-stream-complete', handleStreamComplete);
-                ipcRenderer.removeListener('command-stream-error', handleStreamError);
+                // Clear the progress polling
+                if (progressInterval) {
+                    clearInterval(progressInterval);
+                }
                 
                 updateProgress(95, 'Services startup completed (timeout)');
                 resolve();
             }
-        }, 120000); // 2 minute timeout
+        }, 300000); // 5 minute timeout (Docker can take a while)
     });
 }
 
@@ -402,6 +481,7 @@ async function runPodiumConfig(): Promise<void> {
         configArgs.push('--no-coloring'); // Add no-coloring flag
         console.log('Running podium config with args:', configArgs);
 
+        const { ipcRenderer } = require('electron');
         ipcRenderer.invoke('execute-command-stream', 'podium', configArgs).then((result: StreamCommandResult) => {
             console.log('Config finished with result:', result);
             
@@ -455,6 +535,7 @@ async function loadConfiguration(): Promise<void> {
     
     try {
 
+        const { ipcRenderer } = require('electron');
         const gitName: CommandResult = await ipcRenderer.invoke('execute-command', 'git', ['config', '--global', 'user.name']);
         console.log('Git name result:', gitName);
         if (gitName.code === 0 && gitName.stdout.trim()) {
@@ -489,6 +570,7 @@ async function loadConfiguration(): Promise<void> {
     // Pre-fill AWS configuration
     try {
 
+        const { ipcRenderer } = require('electron');
         const awsAccessKey: CommandResult = await ipcRenderer.invoke('execute-command', 'aws', ['configure', 'get', 'aws_access_key_id']);
         console.log('AWS access key result:', awsAccessKey);
         if (awsAccessKey.code === 0 && awsAccessKey.stdout.trim()) {
@@ -544,6 +626,7 @@ async function loadConfiguration(): Promise<void> {
         try {
             console.log('🔄 Getting home directory...');
     
+            const { ipcRenderer } = require('electron');
             const homeDir = await ipcRenderer.invoke('get-home-directory');
             console.log('🏠 Home directory:', homeDir);
             
@@ -571,6 +654,7 @@ async function browseProjectsDir(): Promise<void> {
     try {
         console.log('🔄 Invoking show-directory-dialog...');
 
+        const { ipcRenderer } = require('electron');
         const result = await ipcRenderer.invoke('show-directory-dialog');
         console.log('📁 Directory dialog result:', result);
         

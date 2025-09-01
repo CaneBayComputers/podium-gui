@@ -901,9 +901,6 @@ function createNewProject(): void {
     console.log('DEBUG: createNewProject called');
     console.log('DEBUG: About to call showModal with new-project-modal');
     
-    // Add a visual indicator that the function was called
-    alert('createNewProject function called!');
-    
     showModal('new-project-modal');
     console.log('DEBUG: showModal call completed');
 }
