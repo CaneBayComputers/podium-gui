@@ -233,68 +233,121 @@ async function startServicesAfterConfig(): Promise<void> {
         updateProgress(80, 'Starting services...');
         
         let serviceStarted = false;
+        let downloadProgress = 80; // Start at 80%
+        const downloadedImages = new Set<string>();
         
-        // Run podium start-services command with streaming output
-        const streamHandler = (data: any) => {
-            if (data.type === 'stdout' && data.data) {
+        // Listen for streaming data events
+        const handleStreamData = (event: any, data: any) => {
+            if (data.command === 'podium' && data.type === 'stdout' && data.data) {
                 const output = data.data.toString();
                 console.log('Service startup output:', output);
                 
-                // Parse Docker download progress
-                if (output.includes('Pulling')) {
+                // Parse Docker download progress with better percentage tracking
+                if (output.includes('Pulling from')) {
                     const match = output.match(/Pulling from (.+)/);
                     if (match) {
-                        updateProgress(85, `Downloading ${match[1]}...`);
+                        const imageName = match[1].split('/').pop() || match[1]; // Get just the image name
+                        updateProgress(Math.min(downloadProgress + 2, 88), `Downloading ${imageName}...`);
+                        downloadProgress = Math.min(downloadProgress + 2, 88);
                     }
                 } else if (output.includes('Pull complete')) {
-                    updateProgress(90, 'Download complete, starting services...');
-                } else if (output.includes('Creating') || output.includes('Starting')) {
-                    const match = output.match(/(Creating|Starting) (.+)/);
+                    downloadProgress = Math.min(downloadProgress + 3, 90);
+                    updateProgress(downloadProgress, 'Images downloaded, starting services...');
+                } else if (output.includes('Downloaded newer image') || output.includes('Image is up to date')) {
+                    const match = output.match(/for (.+)/);
                     if (match) {
-                        updateProgress(92, `${match[1]} ${match[2]}...`);
+                        const imageName = match[1].split('/').pop()?.split(':')[0] || 'image';
+                        downloadedImages.add(imageName);
+                        downloadProgress = Math.min(80 + (downloadedImages.size * 2), 90);
+                        updateProgress(downloadProgress, `Downloaded ${imageName}, starting containers...`);
+                    }
+                } else if (output.includes('Creating') || output.includes('Starting')) {
+                    const match = output.match(/(Creating|Starting)\s+(.+)/);
+                    if (match) {
+                        const containerName = match[2].replace(/\.\.\.$/, '').trim();
+                        updateProgress(Math.min(downloadProgress + 2, 94), `${match[1]} ${containerName}...`);
                     }
                 } else if (output.includes('Started') || output.includes('Created')) {
                     updateProgress(94, 'Services starting up...');
+                } else if (output.includes('done') || output.includes('ready')) {
+                    updateProgress(95, 'Services ready!');
                 }
             }
         };
         
-        ipcRenderer.invoke('execute-command-stream', 'podium', ['start-services', '--no-coloring'], { onData: streamHandler }).then((result: StreamCommandResult) => {
-            console.log('Start services finished with result:', result);
-            serviceStarted = true;
-            
-            if (result.code === 0) {
-                updateProgress(95, 'Services started successfully!');
-                resolve();
-            } else {
-                // Don't fail the installation if services don't start - just log it
-                console.warn('Services failed to start, but continuing...', result.stderr);
-                updateProgress(95, 'Services startup completed (some may have failed)');
+        // Listen for completion event
+        const handleStreamComplete = (event: any, data: any) => {
+            if (data.command === 'podium') {
+                console.log('Start services finished with result:', data.result);
+                serviceStarted = true;
+                
+                // Remove event listeners
+                ipcRenderer.removeListener('command-stream-data', handleStreamData);
+                ipcRenderer.removeListener('command-stream-complete', handleStreamComplete);
+                ipcRenderer.removeListener('command-stream-error', handleStreamError);
+                
+                if (data.result.code === 0) {
+                    updateProgress(95, 'Services started successfully!');
+                    resolve();
+                } else {
+                    // Don't fail the installation if services don't start - just log it
+                    console.warn('Services failed to start, but continuing...', data.result.stderr);
+                    updateProgress(95, 'Services startup completed (some may have failed)');
+                    resolve();
+                }
+            }
+        };
+        
+        // Listen for error event
+        const handleStreamError = (event: any, data: any) => {
+            if (data.command === 'podium') {
+                console.warn('Error starting services, but continuing...', data.error);
+                serviceStarted = true;
+                
+                // Remove event listeners
+                ipcRenderer.removeListener('command-stream-data', handleStreamData);
+                ipcRenderer.removeListener('command-stream-complete', handleStreamComplete);
+                ipcRenderer.removeListener('command-stream-error', handleStreamError);
+                
+                updateProgress(95, 'Services startup completed');
                 resolve();
             }
-        }).catch((error: Error) => {
-            console.warn('Error starting services, but continuing...', error);
+        };
+        
+        // Set up event listeners
+        ipcRenderer.on('command-stream-data', handleStreamData);
+        ipcRenderer.on('command-stream-complete', handleStreamComplete);
+        ipcRenderer.on('command-stream-error', handleStreamError);
+        
+        // Start the command
+        ipcRenderer.invoke('execute-command-stream', 'podium', ['start-services', '--no-colors']).catch((error: Error) => {
+            console.warn('Error invoking start-services command, but continuing...', error);
             serviceStarted = true;
+            
+            // Remove event listeners
+            ipcRenderer.removeListener('command-stream-data', handleStreamData);
+            ipcRenderer.removeListener('command-stream-complete', handleStreamComplete);
+            ipcRenderer.removeListener('command-stream-error', handleStreamError);
+            
             updateProgress(95, 'Services startup completed');
             resolve();
         });
         
-        // Show intermediate progress updates to indicate activity
+        // Fallback timeout to prevent hanging
         setTimeout(() => {
-            if (!serviceStarted) updateProgress(82, 'Starting Docker services...');
-        }, 1000);
-        
-        setTimeout(() => {
-            if (!serviceStarted) updateProgress(85, 'Configuring service network...');
-        }, 3000);
-        
-        setTimeout(() => {
-            if (!serviceStarted) updateProgress(88, 'Initializing databases...');
-        }, 6000);
-        
-        setTimeout(() => {
-            if (!serviceStarted) updateProgress(92, 'Finalizing service startup...');
-        }, 10000);
+            if (!serviceStarted) {
+                console.warn('Service startup timeout, continuing...');
+                serviceStarted = true;
+                
+                // Remove event listeners
+                ipcRenderer.removeListener('command-stream-data', handleStreamData);
+                ipcRenderer.removeListener('command-stream-complete', handleStreamComplete);
+                ipcRenderer.removeListener('command-stream-error', handleStreamError);
+                
+                updateProgress(95, 'Services startup completed (timeout)');
+                resolve();
+            }
+        }, 120000); // 2 minute timeout
     });
 }
 

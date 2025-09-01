@@ -436,12 +436,19 @@ ipcMain.handle('execute-command-stream', async (event: IpcMainInvokeEvent, comma
     let stdout: string = '';
     let stderr: string = '';
 
-    // Log to console for debugging, no UI output
+    // Stream stdout data to renderer in real-time
     childProcess.stdout?.on('data', (data: Buffer) => {
       const output: string = data.toString('utf8');
       stdout += output;
       console.log('STDOUT:', output);
       debugLog('Command stdout', { command, output });
+      
+      // Send streaming data to renderer process
+      event.sender.send('command-stream-data', {
+        type: 'stdout',
+        data: output,
+        command: command
+      });
     });
 
     childProcess.stderr?.on('data', (data: Buffer) => {
@@ -449,6 +456,13 @@ ipcMain.handle('execute-command-stream', async (event: IpcMainInvokeEvent, comma
       stderr += output;
       console.log('STDERR:', output);
       debugLog('Command stderr', { command, output });
+      
+      // Send streaming data to renderer process
+      event.sender.send('command-stream-data', {
+        type: 'stderr',
+        data: output,
+        command: command
+      });
     });
 
     childProcess.on('close', (code: number | null) => {
@@ -461,12 +475,26 @@ ipcMain.handle('execute-command-stream', async (event: IpcMainInvokeEvent, comma
       };
       console.log('Process exited with code:', code);
       debugLog('Command completed', { command, result });
+      
+      // Send completion event to renderer
+      event.sender.send('command-stream-complete', {
+        command: command,
+        result: result
+      });
+      
       resolve(result);
     });
 
     childProcess.on('error', (error: Error) => {
       console.error('Process error:', error);
       debugLog('Command error', { command, error: error.message });
+      
+      // Send error event to renderer
+      event.sender.send('command-stream-error', {
+        command: command,
+        error: error.message
+      });
+      
       reject(error);
     });
   });
