@@ -67,6 +67,9 @@ document.addEventListener('DOMContentLoaded', async (): Promise<void> => {
         if (buttonElement) buttonElement.textContent = 'Configure Now';
         
         // Hide system check step since CLI is already installed
+        if (!systemChecks) {
+            systemChecks = {};
+        }
         systemChecks.skipSystemCheck = true;
     }
     
@@ -193,6 +196,12 @@ async function runSystemCheck(): Promise<void> {
         
         try {
             const result: SystemCheck = await check.test();
+            
+            // Ensure systemChecks is initialized
+            if (!systemChecks) {
+                systemChecks = {};
+            }
+            
             systemChecks[check.id] = result;
             
             if (result.success) {
