@@ -1,25 +1,24 @@
-Package: podium-cli
-Version: 1.0.0-beta3
+Package: podium-gui
+Version: 1.0.0-beta4
 Section: devel
 Priority: optional
-Architecture: all
-Depends: git, curl, ca-certificates, python3-pip, python3-venv, mariadb-client, apt-transport-https, gnupg, lsb-release, unzip, jq, p7zip-full, trash-cli, docker.io | docker-ce
-Recommends: nodejs, npm
+Architecture: amd64
+Depends: git, curl, ca-certificates, docker.io | docker-ce, nodejs (>= 16.0.0), npm
 Maintainer: Cane Bay Computers <info@canecomputers.com>
-Description: Universal PHP Development Environment with Desktop GUI
- Podium is a comprehensive Docker-based development platform that creates
- professional PHP development environments with complete automation.
- Includes both powerful CLI and beautiful desktop GUI interface.
+Description: Podium GUI - Professional PHP Development Platform Interface
+ Podium GUI is the premium graphical interface for the Podium development
+ platform. It provides an intuitive, modern desktop application for managing
+ PHP projects, Docker services, and development environments.
  .
- Manage multiple projects across different frameworks - Laravel, WordPress,
- and generic PHP - all running simultaneously with shared services.
+ The GUI automatically installs and manages Podium CLI as a dependency,
+ providing a complete development solution with visual project management,
+ real-time monitoring, and one-click operations.
  .
  Features:
-  * One-command project creation
-  * Beautiful desktop GUI with real-time monitoring
-  * Cross-framework compatibility (Laravel, WordPress, PHP)
-  * Shared services (MySQL, Redis, phpMyAdmin)
-  * LAN access for team collaboration
-  * Containerized development tools
-  * Cross-platform support (Linux, macOS, Windows WSL2)
-Homepage: https://github.com/CaneBayComputers/podium-cli
+  * Visual project creation and management
+  * Real-time service monitoring and control
+  * Modern retro synthwave interface design
+  * Cross-framework support (Laravel, WordPress, PHP)
+  * Integrated Docker service management
+  * Team collaboration and LAN sharing
+Homepage: https://podium.dev
