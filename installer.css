@@ -502,3 +502,17 @@
     display: inline;
     font-weight: normal;
 }
+
+.directory-input {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.directory-input input {
+    flex: 1;
+}
+
+.directory-input button {
+    white-space: nowrap;
+    padding: 0.5rem 1rem;
+}

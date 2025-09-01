@@ -380,6 +380,48 @@ ipcMain.handle('select-directory', async (event: IpcMainInvokeEvent, options: Se
   return null;
 });
 
+// Handler for getting home directory
+ipcMain.handle('get-home-directory', async (): Promise<string> => {
+  const homeDir = os.homedir();
+  debugLog('Get home directory request', { homeDir });
+  return homeDir;
+});
+
+// Handler for showing directory dialog (alias for select-directory)
+ipcMain.handle('show-directory-dialog', async (event: IpcMainInvokeEvent, options: SelectDirectoryOptions = {}): Promise<{ filePaths: string[] } | null> => {
+  debugLog('Show directory dialog request', { options, mainWindowExists: !!mainWindow });
+  
+  if (!mainWindow) {
+    debugLog('Show directory dialog failed - no main window');
+    return null;
+  }
+  
+  const dialogOptions: Electron.OpenDialogOptions = {
+    properties: ['openDirectory'],
+    title: options.title || 'Select Projects Directory'
+  };
+  
+  if (options.defaultPath) {
+    dialogOptions.defaultPath = options.defaultPath;
+  }
+  
+  debugLog('Opening directory dialog with options', dialogOptions);
+  
+  try {
+    const result = await dialog.showOpenDialog(mainWindow, dialogOptions);
+    debugLog('Directory dialog result', { canceled: result.canceled, filePaths: result.filePaths });
+    
+    if (!result.canceled) {
+      return { filePaths: result.filePaths };
+    }
+    
+    return null;
+  } catch (error) {
+    debugLog('Directory dialog error', { error: (error as Error).message });
+    throw error;
+  }
+});
+
 // Handler for updating project metadata directly in docker-compose.yaml
 ipcMain.handle("update-project-metadata", async (event: IpcMainInvokeEvent, projectName: string, metadata: { display_name: string; description: string; emoji: string }): Promise<{ success: boolean; error?: string }> => {
   try {

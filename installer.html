@@ -61,37 +61,7 @@
                 </div>
             </div>
 
-            <!-- System Check Step -->
-            <div id="step-system-check" class="installer-step">
-                <div class="step-content">
-                    <h2>System Check</h2>
-                    <p class="step-description">Checking your system for compatibility...</p>
-                    
-                    <div id="system-checks" class="checks-list">
-                        <div class="check-item" id="check-os">
-                            <span class="check-icon">⏳</span>
-                            <span class="check-text">Detecting operating system...</span>
-                        </div>
-                        <div class="check-item" id="check-git">
-                            <span class="check-icon">⏳</span>
-                            <span class="check-text">Checking for Git...</span>
-                        </div>
-                        <div class="check-item" id="check-docker">
-                            <span class="check-icon">⏳</span>
-                            <span class="check-text">Checking for Docker...</span>
-                        </div>
-                        <div class="check-item" id="check-permissions">
-                            <span class="check-icon">⏳</span>
-                            <span class="check-text">Checking permissions...</span>
-                        </div>
-                    </div>
 
-                    <div class="step-actions">
-                        <button class="btn btn-secondary" onclick="previousStep()">Back</button>
-                        <button class="btn btn-primary" onclick="nextStep()" id="continue-btn" disabled>Continue</button>
-                    </div>
-                </div>
-            </div>
 
             <!-- Configuration Step -->
             <div id="step-configuration" class="installer-step">
@@ -100,32 +70,7 @@
                     <p class="step-description">Configure Git and AWS settings for your development environment</p>
                     
                     <div class="config-sections">
-                        <div class="config-section">
-                            <h3>🗄️ Database Services</h3>
-                            <p class="section-description">All database engines will be available. Database selection happens per-project during project creation.</p>
-                            <div class="database-info-display">
-                                <div class="db-service">
-                                    <div class="db-icon">🐬</div>
-                                    <span>MariaDB (MySQL Compatible)</span>
-                                </div>
-                                <div class="db-service">
-                                    <div class="db-icon">🐘</div>
-                                    <span>PostgreSQL (Advanced Features)</span>
-                                </div>
-                                <div class="db-service">
-                                    <div class="db-icon">🍃</div>
-                                    <span>MongoDB (Document Database)</span>
-                                </div>
-                                <div class="db-service">
-                                    <div class="db-icon">🔴</div>
-                                    <span>Redis (Caching)</span>
-                                </div>
-                                <div class="db-service">
-                                    <div class="db-icon">⚡</div>
-                                    <span>Memcached (Memory Cache)</span>
-                                </div>
-                            </div>
-                        </div>
+
 
                         <div class="config-section">
                             <h3>🔧 Git Configuration</h3>
@@ -165,6 +110,18 @@
                                 </div>
                             </div>
                         </div>
+
+                        <div class="config-section">
+                            <h3>📁 Projects Directory</h3>
+                            <p class="section-description">Choose where your development projects will be stored</p>
+                            <div class="form-group">
+                                <label for="projects-dir">Projects Directory:</label>
+                                <div class="directory-input">
+                                    <input type="text" id="projects-dir" placeholder="~/podium-projects" />
+                                    <button type="button" class="btn btn-secondary" onclick="browseProjectsDir()">Browse</button>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                     
                     <div class="step-actions">
@@ -177,7 +134,7 @@
             <!-- Installation Step -->
             <div id="step-installation" class="installer-step">
                 <div class="step-content">
-                    <h2>Installing Podium</h2>
+                    <h2>Configuring Podium</h2>
                     <p class="step-description">Setting up your development environment...</p>
                     
                     <div class="installation-progress">
@@ -203,9 +160,9 @@
             <div id="step-complete" class="installer-step">
                 <div class="step-content">
                     <div class="success-icon">🎉</div>
-                    <h2>Installation Complete!</h2>
+                    <h2>Configuration Complete!</h2>
                     <p class="step-description">
-                        Podium has been successfully installed on your system.<br>
+                        Podium has been successfully configured on your system.<br>
                         You're ready to start creating amazing PHP projects!
                     </p>
 
@@ -247,7 +204,6 @@
             <div class="step-dot" id="dot-1"></div>
             <div class="step-dot" id="dot-2"></div>
             <div class="step-dot" id="dot-3"></div>
-            <div class="step-dot" id="dot-4"></div>
         </div>
     </div>
 

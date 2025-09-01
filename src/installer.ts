@@ -1,17 +1,12 @@
-import { ipcRenderer } from 'electron';
-import * as path from 'path';
 import * as fs from 'fs';
 const Convert = require('ansi-to-html');
 
-interface SystemCheck {
-    success: boolean;
-    message: string;
-}
+// IMMEDIATE TEST LOG - This should execute right away
+console.log('🔥 INSTALLER.TS: File loaded and executing!');
 
-interface SystemChecks {
-    [key: string]: SystemCheck | boolean;
-    skipSystemCheck?: boolean;
-}
+
+
+
 
 interface CommandResult {
     code: number;
@@ -25,9 +20,6 @@ interface StreamCommandResult extends CommandResult {
 }
 
 var currentStep: number = 0;
-var installationPath: string = '';
-var systemChecks: SystemChecks = {};
-var podiumInstalled: boolean = false;
 
 // Initialize ANSI to HTML converter with dark theme colors
 const convert = new Convert({
@@ -51,6 +43,19 @@ type PodiumStatus = 'configured' | 'not-configured' | 'not-installed';
 
 // Initialize installer
 document.addEventListener('DOMContentLoaded', async (): Promise<void> => {
+    console.log('🚀 INSTALLER: DOMContentLoaded event fired!');
+    console.log('🚀 INSTALLER: Starting initialization...');
+    
+    // Test IPC communication
+    console.log('🔄 Testing IPC communication...');
+    try {
+        const { ipcRenderer } = require('electron');
+        const testResult = await ipcRenderer.invoke('execute-command', 'echo', ['IPC test successful']);
+        console.log('IPC test result:', testResult);
+    } catch (error) {
+        console.error('IPC test failed:', error);
+    }
+    
     // Check if Podium CLI is already installed
     const podiumStatus: PodiumStatus = await checkPodiumInstallation();
     
@@ -66,22 +71,17 @@ document.addEventListener('DOMContentLoaded', async (): Promise<void> => {
         }
         if (buttonElement) buttonElement.textContent = 'Configure Now';
         
-        // Hide system check step since CLI is already installed
-        if (!systemChecks) {
-            systemChecks = {};
-        }
-        systemChecks.skipSystemCheck = true;
+        // CLI is already installed, we can skip directly to configuration
     }
     
-    showStep(0);
+    await showStep(0);
 });
 
 async function checkPodiumInstallation(): Promise<PodiumStatus> {
     try {
+        const { ipcRenderer } = require('electron');
         const result: CommandResult = await ipcRenderer.invoke('execute-command', 'podium', ['help', '--no-coloring']);
         if (result.code === 0) {
-            podiumInstalled = true;
-            
             // Check if configured by looking for docker-stack/.env
             const configCheck: CommandResult = await ipcRenderer.invoke('execute-command', 'test', [
                 '-f', '/usr/local/share/podium-cli/docker-stack/.env'
@@ -95,7 +95,9 @@ async function checkPodiumInstallation(): Promise<PodiumStatus> {
     }
 }
 
-function showStep(stepIndex: number): void {
+async function showStep(stepIndex: number): Promise<void> {
+    console.log('🔄 SHOWSTEP: Called with stepIndex:', stepIndex);
+    
     // Hide all steps
     document.querySelectorAll('.installer-step').forEach((step: Element) => {
         step.classList.remove('active');
@@ -122,176 +124,50 @@ function showStep(stepIndex: number): void {
     // Execute step-specific logic
     switch (stepIndex) {
         case 1:
-            // Disable continue button during system check
-            const continueBtn = document.getElementById('continue-btn') as HTMLButtonElement;
-            if (continueBtn) continueBtn.disabled = true;
-            runSystemCheck();
+            await loadConfiguration();
             break;
         case 2:
-            loadConfiguration();
-            break;
-        case 3:
             startInstallation();
             break;
     }
 }
 
 function getStepName(index: number): string {
-    const steps: string[] = ['welcome', 'system-check', 'configuration', 'installation', 'complete'];
+    const steps: string[] = ['welcome', 'configuration', 'installation', 'complete'];
     return steps[index] || '';
 }
 
-function nextStep(): void {
+async function nextStep(): Promise<void> {
+    console.log('🔄 NEXTSTEP: Function called');
+    
     // Ensure currentStep is initialized
     if (typeof currentStep === 'undefined') {
         currentStep = 0;
+        console.log('🔄 NEXTSTEP: Initialized currentStep to 0');
     }
     
-    console.log('nextStep called, currentStep:', currentStep);
-    if (currentStep < 4) {
-        let nextStepIndex: number = currentStep + 1;
-        
-        // Skip system check if CLI is already installed
-        if (nextStepIndex === 1 && systemChecks && systemChecks.skipSystemCheck) {
-            nextStepIndex = 2;
-        }
-        
+    console.log('🔄 NEXTSTEP: currentStep is:', currentStep);
+    if (currentStep < 3) {
+        const nextStepIndex: number = currentStep + 1;
         console.log('Moving to step:', nextStepIndex);
-        showStep(nextStepIndex);
+        await showStep(nextStepIndex);
     }
 }
 
-function previousStep(): void {
+async function previousStep(): Promise<void> {
     if (currentStep > 0) {
-        showStep(currentStep - 1);
+        await showStep(currentStep - 1);
     }
 }
 
-interface SystemCheckItem {
-    id: string;
-    name: string;
-    test: () => Promise<SystemCheck>;
-}
 
-async function runSystemCheck(): Promise<void> {
-    const checks: SystemCheckItem[] = [
-        { id: 'check-os', name: 'Operating System', test: checkOperatingSystem },
-        { id: 'check-git', name: 'Git Installation', test: checkGit },
-        { id: 'check-docker', name: 'Docker Installation', test: checkDocker },
-        { id: 'check-permissions', name: 'Permissions', test: checkPermissions }
-    ];
-    
-    let allPassed: boolean = true;
-    
-    for (const check of checks) {
-        const element = document.getElementById(check.id);
-        if (!element) continue;
-        
-        const icon = element.querySelector('.check-icon') as HTMLElement;
-        const text = element.querySelector('.check-text') as HTMLElement;
-        
-        // Show loading
-        if (icon) icon.textContent = '⏳';
-        if (text) text.textContent = `Checking ${check.name}...`;
-        
-        try {
-            const result: SystemCheck = await check.test();
-            
-            // Ensure systemChecks is initialized
-            if (!systemChecks) {
-                systemChecks = {};
-            }
-            
-            systemChecks[check.id] = result;
-            
-            if (result.success) {
-                if (icon) icon.textContent = '✅';
-                if (text) text.textContent = result.message;
-                element.classList.add('success');
-            } else {
-                if (icon) icon.textContent = '❌';
-                if (text) text.textContent = result.message;
-                element.classList.add('error');
-                allPassed = false;
-            }
-        } catch (error) {
-            if (icon) icon.textContent = '❌';
-            if (text) text.textContent = `Error checking ${check.name}: ${(error as Error).message}`;
-            element.classList.add('error');
-            allPassed = false;
-        }
-        
-        // Small delay for better UX
-        await new Promise(resolve => setTimeout(resolve, 500));
-    }
-    
-    // Enable and show continue button if all checks passed
-    const continueBtn = document.getElementById('continue-btn') as HTMLButtonElement;
-    if (continueBtn) {
-        continueBtn.disabled = !allPassed;
-        continueBtn.style.display = allPassed ? 'inline-block' : 'none';
-    }
-    
-    if (!allPassed) {
-        showErrorMessage('Some system checks failed. Please resolve the issues before continuing.');
-    }
-}
 
-async function checkOperatingSystem(): Promise<SystemCheck> {
-    const platform: string = process.platform;
-    const supported: string[] = ['darwin', 'linux', 'win32'];
-    
-    if (supported.includes(platform)) {
-        let osName: string = platform === 'darwin' ? 'macOS' : platform === 'win32' ? 'Windows' : 'Linux';
-        return { success: true, message: `${osName} detected - supported platform` };
-    } else {
-        return { success: false, message: `Unsupported platform: ${platform}` };
-    }
-}
 
-async function checkGit(): Promise<SystemCheck> {
-    try {
-        const result: CommandResult = await ipcRenderer.invoke('execute-command', 'git', ['--version']);
-        if (result.code === 0) {
-            return { success: true, message: 'Git is installed and ready' };
-        } else {
-            return { success: false, message: 'Git is not installed or not accessible' };
-        }
-    } catch (error) {
-        return { success: false, message: 'Git check failed' };
-    }
-}
 
-async function checkDocker(): Promise<SystemCheck> {
-    try {
-        const result: CommandResult = await ipcRenderer.invoke('execute-command', 'docker', ['--version']);
-        if (result.code === 0) {
-            return { success: true, message: 'Docker is installed and ready' };
-        } else {
-            return { success: false, message: 'Docker is not installed - will be installed automatically' };
-        }
-    } catch (error) {
-        return { success: true, message: 'Docker will be installed during setup' };
-    }
-}
 
-async function checkPermissions(): Promise<SystemCheck> {
-    // Check if user has sudo access (for Linux/Mac)
-    if (process.platform === 'win32') {
-        return { success: true, message: 'Windows permissions ready' };
-    }
-    
-    try {
-        const result: CommandResult = await ipcRenderer.invoke('execute-command', 'sudo', ['-v']);
-        if (result.code === 0) {
-            return { success: true, message: 'Sudo access available' };
-        } else {
-            return { success: false, message: 'Sudo access required for installation' };
-        }
-    } catch (error) {
-        return { success: false, message: 'Unable to check sudo access' };
-    }
-}
+
+
+
 
 async function startInstallation(): Promise<void> {
     const progressFill = document.getElementById('progress-fill') as HTMLElement;
@@ -300,19 +176,10 @@ async function startInstallation(): Promise<void> {
     let progress: number = 0;
     
     try {
-        if (podiumInstalled) {
-            // CLI is already installed, just run configuration
-            updateProgress(20, 'Configuring Podium environment...');
-            await runPodiumConfig();
-        } else {
-            // Step 1: Clone Podium CLI
-            updateProgress(10, 'Downloading Podium CLI...');
-            await clonePodiumCLI();
-            
-            // Step 2: Run installer
-            updateProgress(20, 'Running Podium installer...');
-            await runPodiumInstaller();
-        }
+        // The deb/mac installer should have already installed Podium CLI globally
+        // Just run the configuration
+        updateProgress(20, 'Configuring Podium environment...');
+        await runPodiumConfig();
         
         // Installation complete
         updateProgress(100, 'Installation complete!');
@@ -341,79 +208,9 @@ function updateProgress(percentage: number, message: string): void {
     if (progressText) progressText.textContent = message;
 }
 
-async function clonePodiumCLI(): Promise<void> {
-    // For development/demo purposes, create symbolic link to existing cbc-development
-    const existingCLI: string = '/home/shawn/repos/cbc/cbc-development';
-    installationPath = '/home/shawn/repos/cbc/podium-cli';
-    
-    // Create symbolic link using -f flag
-    const result: CommandResult = await ipcRenderer.invoke('execute-command', 'ln', [
-        '-sf', 
-        existingCLI,
-        installationPath
-    ]);
-    
-    if (result.code !== 0) {
-        throw new Error('Failed to create Podium CLI link');
-    }
-    
-    // Verify the link was created and install script exists
-    const checkResult: CommandResult = await ipcRenderer.invoke('execute-command', 'test', [
-        '-f', 
-        path.join(installationPath, 'scripts', 'configure.sh')
-    ]);
-    
-    if (checkResult.code !== 0) {
-        throw new Error('Podium CLI installation files not found');
-    }
-}
 
-async function runPodiumInstaller(): Promise<void> {
-    const installerScript: string = path.join(installationPath, 'scripts', 'configure.sh');
-    
-    return new Promise((resolve, reject) => {
-        console.log('Starting Podium installer...');
-        
-        // Collect configuration from form
-        const gitName = (document.getElementById('git-name') as HTMLInputElement)?.value || '';
-        const gitEmail = (document.getElementById('git-email') as HTMLInputElement)?.value || '';
-        const awsAccessKey = (document.getElementById('aws-access-key') as HTMLInputElement)?.value || '';
-        const awsSecretKey = (document.getElementById('aws-secret-key') as HTMLInputElement)?.value || '';
-        const awsRegion = (document.getElementById('aws-region') as HTMLInputElement)?.value || '';
-        const skipAws = (document.getElementById('skip-aws') as HTMLInputElement)?.checked || false;
-        // Database engine selection removed - all engines are now available
-        
-        // Build installer arguments
-        let installerArgs: string[] = ['--gui-mode', '--no-coloring'];
-        if (gitName) installerArgs.push('--git-name', gitName);
-        if (gitEmail) installerArgs.push('--git-email', gitEmail);
-        if (!skipAws && awsAccessKey && awsSecretKey) {
-            installerArgs.push('--aws-access-key', awsAccessKey);
-            installerArgs.push('--aws-secret-key', awsSecretKey);
-            installerArgs.push('--aws-region', awsRegion);
-        }
-        if (skipAws) installerArgs.push('--skip-aws');
-        // Database engine argument removed - all engines are now available
-        
-        console.log('Running installer with args:', installerArgs);
-        
-        // Start the installation with configuration
-        const command: string = `echo "y" | bash ${installerScript} ${installerArgs.join(' ')}`;
-        ipcRenderer.invoke('execute-command-stream', 'bash', ['-c', command], {
-            cwd: installationPath
-        }).then((result: StreamCommandResult) => {
-            console.log('Installer finished with result:', result);
-            
-            if (result.code === 0) {
-                resolve();
-            } else {
-                reject(new Error(`Installation script exited with code ${result.code}`));
-            }
-        }).catch((error: Error) => {
-            reject(error);
-        });
-    });
-}
+
+
 
 async function runPodiumConfig(): Promise<void> {
     return new Promise((resolve, reject) => {
@@ -426,6 +223,7 @@ async function runPodiumConfig(): Promise<void> {
         const awsSecretKey = (document.getElementById('aws-secret-key') as HTMLInputElement)?.value || '';
         const awsRegion = (document.getElementById('aws-region') as HTMLInputElement)?.value || '';
         const skipAws = (document.getElementById('skip-aws') as HTMLInputElement)?.checked || false;
+        const projectsDir = (document.getElementById('projects-dir') as HTMLInputElement)?.value || '';
         // Database engine selection removed - all engines are now available
         
         // Build config arguments
@@ -438,11 +236,13 @@ async function runPodiumConfig(): Promise<void> {
             configArgs.push('--aws-region', awsRegion);
         }
         if (skipAws) configArgs.push('--skip-aws');
+        if (projectsDir) configArgs.push('--projects-dir', projectsDir);
         // Database engine argument removed - all engines are now available
         
         // Run podium config command
         configArgs.push('--no-coloring'); // Add no-coloring flag
         console.log('Running podium config with args:', configArgs);
+        const { ipcRenderer } = require('electron');
         ipcRenderer.invoke('execute-command-stream', 'podium', configArgs).then((result: StreamCommandResult) => {
             console.log('Config finished with result:', result);
             
@@ -473,17 +273,55 @@ function openDashboard(): void {
 
 async function loadConfiguration(): Promise<void> {
     // Pre-fill Git configuration
+    console.log('🔄 Loading configuration - pre-filling Git and AWS settings...');
+    console.log('🔍 Current step:', currentStep);
+    console.log('🔍 DOM ready state:', document.readyState);
+    
+    // Wait a bit for DOM to be fully ready
+    await new Promise(resolve => setTimeout(resolve, 100));
+    
+    // Check if configuration step elements exist
+    const configStep = document.getElementById('step-configuration');
+    console.log('🔍 Configuration step element:', configStep);
+    
+    const gitNameInputCheck = document.getElementById('git-name');
+    const gitEmailInputCheck = document.getElementById('git-email');
+    const awsAccessKeyInputCheck = document.getElementById('aws-access-key');
+    const projectsDirInputCheck = document.getElementById('projects-dir');
+    
+    console.log('🔍 Git name input found:', !!gitNameInputCheck, gitNameInputCheck);
+    console.log('🔍 Git email input found:', !!gitEmailInputCheck, gitEmailInputCheck);
+    console.log('🔍 AWS access key input found:', !!awsAccessKeyInputCheck, awsAccessKeyInputCheck);
+    console.log('🔍 Projects dir input found:', !!projectsDirInputCheck, projectsDirInputCheck);
+    
     try {
+        const { ipcRenderer } = require('electron');
         const gitName: CommandResult = await ipcRenderer.invoke('execute-command', 'git', ['config', '--global', 'user.name']);
+        console.log('Git name result:', gitName);
         if (gitName.code === 0 && gitName.stdout.trim()) {
             const gitNameInput = document.getElementById('git-name') as HTMLInputElement;
-            if (gitNameInput) gitNameInput.value = gitName.stdout.trim();
+            console.log('Git name input element:', gitNameInput);
+            if (gitNameInput) {
+                gitNameInput.value = gitName.stdout.trim();
+                console.log('Pre-filled Git name:', gitName.stdout.trim());
+                console.log('Input value after setting:', gitNameInput.value);
+            } else {
+                console.log('ERROR: git-name input element not found!');
+            }
         }
         
         const gitEmail: CommandResult = await ipcRenderer.invoke('execute-command', 'git', ['config', '--global', 'user.email']);
+        console.log('Git email result:', gitEmail);
         if (gitEmail.code === 0 && gitEmail.stdout.trim()) {
             const gitEmailInput = document.getElementById('git-email') as HTMLInputElement;
-            if (gitEmailInput) gitEmailInput.value = gitEmail.stdout.trim();
+            console.log('Git email input element:', gitEmailInput);
+            if (gitEmailInput) {
+                gitEmailInput.value = gitEmail.stdout.trim();
+                console.log('Pre-filled Git email:', gitEmail.stdout.trim());
+                console.log('Email input value after setting:', gitEmailInput.value);
+            } else {
+                console.log('ERROR: git-email input element not found!');
+            }
         }
     } catch (error) {
         console.log('Could not pre-fill Git config:', error);
@@ -491,22 +329,38 @@ async function loadConfiguration(): Promise<void> {
 
     // Pre-fill AWS configuration
     try {
+        const { ipcRenderer } = require('electron');
         const awsAccessKey: CommandResult = await ipcRenderer.invoke('execute-command', 'aws', ['configure', 'get', 'aws_access_key_id']);
+        console.log('AWS access key result:', awsAccessKey);
         if (awsAccessKey.code === 0 && awsAccessKey.stdout.trim()) {
             const awsAccessKeyInput = document.getElementById('aws-access-key') as HTMLInputElement;
-            if (awsAccessKeyInput) awsAccessKeyInput.value = awsAccessKey.stdout.trim();
+            console.log('AWS access key input element:', awsAccessKeyInput);
+            if (awsAccessKeyInput) {
+                awsAccessKeyInput.value = awsAccessKey.stdout.trim();
+                console.log('Pre-filled AWS access key:', awsAccessKey.stdout.trim());
+                console.log('AWS access key input value after setting:', awsAccessKeyInput.value);
+            } else {
+                console.log('ERROR: aws-access-key input element not found!');
+            }
         }
         
         const awsSecretKey: CommandResult = await ipcRenderer.invoke('execute-command', 'aws', ['configure', 'get', 'aws_secret_access_key']);
         if (awsSecretKey.code === 0 && awsSecretKey.stdout.trim()) {
             const awsSecretKeyInput = document.getElementById('aws-secret-key') as HTMLInputElement;
-            if (awsSecretKeyInput) awsSecretKeyInput.value = awsSecretKey.stdout.trim();
+            if (awsSecretKeyInput) {
+                awsSecretKeyInput.value = awsSecretKey.stdout.trim();
+                console.log('Pre-filled AWS secret key');
+            }
         }
         
         const awsRegion: CommandResult = await ipcRenderer.invoke('execute-command', 'aws', ['configure', 'get', 'region']);
+        console.log('AWS region result:', awsRegion);
         if (awsRegion.code === 0 && awsRegion.stdout.trim()) {
             const awsRegionInput = document.getElementById('aws-region') as HTMLInputElement;
-            if (awsRegionInput) awsRegionInput.value = awsRegion.stdout.trim();
+            if (awsRegionInput) {
+                awsRegionInput.value = awsRegion.stdout.trim();
+                console.log('Pre-filled AWS region:', awsRegion.stdout.trim());
+            }
         }
     } catch (error) {
         console.log('Could not pre-fill AWS config:', error);
@@ -520,6 +374,73 @@ async function loadConfiguration(): Promise<void> {
         skipAwsCheckbox.addEventListener('change', (): void => {
             awsFields.style.display = skipAwsCheckbox.checked ? 'none' : 'block';
         });
+    }
+
+    // Pre-fill projects directory with default
+    console.log('🔄 Setting up default projects directory...');
+    const projectsDirInputDefault = document.getElementById('projects-dir') as HTMLInputElement;
+    console.log('🔍 Projects dir input element for default:', projectsDirInputDefault);
+    
+    if (projectsDirInputDefault) {
+        try {
+            console.log('🔄 Getting home directory...');
+            const { ipcRenderer } = require('electron');
+            const homeDir = await ipcRenderer.invoke('get-home-directory');
+            console.log('🏠 Home directory:', homeDir);
+            
+            const defaultProjectsDir = `${homeDir}/podium-projects`;
+            console.log('📁 Default projects directory:', defaultProjectsDir);
+            
+            projectsDirInputDefault.value = defaultProjectsDir;
+            console.log('✅ Set default projects directory input value:', defaultProjectsDir);
+            console.log('🔍 Input value after setting:', projectsDirInputDefault.value);
+        } catch (error) {
+            console.error('❌ Error getting home directory:', error);
+            // Fallback to a reasonable default
+            projectsDirInputDefault.value = '~/podium-projects';
+            console.log('🔄 Fallback: Set projects directory to ~/podium-projects');
+        }
+    } else {
+        console.error('❌ Projects directory input element not found for default setting!');
+    }
+}
+
+
+
+async function browseProjectsDir(): Promise<void> {
+    console.log('🔄 Browse projects directory button clicked');
+    try {
+        console.log('🔄 Invoking show-directory-dialog...');
+        const { ipcRenderer } = require('electron');
+        const result = await ipcRenderer.invoke('show-directory-dialog');
+        console.log('📁 Directory dialog result:', result);
+        
+        if (result && result.filePaths && result.filePaths.length > 0) {
+            const selectedPath = result.filePaths[0];
+            console.log('✅ Selected path:', selectedPath);
+            
+            const projectsDirInput = document.getElementById('projects-dir') as HTMLInputElement;
+            console.log('🔍 Projects dir input element:', projectsDirInput);
+            
+            if (projectsDirInput) {
+                projectsDirInput.value = selectedPath;
+                console.log('✅ Set projects directory input value to:', selectedPath);
+                console.log('🔍 Input value after setting:', projectsDirInput.value);
+            } else {
+                console.error('❌ Projects directory input element not found!');
+            }
+        } else {
+            console.log('❌ No directory selected or dialog cancelled');
+        }
+    } catch (error) {
+        console.error('❌ Error browsing for directory:', error);
+        console.error('❌ Error details:', {
+            name: (error as Error).name,
+            message: (error as Error).message,
+            stack: (error as Error).stack
+        });
+        // Fallback: show error message to user
+        showErrorMessage('Could not open directory browser. Please enter the path manually.');
     }
 }
 
@@ -542,3 +463,4 @@ function showErrorMessage(message: string): void {
 (window as any).previousStep = previousStep;
 (window as any).toggleOutput = toggleOutput;
 (window as any).openDashboard = openDashboard;
+(window as any).browseProjectsDir = browseProjectsDir;
