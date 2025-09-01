@@ -427,6 +427,9 @@ ipcMain.handle('execute-command-stream', async (event: IpcMainInvokeEvent, comma
   return new Promise((resolve, reject) => {
     debugLog('Executing command stream', { command, args, options });
     
+    // Create temp file for progress tracking
+    const tempFile = `/tmp/podium-progress-${Date.now()}.log`;
+    
     const childProcess: ChildProcess = spawn(command, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env, NO_COLOR: '1' },
@@ -435,13 +438,30 @@ ipcMain.handle('execute-command-stream', async (event: IpcMainInvokeEvent, comma
 
     let stdout: string = '';
     let stderr: string = '';
+    let progressBuffer: string = '';
 
     // Stream stdout data to renderer in real-time
     childProcess.stdout?.on('data', (data: Buffer) => {
       const output: string = data.toString('utf8');
       stdout += output;
+      progressBuffer += output;
+      
       console.log('STDOUT:', output);
       debugLog('Command stdout', { command, output });
+      
+      // Write raw output to temp file for progress parsing
+      require('fs').appendFileSync(tempFile, output);
+      
+      // Parse Docker progress from buffer
+      const progressInfo = parseDockerProgress(progressBuffer);
+      if (progressInfo) {
+        event.sender.send('command-stream-progress', {
+          command: command,
+          progress: progressInfo
+        });
+        // Clear processed lines from buffer
+        progressBuffer = progressBuffer.split('\n').slice(-5).join('\n'); // Keep last 5 lines
+      }
       
       // Send streaming data to renderer process
       event.sender.send('command-stream-data', {
@@ -456,6 +476,9 @@ ipcMain.handle('execute-command-stream', async (event: IpcMainInvokeEvent, comma
       stderr += output;
       console.log('STDERR:', output);
       debugLog('Command stderr', { command, output });
+      
+      // Write stderr to temp file too (Docker sometimes outputs progress to stderr)
+      require('fs').appendFileSync(tempFile, output);
       
       // Send streaming data to renderer process
       event.sender.send('command-stream-data', {
@@ -476,6 +499,13 @@ ipcMain.handle('execute-command-stream', async (event: IpcMainInvokeEvent, comma
       console.log('Process exited with code:', code);
       debugLog('Command completed', { command, result });
       
+      // Clean up temp file
+      try {
+        require('fs').unlinkSync(tempFile);
+      } catch (err) {
+        console.warn('Could not clean up temp file:', tempFile);
+      }
+      
       // Send completion event to renderer
       event.sender.send('command-stream-complete', {
         command: command,
@@ -489,6 +519,13 @@ ipcMain.handle('execute-command-stream', async (event: IpcMainInvokeEvent, comma
       console.error('Process error:', error);
       debugLog('Command error', { command, error: error.message });
       
+      // Clean up temp file
+      try {
+        require('fs').unlinkSync(tempFile);
+      } catch (err) {
+        console.warn('Could not clean up temp file:', tempFile);
+      }
+      
       // Send error event to renderer
       event.sender.send('command-stream-error', {
         command: command,
@@ -499,6 +536,85 @@ ipcMain.handle('execute-command-stream', async (event: IpcMainInvokeEvent, comma
     });
   });
 });
+
+// Parse Docker progress from output buffer
+function parseDockerProgress(buffer: string): any {
+  const lines = buffer.split('\n');
+  let latestProgress: any = null;
+  
+  for (const line of lines) {
+    // Remove ANSI escape sequences
+    const cleanLine = line.replace(/\x1b\[[0-9;]*m/g, '').replace(/\r/g, '');
+    
+    // Parse Docker download progress: "Downloading [=====>     ] 45.2MB/89.1MB"
+    const downloadMatch = cleanLine.match(/Downloading\s+\[([=>\s]+)\]\s+([0-9.]+[KMGT]?B)\/([0-9.]+[KMGT]?B)/);
+    if (downloadMatch && downloadMatch[2] && downloadMatch[3]) {
+      const [, progressBar, downloaded, total] = downloadMatch;
+      const percentage = Math.round((parseSize(downloaded) / parseSize(total)) * 100);
+      latestProgress = {
+        type: 'download',
+        percentage: Math.min(percentage, 100),
+        downloaded,
+        total,
+        message: `Downloading images: ${percentage}% (${downloaded}/${total})`
+      };
+    }
+    
+    // Parse Docker extraction progress: "Extracting [=====>     ] 45.2MB/89.1MB"
+    const extractMatch = cleanLine.match(/Extracting\s+\[([=>\s]+)\]\s+([0-9.]+[KMGT]?B)\/([0-9.]+[KMGT]?B)/);
+    if (extractMatch && extractMatch[2] && extractMatch[3]) {
+      const [, progressBar, extracted, total] = extractMatch;
+      const percentage = Math.round((parseSize(extracted) / parseSize(total)) * 100);
+      latestProgress = {
+        type: 'extract',
+        percentage: Math.min(percentage, 100),
+        extracted,
+        total,
+        message: `Extracting images: ${percentage}% (${extracted}/${total})`
+      };
+    }
+    
+    // Parse "Pull complete" messages
+    if (cleanLine.includes('Pull complete')) {
+      latestProgress = {
+        type: 'complete',
+        percentage: 100,
+        message: 'Image download complete'
+      };
+    }
+    
+    // Parse "Pulling from" messages
+    const pullingMatch = cleanLine.match(/Pulling from (.+)/);
+    if (pullingMatch && pullingMatch[1]) {
+      const imageName = pullingMatch[1].split('/').pop() || pullingMatch[1];
+      latestProgress = {
+        type: 'pulling',
+        percentage: 0,
+        imageName,
+        message: `Pulling ${imageName}...`
+      };
+    }
+  }
+  
+  return latestProgress;
+}
+
+// Helper function to parse size strings like "45.2MB" to bytes
+function parseSize(sizeStr: string): number {
+  const match = sizeStr.match(/([0-9.]+)([KMGT]?B)/);
+  if (!match || !match[1]) return 0;
+  
+  const [, num, unit] = match;
+  const size = parseFloat(num);
+  
+  switch (unit) {
+    case 'TB': return size * 1024 * 1024 * 1024 * 1024;
+    case 'GB': return size * 1024 * 1024 * 1024;
+    case 'MB': return size * 1024 * 1024;
+    case 'KB': return size * 1024;
+    default: return size;
+  }
+}
 
 interface SelectDirectoryOptions {
   title?: string;

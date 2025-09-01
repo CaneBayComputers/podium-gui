@@ -236,36 +236,49 @@ async function startServicesAfterConfig(): Promise<void> {
         let downloadProgress = 80; // Start at 80%
         const downloadedImages = new Set<string>();
         
-        // Listen for streaming data events
+        // Listen for Docker progress events (with real percentages)
+        const handleStreamProgress = (event: any, data: any) => {
+            if (data.command === 'podium' && data.progress) {
+                const progress = data.progress;
+                console.log('Docker progress update:', progress);
+                
+                // Map Docker progress percentage to installer progress (80-94%)
+                let installerProgress = 80;
+                
+                if (progress.type === 'pulling') {
+                    installerProgress = 80;
+                    updateProgress(installerProgress, progress.message);
+                } else if (progress.type === 'download') {
+                    // Map download progress 0-100% to installer progress 80-88%
+                    installerProgress = 80 + Math.round((progress.percentage / 100) * 8);
+                    updateProgress(installerProgress, progress.message);
+                } else if (progress.type === 'extract') {
+                    // Map extraction progress 0-100% to installer progress 88-92%
+                    installerProgress = 88 + Math.round((progress.percentage / 100) * 4);
+                    updateProgress(installerProgress, progress.message);
+                } else if (progress.type === 'complete') {
+                    installerProgress = 92;
+                    updateProgress(installerProgress, progress.message);
+                }
+                
+                // Update our tracking variable
+                downloadProgress = Math.max(downloadProgress, installerProgress);
+            }
+        };
+        
+        // Listen for streaming data events (fallback parsing)
         const handleStreamData = (event: any, data: any) => {
             if (data.command === 'podium' && data.type === 'stdout' && data.data) {
                 const output = data.data.toString();
                 console.log('Service startup output:', output);
                 
-                // Parse Docker download progress with better percentage tracking
-                if (output.includes('Pulling from')) {
-                    const match = output.match(/Pulling from (.+)/);
-                    if (match) {
-                        const imageName = match[1].split('/').pop() || match[1]; // Get just the image name
-                        updateProgress(Math.min(downloadProgress + 2, 88), `Downloading ${imageName}...`);
-                        downloadProgress = Math.min(downloadProgress + 2, 88);
-                    }
-                } else if (output.includes('Pull complete')) {
-                    downloadProgress = Math.min(downloadProgress + 3, 90);
-                    updateProgress(downloadProgress, 'Images downloaded, starting services...');
-                } else if (output.includes('Downloaded newer image') || output.includes('Image is up to date')) {
-                    const match = output.match(/for (.+)/);
-                    if (match) {
-                        const imageName = match[1].split('/').pop()?.split(':')[0] || 'image';
-                        downloadedImages.add(imageName);
-                        downloadProgress = Math.min(80 + (downloadedImages.size * 2), 90);
-                        updateProgress(downloadProgress, `Downloaded ${imageName}, starting containers...`);
-                    }
-                } else if (output.includes('Creating') || output.includes('Starting')) {
+                // Fallback parsing if progress events don't work
+                if (output.includes('Creating') || output.includes('Starting')) {
                     const match = output.match(/(Creating|Starting)\s+(.+)/);
                     if (match) {
                         const containerName = match[2].replace(/\.\.\.$/, '').trim();
-                        updateProgress(Math.min(downloadProgress + 2, 94), `${match[1]} ${containerName}...`);
+                        updateProgress(Math.min(downloadProgress + 1, 94), `${match[1]} ${containerName}...`);
+                        downloadProgress = Math.min(downloadProgress + 1, 94);
                     }
                 } else if (output.includes('Started') || output.includes('Created')) {
                     updateProgress(94, 'Services starting up...');
@@ -282,6 +295,7 @@ async function startServicesAfterConfig(): Promise<void> {
                 serviceStarted = true;
                 
                 // Remove event listeners
+                ipcRenderer.removeListener('command-stream-progress', handleStreamProgress);
                 ipcRenderer.removeListener('command-stream-data', handleStreamData);
                 ipcRenderer.removeListener('command-stream-complete', handleStreamComplete);
                 ipcRenderer.removeListener('command-stream-error', handleStreamError);
@@ -305,6 +319,7 @@ async function startServicesAfterConfig(): Promise<void> {
                 serviceStarted = true;
                 
                 // Remove event listeners
+                ipcRenderer.removeListener('command-stream-progress', handleStreamProgress);
                 ipcRenderer.removeListener('command-stream-data', handleStreamData);
                 ipcRenderer.removeListener('command-stream-complete', handleStreamComplete);
                 ipcRenderer.removeListener('command-stream-error', handleStreamError);
@@ -315,6 +330,7 @@ async function startServicesAfterConfig(): Promise<void> {
         };
         
         // Set up event listeners
+        ipcRenderer.on('command-stream-progress', handleStreamProgress);
         ipcRenderer.on('command-stream-data', handleStreamData);
         ipcRenderer.on('command-stream-complete', handleStreamComplete);
         ipcRenderer.on('command-stream-error', handleStreamError);
@@ -325,6 +341,7 @@ async function startServicesAfterConfig(): Promise<void> {
             serviceStarted = true;
             
             // Remove event listeners
+            ipcRenderer.removeListener('command-stream-progress', handleStreamProgress);
             ipcRenderer.removeListener('command-stream-data', handleStreamData);
             ipcRenderer.removeListener('command-stream-complete', handleStreamComplete);
             ipcRenderer.removeListener('command-stream-error', handleStreamError);
@@ -340,6 +357,7 @@ async function startServicesAfterConfig(): Promise<void> {
                 serviceStarted = true;
                 
                 // Remove event listeners
+                ipcRenderer.removeListener('command-stream-progress', handleStreamProgress);
                 ipcRenderer.removeListener('command-stream-data', handleStreamData);
                 ipcRenderer.removeListener('command-stream-complete', handleStreamComplete);
                 ipcRenderer.removeListener('command-stream-error', handleStreamError);
