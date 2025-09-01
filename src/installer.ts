@@ -223,21 +223,48 @@ async function startServicesAfterConfig(): Promise<void> {
         
         const { ipcRenderer } = require('electron');
         
-        // Run podium start-services command
+        // Update progress text to show we're starting services
+        updateProgress(80, 'Starting services...');
+        
+        let serviceStarted = false;
+        
+        // Run podium start-services command with streaming output
         ipcRenderer.invoke('execute-command-stream', 'podium', ['start-services', '--no-coloring']).then((result: StreamCommandResult) => {
             console.log('Start services finished with result:', result);
+            serviceStarted = true;
             
             if (result.code === 0) {
+                updateProgress(95, 'Services started successfully!');
                 resolve();
             } else {
                 // Don't fail the installation if services don't start - just log it
                 console.warn('Services failed to start, but continuing...', result.stderr);
+                updateProgress(95, 'Services startup completed (some may have failed)');
                 resolve();
             }
         }).catch((error: Error) => {
             console.warn('Error starting services, but continuing...', error);
+            serviceStarted = true;
+            updateProgress(95, 'Services startup completed');
             resolve();
         });
+        
+        // Show intermediate progress updates to indicate activity
+        setTimeout(() => {
+            if (!serviceStarted) updateProgress(82, 'Starting Docker services...');
+        }, 1000);
+        
+        setTimeout(() => {
+            if (!serviceStarted) updateProgress(85, 'Configuring service network...');
+        }, 3000);
+        
+        setTimeout(() => {
+            if (!serviceStarted) updateProgress(88, 'Initializing databases...');
+        }, 6000);
+        
+        setTimeout(() => {
+            if (!serviceStarted) updateProgress(92, 'Finalizing service startup...');
+        }, 10000);
     });
 }
 

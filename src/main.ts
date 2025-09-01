@@ -127,12 +127,6 @@ function createWindow(): void {
         },
         { type: 'separator' },
         {
-          label: 'GitHub',
-          click: () => {
-            shell.openExternal('https://github.com/CaneBayComputers/podium');
-          }
-        },
-        {
           label: 'Patreon',
           click: () => {
             shell.openExternal('https://patreon.com/canebaycomputers');

@@ -24,17 +24,7 @@
 
                     <button class="btn btn-secondary btn-small" onclick="openUrl('https://patreon.com/canebaycomputers')" title="Support on Patreon">❤️ Patreon</button>
                     <button class="btn btn-secondary btn-small" onclick="openUrl('https://securelink-prod.valorpaytech.com:4430/?redirect=1&uid=6e840752-8751-11f0-a74f-12a0879a85b1')" title="Donate">💳 Donate</button>
-                    <div class="dropdown">
-                        <button class="btn btn-secondary dropdown-toggle" onclick="toggleDropdown()">Help ▼</button>
-                        <div class="dropdown-menu" id="help-dropdown">
-                            <a href="#" onclick="showAboutModal()">About Podium</a>
-                            <a href="#" onclick="openUrl('https://github.com/CaneBayComputers/podium')">📖 Documentation</a>
-                            <a href="#" onclick="openUrl('https://github.com/CaneBayComputers/podium/issues')">🐛 Report Issue</a>
-                            <div class="dropdown-divider"></div>
-                            <a href="#" onclick="openUrl('https://patreon.com/canebaycomputers')">❤️ Support on Patreon</a>
-                            <a href="#" onclick="openUrl('https://securelink-prod.valorpaytech.com:4430/?redirect=1&uid=6e840752-8751-11f0-a74f-12a0879a85b1')">💳 Donate</a>
-                        </div>
-                    </div>
+
                 </div>
             </div>
         </header>
@@ -52,6 +42,7 @@
                         <h3>Create Your First Project</h3>
                         <p>Get started by creating a new Laravel or WordPress project</p>
                         <button class="btn btn-primary" onclick="createNewProject()">+ New Project</button>
+                        <button class="btn btn-secondary" onclick="console.log('Test button works!'); alert('Button works!');">Test</button>
                     </div>
                 </div>
             </section>

@@ -896,7 +896,9 @@ async function stopAllProjects(): Promise<void> {
 // Additional GUI functions
 function createNewProject(): void {
     console.log('DEBUG: createNewProject called');
+    console.log('DEBUG: About to call showModal with new-project-modal');
     showModal('new-project-modal');
+    console.log('DEBUG: showModal call completed');
 }
 
 function handleCreateProject(): void {
