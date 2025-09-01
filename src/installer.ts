@@ -149,7 +149,7 @@ function nextStep(): void {
         let nextStepIndex: number = currentStep + 1;
         
         // Skip system check if CLI is already installed
-        if (nextStepIndex === 1 && systemChecks.skipSystemCheck) {
+        if (nextStepIndex === 1 && systemChecks && systemChecks.skipSystemCheck) {
             nextStepIndex = 2;
         }
         
