@@ -1,4 +1,6 @@
 import * as fs from 'fs';
+import { ipcRenderer } from 'electron';
+import * as path from 'path';
 const Convert = require('ansi-to-html');
 
 // IMMEDIATE TEST LOG - This should execute right away
@@ -49,7 +51,7 @@ document.addEventListener('DOMContentLoaded', async (): Promise<void> => {
     // Test IPC communication
     console.log('🔄 Testing IPC communication...');
     try {
-        const { ipcRenderer } = require('electron');
+
         const testResult = await ipcRenderer.invoke('execute-command', 'echo', ['IPC test successful']);
         console.log('IPC test result:', testResult);
     } catch (error) {
@@ -79,7 +81,7 @@ document.addEventListener('DOMContentLoaded', async (): Promise<void> => {
 
 async function checkPodiumInstallation(): Promise<PodiumStatus> {
     try {
-        const { ipcRenderer } = require('electron');
+
         const result: CommandResult = await ipcRenderer.invoke('execute-command', 'podium', ['help', '--no-coloring']);
         if (result.code === 0) {
             // Check if configured by looking for docker-stack/.env
@@ -227,7 +229,7 @@ async function startServicesAfterConfig(): Promise<void> {
     return new Promise((resolve, reject) => {
         console.log('Starting Podium services after configuration...');
         
-        const { ipcRenderer } = require('electron');
+
         
         // Update progress text to show we're starting services
         updateProgress(80, 'Starting services...');
@@ -335,8 +337,8 @@ async function startServicesAfterConfig(): Promise<void> {
         ipcRenderer.on('command-stream-complete', handleStreamComplete);
         ipcRenderer.on('command-stream-error', handleStreamError);
         
-        // Start the command
-        ipcRenderer.invoke('execute-command-stream', 'podium', ['start-services', '--no-colors']).catch((error: Error) => {
+        // Start the command (removed --no-colors to allow Docker progress output)
+        ipcRenderer.invoke('execute-command-stream', 'podium', ['start-services']).catch((error: Error) => {
             console.warn('Error invoking start-services command, but continuing...', error);
             serviceStarted = true;
             
@@ -399,7 +401,7 @@ async function runPodiumConfig(): Promise<void> {
         // Run podium config command
         configArgs.push('--no-coloring'); // Add no-coloring flag
         console.log('Running podium config with args:', configArgs);
-        const { ipcRenderer } = require('electron');
+
         ipcRenderer.invoke('execute-command-stream', 'podium', configArgs).then((result: StreamCommandResult) => {
             console.log('Config finished with result:', result);
             
@@ -452,7 +454,7 @@ async function loadConfiguration(): Promise<void> {
     console.log('🔍 Projects dir input found:', !!projectsDirInputCheck, projectsDirInputCheck);
     
     try {
-        const { ipcRenderer } = require('electron');
+
         const gitName: CommandResult = await ipcRenderer.invoke('execute-command', 'git', ['config', '--global', 'user.name']);
         console.log('Git name result:', gitName);
         if (gitName.code === 0 && gitName.stdout.trim()) {
@@ -486,7 +488,7 @@ async function loadConfiguration(): Promise<void> {
 
     // Pre-fill AWS configuration
     try {
-        const { ipcRenderer } = require('electron');
+
         const awsAccessKey: CommandResult = await ipcRenderer.invoke('execute-command', 'aws', ['configure', 'get', 'aws_access_key_id']);
         console.log('AWS access key result:', awsAccessKey);
         if (awsAccessKey.code === 0 && awsAccessKey.stdout.trim()) {
@@ -541,7 +543,7 @@ async function loadConfiguration(): Promise<void> {
     if (projectsDirInputDefault) {
         try {
             console.log('🔄 Getting home directory...');
-            const { ipcRenderer } = require('electron');
+    
             const homeDir = await ipcRenderer.invoke('get-home-directory');
             console.log('🏠 Home directory:', homeDir);
             
@@ -568,7 +570,7 @@ async function browseProjectsDir(): Promise<void> {
     console.log('🔄 Browse projects directory button clicked');
     try {
         console.log('🔄 Invoking show-directory-dialog...');
-        const { ipcRenderer } = require('electron');
+
         const result = await ipcRenderer.invoke('show-directory-dialog');
         console.log('📁 Directory dialog result:', result);
         

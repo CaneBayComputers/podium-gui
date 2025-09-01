@@ -522,7 +522,7 @@ function openUrl(url: string): void {
 }
 
 function showCreateProject(): void {
-    showModal('create-project-modal');
+    showModal('new-project-modal');
 }
 
 
