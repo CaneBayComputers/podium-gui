@@ -1556,6 +1556,68 @@ document.addEventListener('click', function(event: Event) {
     }
 });
 
+// Help modal functions
+function showHelpModal(): void {
+    showModal('help-modal');
+}
+
+function openTerminal(): void {
+    // Try to open terminal application
+    if (process.platform === 'win32') {
+        shell.openExternal('cmd://');
+    } else if (process.platform === 'darwin') {
+        shell.openExternal('terminal://');
+    } else {
+        // Linux - try common terminal applications
+        shell.openExternal('gnome-terminal://') || shell.openExternal('xterm://') || shell.openExternal('konsole://');
+    }
+}
+
+async function showCliHelp(): Promise<void> {
+    try {
+        const result = await ipcRenderer.invoke('execute-command', 'podium', ['help']);
+        if (result.success) {
+            // Create a new modal to show the CLI help output
+            const helpOutput = result.output || 'No help output available';
+            
+            // Create and show a modal with the CLI help
+            const modal = document.createElement('div');
+            modal.className = 'modal show';
+            modal.id = 'cli-help-output-modal';
+            modal.innerHTML = `
+                <div class="modal-content modal-large">
+                    <div class="modal-header">
+                        <h3>📋 Podium CLI Help</h3>
+                        <button class="modal-close" onclick="closeModal()">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <pre style="background: rgba(15, 15, 35, 0.8); border: 1px solid var(--border-subtle); border-radius: 8px; padding: 1.5rem; color: var(--text-primary); font-family: 'JetBrains Mono', monospace; font-size: 0.9rem; line-height: 1.4; overflow-x: auto; white-space: pre-wrap;">${helpOutput}</pre>
+                        <div style="text-align: center; margin-top: 1rem;">
+                            <button class="btn btn-primary" onclick="closeModal()">Close</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            document.body.appendChild(modal);
+            
+            // Remove the modal when closed
+            const closeButtons = modal.querySelectorAll('.modal-close, .btn');
+            closeButtons.forEach(button => {
+                button.addEventListener('click', () => {
+                    modal.remove();
+                });
+            });
+        } else {
+            console.error('Failed to get CLI help:', result.error);
+            alert('Failed to get CLI help. Please run "podium help" in your terminal.');
+        }
+    } catch (error) {
+        console.error('Error showing CLI help:', error);
+        alert('Error showing CLI help. Please run "podium help" in your terminal.');
+    }
+}
+
 (window as any).showModal = showModal;
 (window as any).hideModal = hideModal;
 (window as any).openUrl = openUrl;
@@ -1573,3 +1635,6 @@ document.addEventListener('click', function(event: Event) {
 (window as any).showAboutModal = showAboutModal;
 (window as any).closeAboutModal = closeAboutModal;
 (window as any).showModal = showModal;
+(window as any).showHelpModal = showHelpModal;
+(window as any).openTerminal = openTerminal;
+(window as any).showCliHelp = showCliHelp;

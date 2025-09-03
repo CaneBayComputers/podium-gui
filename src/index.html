@@ -22,6 +22,7 @@
                     <button class="btn btn-primary" onclick="createNewProject()">+ New Project</button>
                     <button class="btn btn-primary" onclick="cloneProject()">📥 Clone</button>
 
+                    <button class="btn btn-secondary btn-small" onclick="showHelpModal()" title="Help & CLI Commands">❓ Help</button>
                     <button class="btn btn-secondary btn-small" onclick="openUrl('https://patreon.com/canebaycomputers')" title="Support on Patreon">❤️ Patreon</button>
                     <button class="btn btn-secondary btn-small" onclick="openUrl('https://securelink-prod.valorpaytech.com:4430/?redirect=1&uid=6e840752-8751-11f0-a74f-12a0879a85b1')" title="Donate">💳 Donate</button>
 
@@ -339,6 +340,106 @@
 
                 <div class="about-footer">
                     <p><small>© 2024 Cane Bay Computers. Made with ❤️ for the PHP community.</small></p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Help Modal -->
+        <div id="help-modal" class="modal">
+            <div class="modal-content modal-large">
+                <div class="modal-header">
+                    <h3>❓ Help & CLI Commands</h3>
+                    <button class="modal-close" onclick="closeModal()">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="help-sections">
+                        <div class="help-section">
+                            <h4>🖥️ GUI Features</h4>
+                            <ul>
+                                <li><strong>Create Projects:</strong> Use the "+ New Project" button to create Laravel, WordPress, or PHP projects</li>
+                                <li><strong>Clone Projects:</strong> Use the "📥 Clone" button to clone existing Git repositories</li>
+                                <li><strong>Manage Services:</strong> Start/stop shared services like Redis, MariaDB, and PostgreSQL</li>
+                                <li><strong>Project Status:</strong> View real-time status of all your projects</li>
+                                <li><strong>LAN Access:</strong> Click project URLs to open them in your browser</li>
+                            </ul>
+                        </div>
+                        
+                        <div class="help-section">
+                            <h4>⌨️ Podium CLI Commands</h4>
+                            <p>You also have full command-line access via the <code>podium</code> command:</p>
+                            
+                            <div class="cli-category">
+                                <h5>🚀 Project Management</h5>
+                                <div class="cli-command">
+                                    <code>podium new my-project</code>
+                                    <span>Create a new project interactively</span>
+                                </div>
+                                <div class="cli-command">
+                                    <code>podium status</code>
+                                    <span>Show status of all projects</span>
+                                </div>
+                                <div class="cli-command">
+                                    <code>podium up [project]</code>
+                                    <span>Start project containers</span>
+                                </div>
+                                <div class="cli-command">
+                                    <code>podium down [project]</code>
+                                    <span>Stop project containers</span>
+                                </div>
+                            </div>
+                            
+                            <div class="cli-category">
+                                <h5>🛠️ Development Tools (from project directory)</h5>
+                                <div class="cli-command">
+                                    <code>podium composer install</code>
+                                    <span>Run Composer inside container</span>
+                                </div>
+                                <div class="cli-command">
+                                    <code>podium art migrate</code>
+                                    <span>Run Laravel Artisan commands</span>
+                                </div>
+                                <div class="cli-command">
+                                    <code>podium wp plugin list</code>
+                                    <span>Run WP-CLI commands</span>
+                                </div>
+                                <div class="cli-command">
+                                    <code>podium exec 'ls -la'</code>
+                                    <span>Execute commands in project container</span>
+                                </div>
+                            </div>
+                            
+                            <div class="cli-category">
+                                <h5>🔧 System Management</h5>
+                                <div class="cli-command">
+                                    <code>podium configure</code>
+                                    <span>Configure Podium environment</span>
+                                </div>
+                                <div class="cli-command">
+                                    <code>podium start-services</code>
+                                    <span>Start shared services</span>
+                                </div>
+                                <div class="cli-command">
+                                    <code>podium stop-services</code>
+                                    <span>Stop shared services</span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="help-section">
+                            <h4>📚 More Information</h4>
+                            <ul>
+                                <li>Run <code>podium help</code> in terminal for complete command reference</li>
+                                <li>Use <code>--json-output</code> flag for automation and scripting</li>
+                                <li>All development tools require being in a project directory</li>
+                                <li>Projects are accessible via LAN for team demos and testing</li>
+                            </ul>
+                        </div>
+                    </div>
+                    
+                    <div class="help-actions">
+                        <button class="btn btn-secondary" onclick="openTerminal()">🖥️ Open Terminal</button>
+                        <button class="btn btn-primary" onclick="showCliHelp()">📋 Show Full CLI Help</button>
+                    </div>
                 </div>
             </div>
         </div>

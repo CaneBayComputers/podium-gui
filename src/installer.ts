@@ -465,7 +465,7 @@ async function runPodiumConfig(): Promise<void> {
         // Database engine selection removed - all engines are now available
         
         // Build config arguments
-        let configArgs: string[] = ['config', '--gui-mode'];
+        let configArgs: string[] = ['configure', '--gui-mode'];
         if (gitName) configArgs.push('--git-name', gitName);
         if (gitEmail) configArgs.push('--git-email', gitEmail);
         if (!skipAws && awsAccessKey && awsSecretKey) {
@@ -477,9 +477,9 @@ async function runPodiumConfig(): Promise<void> {
         if (projectsDir) configArgs.push('--projects-dir', projectsDir);
         // Database engine argument removed - all engines are now available
         
-        // Run podium config command
+        // Run podium configure command
         configArgs.push('--no-coloring'); // Add no-coloring flag
-        console.log('Running podium config with args:', configArgs);
+        console.log('Running podium configure with args:', configArgs);
 
         const { ipcRenderer } = require('electron');
         ipcRenderer.invoke('execute-command-stream', 'podium', configArgs).then((result: StreamCommandResult) => {

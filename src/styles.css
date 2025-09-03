@@ -1437,3 +1437,101 @@ span.status-indicator {
     border-top: 1px solid var(--border-subtle);
     color: var(--text-muted);
 }
+
+/* Help Modal Styles */
+.modal-large .modal-content {
+    max-width: 900px;
+    max-height: 80vh;
+    overflow-y: auto;
+}
+
+.help-sections {
+    display: flex;
+    flex-direction: column;
+    gap: 2rem;
+}
+
+.help-section {
+    background: rgba(30, 41, 59, 0.3);
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    padding: 1.5rem;
+}
+
+.help-section h4 {
+    color: var(--neon-cyan);
+    margin-bottom: 1rem;
+    font-size: 1.2rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.help-section ul {
+    list-style: none;
+    padding-left: 0;
+}
+
+.help-section li {
+    margin-bottom: 0.75rem;
+    padding-left: 1rem;
+    position: relative;
+}
+
+.help-section li::before {
+    content: "→";
+    position: absolute;
+    left: 0;
+    color: var(--neon-purple);
+    font-weight: bold;
+}
+
+.cli-category {
+    margin-bottom: 1.5rem;
+}
+
+.cli-category h5 {
+    color: var(--neon-orange);
+    margin-bottom: 0.75rem;
+    font-size: 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.cli-command {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 0.5rem;
+    padding: 0.5rem;
+    background: rgba(15, 15, 35, 0.5);
+    border-radius: 4px;
+    border-left: 3px solid var(--neon-purple);
+}
+
+.cli-command code {
+    font-family: 'JetBrains Mono', 'Consolas', monospace;
+    background: rgba(139, 92, 246, 0.1);
+    border: 1px solid rgba(139, 92, 246, 0.3);
+    border-radius: 4px;
+    padding: 0.25rem 0.5rem;
+    color: var(--neon-cyan);
+    font-size: 0.9rem;
+    min-width: 200px;
+    flex-shrink: 0;
+}
+
+.cli-command span {
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+}
+
+.help-actions {
+    display: flex;
+    gap: 1rem;
+    justify-content: center;
+    margin-top: 2rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--border-subtle);
+}
