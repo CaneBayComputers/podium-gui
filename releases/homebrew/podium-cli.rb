@@ -31,8 +31,8 @@ class PodiumCli < Formula
   end
 
   def post_install
-    # Run the configuration script in GUI mode (non-interactive)
-    system "#{prefix}/src/scripts/configure.sh", "--gui-mode", "--skip-aws", "--skip-packages"
+    # Run the configuration script with JSON output (non-interactive)
+    system "#{prefix}/src/scripts/configure.sh", "--json-output", "--skip-aws", "--skip-packages"
     
     ohai "Podium CLI installed successfully!"
     puts ""

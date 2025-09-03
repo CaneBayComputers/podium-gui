@@ -465,7 +465,7 @@ async function runPodiumConfig(): Promise<void> {
         // Database engine selection removed - all engines are now available
         
         // Build config arguments
-        let configArgs: string[] = ['configure', '--gui-mode'];
+        let configArgs: string[] = ['configure', '--json-output'];
         if (gitName) configArgs.push('--git-name', gitName);
         if (gitEmail) configArgs.push('--git-email', gitEmail);
         if (!skipAws && awsAccessKey && awsSecretKey) {
