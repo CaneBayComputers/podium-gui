@@ -1,0 +1,111 @@
+#!/bin/bash
+set -e
+
+# Post-removal script for Podium GUI
+# This script runs AFTER the package files have been removed
+
+case "$1" in
+    remove)
+        echo "🧹 Cleaning up Podium GUI (keeping configuration)..."
+        
+        # Update desktop database
+        if command -v update-desktop-database >/dev/null 2>&1; then
+            update-desktop-database /usr/share/applications/ 2>/dev/null || true
+        fi
+        
+        # Update icon cache
+        if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+            gtk-update-icon-cache /usr/share/icons/hicolor/ 2>/dev/null || true
+        fi
+        
+        echo "✅ Podium GUI removed (configuration preserved)"
+        echo ""
+        echo "📝 Note: Your projects and Podium CLI are still available"
+        echo "   - To reinstall GUI: sudo apt install ./podium-gui_*.deb"
+        echo "   - To remove CLI too: sudo apt purge podium-gui"
+        ;;
+        
+    purge)
+        echo "🔥 PURGING Podium GUI (removing ALL data)..."
+        
+        # Remove any remaining GUI configuration
+        rm -rf /usr/local/share/podium-gui 2>/dev/null || true
+        
+        # Update desktop database
+        if command -v update-desktop-database >/dev/null 2>&1; then
+            update-desktop-database /usr/share/applications/ 2>/dev/null || true
+        fi
+        
+        # Update icon cache  
+        if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+            gtk-update-icon-cache /usr/share/icons/hicolor/ 2>/dev/null || true
+        fi
+        
+        # Ask if user wants to remove Podium CLI and all data
+        echo ""
+        echo "🚨 PURGE MODE: Complete cleanup options"
+        echo ""
+        
+        # Check if we're in interactive mode
+        if [ -t 0 ]; then
+            echo "Do you want to remove Podium CLI and ALL project data? (y/N)"
+            read -r response
+            case "$response" in
+                [yY]|[yY][eE][sS])
+                    echo "🔥 Removing Podium CLI and all data..."
+                    
+                    # Run podium uninstall if available (already done in prerm, but just in case)
+                    if command -v podium >/dev/null 2>&1; then
+                        echo "Running final Podium uninstall..."
+                        podium uninstall 2>/dev/null || true
+                    fi
+                    
+                    # Remove Podium CLI installation
+                    rm -rf /usr/local/share/podium-cli 2>/dev/null || true
+                    rm -f /usr/local/bin/podium 2>/dev/null || true
+                    
+                    # Remove configuration
+                    rm -rf /etc/podium-cli 2>/dev/null || true
+                    
+                    # Remove any remaining Docker networks
+                    if command -v docker >/dev/null 2>&1; then
+                        docker network ls --filter name=podium --format "{{.Name}}" | xargs -r docker network rm 2>/dev/null || true
+                    fi
+                    
+                    echo "💀 Complete removal finished!"
+                    echo ""
+                    echo "🔄 To reinstall everything:"
+                    echo "   curl -fsSL https://raw.githubusercontent.com/CaneBayComputers/podium-cli/master/install-ubuntu.sh | bash"
+                    ;;
+                *)
+                    echo "✅ Podium CLI preserved (only GUI removed)"
+                    echo ""
+                    echo "🔧 To manually remove Podium CLI later:"
+                    echo "   podium destroy  # Remove all containers/images"  
+                    echo "   sudo rm -rf /usr/local/share/podium-cli"
+                    echo "   sudo rm -rf /etc/podium-cli"
+                    echo "   sudo rm -f /usr/local/bin/podium"
+                    ;;
+            esac
+        else
+            echo "🤖 Non-interactive mode: Preserving Podium CLI"
+            echo ""
+            echo "🔧 To manually remove Podium CLI:"
+            echo "   podium destroy  # Remove all containers/images"  
+            echo "   sudo rm -rf /usr/local/share/podium-cli"
+            echo "   sudo rm -rf /etc/podium-cli"
+            echo "   sudo rm -f /usr/local/bin/podium"
+        fi
+        ;;
+        
+    upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+        # Do nothing for these cases
+        ;;
+        
+    *)
+        echo "postrm called with unknown argument \`$1'" >&2
+        exit 1
+        ;;
+esac
+
+exit 0

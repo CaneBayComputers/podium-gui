@@ -70,6 +70,7 @@ chmod -R 755 "${PACKAGE_NAME}/usr/local/share/podium-gui"
 chmod +x "${PACKAGE_NAME}/usr/local/bin/podium-gui"
 chmod +x "${PACKAGE_NAME}/DEBIAN/postinst"
 chmod +x "${PACKAGE_NAME}/DEBIAN/prerm"
+chmod +x "${PACKAGE_NAME}/DEBIAN/postrm"
 
 # Set desktop entry and icon permissions
 if [ -f "${PACKAGE_NAME}/usr/share/applications/podium-gui.desktop" ]; then
