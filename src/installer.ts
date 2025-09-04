@@ -317,13 +317,9 @@ async function startInstallation(): Promise<void> {
         }
         
         // The deb/mac installer should have already installed Podium CLI globally
-        // Just run the configuration
-        updateProgress(20, 'Configuring Podium environment...');
+        // Run configuration (now includes service startup)
+        updateProgress(10, 'Configuring Podium environment...');
         await runPodiumConfig();
-        
-        // Start services after configuration
-        updateProgress(80, 'Starting services...');
-        await startServicesAfterConfig();
         
         // Installation complete
         updateProgress(100, 'Installation complete!');
@@ -451,48 +447,91 @@ async function startServicesAfterConfig(): Promise<void> {
 }
 
 async function runPodiumConfig(): Promise<void> {
-    return new Promise((resolve, reject) => {
+    return new Promise(async (resolve, reject) => {
         console.log('Starting Podium configuration...');
         
-        // Collect configuration from form
-        const gitName = (document.getElementById('git-name') as HTMLInputElement)?.value || '';
-        const gitEmail = (document.getElementById('git-email') as HTMLInputElement)?.value || '';
-        const awsAccessKey = (document.getElementById('aws-access-key') as HTMLInputElement)?.value || '';
-        const awsSecretKey = (document.getElementById('aws-secret-key') as HTMLInputElement)?.value || '';
-        const awsRegion = (document.getElementById('aws-region') as HTMLInputElement)?.value || '';
-        const skipAws = (document.getElementById('skip-aws') as HTMLInputElement)?.checked || false;
-        const projectsDir = (document.getElementById('projects-dir') as HTMLInputElement)?.value || '';
-        // Database engine selection removed - all engines are now available
-        
-        // Build config arguments
-        let configArgs: string[] = ['configure', '--json-output'];
-        if (gitName) configArgs.push('--git-name', gitName);
-        if (gitEmail) configArgs.push('--git-email', gitEmail);
-        if (!skipAws && awsAccessKey && awsSecretKey) {
-            configArgs.push('--aws-access-key', awsAccessKey);
-            configArgs.push('--aws-secret-key', awsSecretKey);
-            configArgs.push('--aws-region', awsRegion);
-        }
-        if (skipAws) configArgs.push('--skip-aws');
-        if (projectsDir) configArgs.push('--projects-dir', projectsDir);
-        // Database engine argument removed - all engines are now available
-        
-        // Run podium configure command
-        configArgs.push('--no-coloring'); // Add no-coloring flag
-        console.log('Running podium configure with args:', configArgs);
-
-        const { ipcRenderer } = require('electron');
-        ipcRenderer.invoke('execute-command-stream', 'podium', configArgs).then((result: StreamCommandResult) => {
+        try {
+            const { ipcRenderer } = require('electron');
+            
+            // Step 1: Ensure sudo is authenticated using timeout approach
+            updateProgress(15, 'Authenticating system access...');
+            const sudoCheck = await ipcRenderer.invoke('execute-command', 'sudo', ['-n', 'true']);
+            
+            if (sudoCheck.code !== 0) {
+                // Need to authenticate - this will prompt for password
+                updateProgress(15, 'System authentication required...');
+                const sudoAuth = await ipcRenderer.invoke('execute-command', 'sudo', ['-v']);
+                
+                if (sudoAuth.code !== 0) {
+                    throw new Error('System authentication failed. Please check your password and try again.');
+                }
+            }
+            
+            // Step 2: Collect configuration from form
+            const gitName = (document.getElementById('git-name') as HTMLInputElement)?.value || '';
+            const gitEmail = (document.getElementById('git-email') as HTMLInputElement)?.value || '';
+            const awsAccessKey = (document.getElementById('aws-access-key') as HTMLInputElement)?.value || '';
+            const awsSecretKey = (document.getElementById('aws-secret-key') as HTMLInputElement)?.value || '';
+            const awsRegion = (document.getElementById('aws-region') as HTMLInputElement)?.value || '';
+            const skipAws = (document.getElementById('skip-aws') as HTMLInputElement)?.checked || false;
+            const projectsDir = (document.getElementById('projects-dir') as HTMLInputElement)?.value || '';
+            
+            // Step 3: Build config arguments
+            let configArgs: string[] = ['configure', '--json-output'];
+            if (gitName) configArgs.push('--git-name', gitName);
+            if (gitEmail) configArgs.push('--git-email', gitEmail);
+            if (!skipAws && awsAccessKey && awsSecretKey) {
+                configArgs.push('--aws-access-key', awsAccessKey);
+                configArgs.push('--aws-secret-key', awsSecretKey);
+                configArgs.push('--aws-region', awsRegion);
+            }
+            if (skipAws) configArgs.push('--skip-aws');
+            if (projectsDir) configArgs.push('--projects-dir', projectsDir);
+            configArgs.push('--no-coloring');
+            
+            // Step 4: Run podium configure (now includes service startup)
+            updateProgress(20, 'Configuring Podium environment and starting services...');
+            console.log('Running podium configure with args:', configArgs);
+            
+            // Start Docker progress monitoring immediately since configure now starts services
+            const progressInterval = setInterval(async () => {
+                try {
+                    const fs = require('fs');
+                    if (fs.existsSync('/tmp/podium-docker-progress.log')) {
+                        const logContent = fs.readFileSync('/tmp/podium-docker-progress.log', 'utf8');
+                        const progressData = parseDockerProgress(logContent);
+                        
+                        if (progressData) {
+                            // Map progress to installer range (20-90%)
+                            const dockerPercent = progressData.overall_percent || 0;
+                            const installerProgress = 20 + Math.round((dockerPercent / 100) * 70);
+                            
+                            console.log(`🐳 Docker progress: ${dockerPercent}% -> installer: ${installerProgress}%`);
+                            updateProgress(installerProgress, progressData.message || 'Configuring and starting services...');
+                        }
+                    }
+                } catch (error) {
+                    console.log('Progress parsing error (normal during startup):', error);
+                }
+            }, 2000);
+            
+            const result: StreamCommandResult = await ipcRenderer.invoke('execute-command-stream', 'podium', configArgs);
+            
+            // Clear progress monitoring
+            clearInterval(progressInterval);
+            
             console.log('Config finished with result:', result);
             
             if (result.code === 0) {
+                updateProgress(95, 'Configuration and services completed successfully!');
                 resolve();
             } else {
-                reject(new Error(`Configuration failed with code ${result.code}`));
+                throw new Error(`Configuration failed with code ${result.code}: ${result.stderr}`);
             }
-        }).catch((error: Error) => {
+            
+        } catch (error) {
             reject(error);
-        });
+        }
     });
 }
 
