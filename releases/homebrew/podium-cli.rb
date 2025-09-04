@@ -41,6 +41,21 @@ class PodiumCli < Formula
     puts ""
   end
 
+  def preuninstall
+    # Run podium uninstall to clean up Docker resources before removing CLI
+    if File.exist?("#{bin}/podium")
+      ohai "Cleaning up Podium Docker resources..."
+      
+      # Run uninstall with --json-output for clean automated removal
+      system "#{bin}/podium", "uninstall", "--json-output", "--delete-images"
+      
+      puts ""
+      puts "✅ Podium Docker cleanup completed"
+      puts "🗑️  Removed: containers, images, volumes, networks, hosts entries"
+      puts ""
+    end
+  end
+
   test do
     # Test that the podium command exists and shows help
     assert_match "Professional PHP Development Platform", shell_output("#{bin}/podium help")
