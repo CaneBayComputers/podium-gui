@@ -293,8 +293,49 @@ ipcMain.handle('execute-podium-script', async (event: IpcMainInvokeEvent, script
 });
 
 // New handler for podium command
+// Function to refresh sudo timestamp for operations that need it
+async function refreshSudoTimestamp(): Promise<boolean> {
+  return new Promise((resolve) => {
+    debugLog('Refreshing sudo timestamp for hosts file modification');
+    
+    const childProcess: ChildProcess = spawn('sudo', ['-v'], {
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
+    
+    childProcess.on('close', (code: number) => {
+      if (code === 0) {
+        debugLog('Sudo timestamp refreshed successfully');
+        resolve(true);
+      } else {
+        debugLog('Failed to refresh sudo timestamp', { exitCode: code });
+        resolve(false);
+      }
+    });
+    
+    childProcess.on('error', (error: Error) => {
+      debugLog('Error refreshing sudo timestamp', error);
+      resolve(false);
+    });
+  });
+}
+
 ipcMain.handle('execute-podium', async (event: IpcMainInvokeEvent, subcommand: string, args: string[] = []): Promise<CommandResult> => {
-  return new Promise((resolve, reject) => {
+  return new Promise(async (resolve, reject) => {
+    // Commands that modify hosts file need sudo timestamp
+    const sudoCommands = ['new', 'clone', 'setup'];
+    if (sudoCommands.includes(subcommand)) {
+      debugLog(`Command '${subcommand}' requires sudo, refreshing timestamp`);
+      const sudoSuccess = await refreshSudoTimestamp();
+      if (!sudoSuccess) {
+        resolve({
+          code: 1,
+          stdout: '',
+          stderr: 'Failed to authenticate for hosts file modification. Please run the command from terminal.'
+        });
+        return;
+      }
+    }
+    
     // Try to use global podium command first, then fallback to local
     const allArgs: string[] = [subcommand, ...args, '--json-output'];
     
