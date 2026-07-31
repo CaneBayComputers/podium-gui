@@ -120,7 +120,7 @@ MIT — see [LICENSE](LICENSE). Same as [Podium CLI](https://github.com/CaneBayC
 
 - 📧 canebaycomputers@gmail.com
 - 🐛 [Issues](https://github.com/CaneBayComputers/podium-gui/issues)
-- 📖 [Podium documentation](https://canebaycomputers.github.io/podium-cli/guide/)
+- 📖 [Podium documentation](https://podiumcli.com/guide/)
 
 ---
 
