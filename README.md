@@ -1,34 +1,35 @@
 # Podium GUI
 
-Professional PHP Development Platform - Graphical User Interface
+## Podium, without the terminal
 
-## Overview
+**Describe what you want to build, pick from what it suggests, and watch it go — plus a live view of every project and service on the machine.**
 
-Podium GUI is the premium graphical interface for the Podium development platform. It provides an intuitive, modern interface for managing PHP projects, Docker services, and development environments.
+A desktop front end for [Podium CLI](https://github.com/CaneBayComputers/podium-cli). The CLI does the work; the GUI makes it visible and clickable. Same projects, same shared services, same URLs — you can switch between the two freely.
 
-## Features
+---
 
-- 🎯 **Project Management** - Visual project creation, monitoring, and management
-- 🐳 **Docker Integration** - Start/stop services with a single click
-- 📊 **Real-time Monitoring** - Live status updates for all services and projects  
-- 🎨 **Modern UI** - Retro synthwave theme with responsive design
-- ⚡ **Performance** - Built with Electron for cross-platform compatibility
-- 🔧 **Configuration** - Visual setup and configuration management
+## What it does
+
+- **Create with AI** — describe a project in plain English. Podium works out the stack, shows you the candidates with a reason for each, and lets you choose the app or framework, the database and the name before anything is created.
+- **Install an app** — browse and search the 100+ app library, install with a name. The database comes fixed by the installer, so there is nothing to get wrong.
+- **New project** — scaffold any supported framework with a database of your choosing.
+- **Clone** — pull an existing repo into a Podium project, work directly or fork it.
+- **Services at a glance** — start, stop and flush the shared services; live status for every project.
+- **Build terminal** — watch installs and builds stream as they happen, in the window.
+
+Projects get PHP 8.3, Python 3 or Node 22 containers with nginx, supervisor and the database drivers already compiled in, and a real hostname instead of a port number.
+
+---
 
 ## Requirements
 
-- **Podium CLI** - The GUI requires Podium CLI to be installed
-- **Node.js 16+** - For development
-- **Docker** - For containerized development environments
+- **Podium CLI** — installed automatically if missing; the GUI cannot run without it.
+- **Docker** — for the containers.
+- **Node 20+** — for building from source only. Not needed to run a release.
 
-## Installation
+---
 
-### From Release (Recommended)
-1. Download the latest release for your platform
-2. Install the package (deb/dmg/exe)
-3. The installer will automatically install Podium CLI if needed
-
-### From a Shell Installer
+## Install
 
 ```bash
 git clone https://github.com/CaneBayComputers/podium-gui.git
@@ -36,100 +37,56 @@ cd podium-gui
 ./install-ubuntu.sh          # or install-fedora.sh / install-arch.sh / install-mac.sh
 ```
 
-**The Podium CLI is installed first if it is missing.** The GUI is a front end
-for the CLI and is useless without it, so it is never installable alone — if
-`podium` is not on PATH, the matching CLI installer runs first (from a sibling
-`podium-cli/` checkout when there is one, otherwise fetched from GitHub).
+**The Podium CLI is installed first if it is missing.** The GUI is a front end for the CLI and is useless without it, so it is never installable alone — if `podium` is not on PATH, the matching CLI installer runs first (from a sibling `podium-cli/` checkout when there is one, otherwise fetched from GitHub).
 
-Run from a checkout and that checkout is installed (symlinked), rather than a
-fresh clone — so a development tree stays the live install.
+Run the installer from a checkout and *that* checkout is installed (symlinked) rather than a fresh clone, so a development tree stays the live install.
 
-The installers also handle a few things worth knowing about:
+On first launch, if Podium has not been configured yet, the GUI collects what `podium configure` needs and runs it for you.
 
-- **Node is version-checked, not just detected.** Ubuntu 24.04 still ships
-  Node 18, which is too old for the build tooling; the installer upgrades to 20+.
-- **`node-pty` is rebuilt against Electron's ABI**, or the embedded build
-  terminal cannot load. A failure here is a warning, not an abort — the GUI
-  works without it.
-- **`xdotool`/`wmctrl`** are installed to support `--no-focus`; without them the
-  window still opens unfocused.
+Three things the installers handle that are worth knowing about:
 
-### From Source
-```bash
-# Clone the repository
-git clone https://github.com/CaneBayComputers/podium-gui.git
-cd podium-gui
+- **Node is version-checked, not just detected.** Ubuntu 24.04 still ships Node 18, which is too old for the build tooling, so the installer upgrades to 20+.
+- **`node-pty` is rebuilt against Electron's ABI**, or the embedded build terminal cannot load. A failure here is a warning, not an abort — the GUI works without it.
+- **`xdotool`/`wmctrl`** are installed to support `--no-focus`; without them the window still opens unfocused.
 
-# Install dependencies
-npm install
-
-# Build TypeScript
-npm run build-ts
-
-# Start development
-npm start
-
-# Or build for production
-npm run build
-```
+---
 
 ## Development
 
 ```bash
-# Install dependencies
 npm install
-
-# Start in development mode
-npm run dev
-
-# Build TypeScript
-npm run build-ts
-
-# Package for distribution
-npm run package
+npm run dev          # build TypeScript, then launch
+npm run build-ts     # types only
+npm run build        # package for distribution
 ```
 
-## Launching without stealing focus
+### Launching without stealing focus
 
 ```bash
 electron dist/main.js --no-focus
 ```
 
-Opens the window **unfocused and behind the other windows**, for background or
-automated launches — a test run should not grab the keyboard from whoever is at
-the machine. The e2e harness passes it automatically.
+Opens the window **unfocused and behind the other windows**, for background or automated launches — a test run should not grab the keyboard from whoever is at the machine. The e2e harness passes it automatically.
 
-On X11 the stacking part uses `wmctrl`/`xdotool` if either is installed; without
-them the window still opens unfocused, which is the part that matters. The
-`below` hint is cleared the first time the window is focused, so once you click
-it, it behaves like any other window rather than being stuck at the back.
+On X11 the stacking part uses `wmctrl`/`xdotool` if either is installed; without them the window still opens unfocused, which is the part that matters. The `below` hint is cleared the first time the window is focused, so once you click it, it behaves like any other window. A normal launch focuses as usual.
 
-A normal launch (`npm start`, or double-clicking the app) focuses as usual.
+---
 
 ## Testing
 
-The GUI is driven end-to-end with Playwright, which supports Electron natively —
-it launches the real app, queries and clicks the renderer DOM, and can call into
-the **main** process to exercise IPC handlers directly.
+The GUI is driven end-to-end with Playwright, which supports Electron natively — it launches the real app, queries and clicks the renderer DOM, and can call into the **main** process to exercise IPC handlers directly.
 
 ```bash
 npm run test:e2e     # builds TypeScript, then runs tests/e2e.js
 ```
 
-The suite is deliberately **read-only**: it never creates, installs, clones or
-removes a project, and never stops the shared services. It does require Podium to
-be installed and configured (`/etc/podium-cli/.env` with `PROJECTS_DIR`), since it
-asserts against real `podium status` output. A real `podium install` run is
-verified separately on a throwaway box.
+The suite is deliberately **read-only**: it never creates, installs, clones or removes a project, and never stops the shared services. It does require Podium to be installed and configured (`/etc/podium-cli/.env` with `PROJECTS_DIR`), since it asserts against real `podium status` output. A real `podium install` run is verified separately on a throwaway box.
 
-Screenshots are written to a gitignored `debug/` directory with predictable
-names (`01-dashboard.png`, `02-install-picker.png`, …), so a failing run can point
-at an exact image.
+Screenshots land in a gitignored `debug/` directory with predictable names (`01-dashboard.png`, `02-install-picker.png`, …), so a failing run can point at an exact image.
 
 ### Writing tests
 
-Select elements by `data-testid`, never by CSS class or DOM position — restyling
-must not break selectors, or an agent silently clicks the wrong thing:
+Select elements by `data-testid`, never by CSS class or DOM position — restyling must not break selectors, or an agent silently clicks the wrong thing:
 
 ```js
 const { launchApp, screenshot, t } = require('./helpers');
@@ -148,28 +105,22 @@ const catalog = await app.evaluate(async ({ ipcMain }) =>
 await app.close();
 ```
 
-Two traps worth knowing, both of which produced convincing false results here:
+Two traps, both of which produced convincing false results here:
 
-- **Screenshot animations.** Modals animate in (`fadeIn` + `scaleIn`, 0.3s).
-  Capturing immediately yields a half-transparent overlay that looks like a
-  serious CSS bug. `helpers.screenshot()` passes `animations: 'disabled'` to
-  fast-forward them; use it rather than `win.screenshot()` directly.
-- **`offsetParent` on fixed elements.** The loading splash is `position: fixed`,
-  and fixed elements always report `offsetParent === null` — so using that to
-  detect "hidden" passes instantly and every subsequent assertion races the
-  initial render. Check `display`/`visibility` instead.
+- **Screenshot animations.** Modals animate in (`fadeIn` + `scaleIn`, 0.3s). Capturing immediately yields a half-transparent overlay that looks like a serious CSS bug. `helpers.screenshot()` passes `animations: 'disabled'` to fast-forward them; use it rather than `win.screenshot()` directly.
+- **`offsetParent` on fixed elements.** The loading splash is `position: fixed`, and fixed elements always report `offsetParent === null` — so using that to detect "hidden" passes instantly and every subsequent assertion races the initial render. Check `display`/`visibility` instead.
+
+---
 
 ## License
 
-This software is proprietary and requires a valid license for use. 
-
-For licensing information, visit: https://podiumdev.io/pricing
+Proprietary — see [LICENSE](LICENSE). The Podium CLI it builds on is separate and MIT licensed.
 
 ## Support
 
-- 📧 Email: canebaycomputers@gmail.com
-- 🐛 Issues: https://github.com/CaneBayComputers/podium-gui/issues
-- 📖 Documentation: https://podiumdev.io/docs
+- 📧 canebaycomputers@gmail.com
+- 🐛 [Issues](https://github.com/CaneBayComputers/podium-gui/issues)
+- 📖 [Podium documentation](https://canebaycomputers.github.io/podium-cli/guide/)
 
 ---
 
