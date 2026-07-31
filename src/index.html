@@ -13,10 +13,12 @@
         <header class="header">
             <div class="header-content">
                 <div class="logo">
-                    <h1>Podium</h1>
-                    <span class="tagline">Professional PHP Development Platform</span>
+                    <h1>Podium CLI</h1>
+                    <span class="tagline">Podium, without the terminal</span>
                     <span id="debug-indicator" class="debug-indicator" style="display: none;">DEBUG MODE - F5 to refresh</span>
                 </div>
+                <!-- Actions only. Help/Patreon/Donate live in the footer so the
+                     header carries just the things you actually do. -->
                 <div class="header-actions">
                     <button class="btn btn-create" onclick="showCreateWithAI()" data-testid="create-ai">✨ Create with AI</button>
                     <button class="btn btn-success" onclick="startAllProjects()" data-testid="start-all">Start All</button>
@@ -24,11 +26,6 @@
                     <button class="btn btn-primary" onclick="createNewProject()" data-testid="new-project">+ New Project</button>
                     <button class="btn btn-primary" onclick="cloneProject()" data-testid="clone-project">📥 Clone</button>
                     <button class="btn btn-primary" onclick="showInstallApp()" data-testid="install-app">📦 Install App</button>
-
-                    <button class="btn btn-secondary btn-small" onclick="showHelpModal()" data-testid="help-modal-open" title="Help & CLI Commands">❓ Help</button>
-                    <button class="btn btn-secondary btn-small" onclick="openUrl('https://patreon.com/canebaycomputers')" title="Support on Patreon">❤️ Patreon</button>
-                    <button class="btn btn-secondary btn-small" onclick="openUrl('https://securelink-prod.valorpaytech.com:4430/?redirect=1&uid=6e840752-8751-11f0-a74f-12a0879a85b1')" title="Donate">💳 Donate</button>
-
                 </div>
             </div>
         </header>
@@ -66,6 +63,21 @@
                     <!-- Services will be loaded dynamically -->
                 </div>
             </section>
+
+            <!-- Secondary links, moved out of the header -->
+            <footer class="app-footer">
+                <div class="footer-links">
+                    <button class="btn btn-secondary btn-small" onclick="showHelpModal()" data-testid="help-modal-open" title="Help & CLI Commands">❓ Help</button>
+                    <button class="btn btn-secondary btn-small" onclick="openUrl('https://github.com/CaneBayComputers/podium-cli')" data-testid="github-cli" title="Podium CLI on GitHub">🐙 Podium CLI on GitHub</button>
+                    <button class="btn btn-secondary btn-small" onclick="openUrl('https://patreon.com/canebaycomputers')" data-testid="patreon" title="Support on Patreon">❤️ Patreon</button>
+                    <button class="btn btn-secondary btn-small" onclick="openUrl('https://securelink-prod.valorpaytech.com:4430/?redirect=1&uid=6e840752-8751-11f0-a74f-12a0879a85b1')" data-testid="donate" title="Donate">💳 Donate</button>
+                </div>
+                <p class="footer-note">
+                    A desktop front end for
+                    <a href="#" onclick="event.preventDefault(); openUrl('https://github.com/CaneBayComputers/podium-cli')">Podium CLI</a>.
+                    The CLI does the work; this makes it visible and clickable.
+                </p>
+            </footer>
         </main>
 
         <!-- Modals -->
@@ -144,14 +156,6 @@
                             <label>WordPress Version</label>
                             <input type="text" id="wordpress-version" data-testid="wordpress-version" placeholder="latest" value="latest">
                             <small class="form-help">Enter version (e.g., 6.4.2) or "latest" for newest release</small>
-                        </div>
-
-                        <div class="form-group" id="php-version-group" style="display: none;">
-                            <label for="php-version">PHP Version</label>
-                            <select id="php-version" data-testid="php-version">
-                                <option value="8">8 (PHP 8.3)</option>
-                                <option value="7">7 (PHP 7.4)</option>
-                            </select>
                         </div>
 
                         <div class="form-group">

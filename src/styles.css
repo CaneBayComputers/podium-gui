@@ -1830,3 +1830,52 @@ span.status-indicator {
     color: var(--text-secondary);
     line-height: 1.4;
 }
+
+/* Footer — secondary links moved out of the header */
+.app-footer {
+    margin-top: 2.5rem;
+    padding: 1.2rem 0 2rem;
+    border-top: 1px solid var(--border-subtle);
+    text-align: center;
+}
+
+.footer-links {
+    display: flex;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: 0.8rem;
+}
+
+.footer-note {
+    color: var(--text-muted);
+    font-size: 0.85em;
+    margin: 0;
+}
+
+.footer-note a {
+    color: var(--accent-blue);
+    text-decoration: none;
+}
+
+.footer-note a:hover {
+    text-decoration: underline;
+}
+
+/* "Modify with AI" is the same action as Create, but it appears on every tile.
+   At the full gradient it repeats a dozen times and outshouts Start/Stop and the
+   flagship header button, so the tile variant is an outline that still reads as
+   the AI action without dominating the grid. */
+.project-actions .btn-create {
+    padding: 0.3rem 0.6rem;
+    font-size: 0.8rem;
+    background: transparent;
+    color: var(--neon-purple);
+    border: 1px solid var(--neon-purple);
+    font-weight: 500;
+}
+
+.project-actions .btn-create:hover {
+    background: rgba(139, 92, 246, 0.15);
+    filter: none;
+}

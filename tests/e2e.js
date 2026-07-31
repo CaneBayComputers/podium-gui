@@ -107,9 +107,20 @@ async function run() {
     // The splash fades over 0.5s; let it finish so the capture is the dashboard.
     await win.waitForTimeout(600);
     await screenshot(win, '01-dashboard');
-    for (const id of ['start-all', 'stop-all', 'new-project', 'clone-project', 'install-app']) {
+    for (const id of ['create-ai', 'start-all', 'stop-all', 'new-project', 'clone-project', 'install-app']) {
       check(`header action "${id}" present`, await win.locator(t(id)).count() === 1);
     }
+
+    // Help/Patreon/Donate moved out of the header into the footer, alongside a
+    // link to the CLI the GUI is a front end for.
+    for (const id of ['help-modal-open', 'github-cli', 'patreon', 'donate']) {
+      check(`footer link "${id}" present`, await win.locator(`.app-footer ${t(id)}`).count() === 1);
+    }
+    check('header no longer carries the secondary links',
+      await win.locator(`.header-actions ${t('help-modal-open')}`).count() === 0);
+    check('title names the CLI',
+      (await win.textContent('.logo h1'))?.trim() === 'Podium CLI',
+      await win.textContent('.logo h1'));
     check('projects grid rendered', await win.locator(t('projects-grid')).count() === 1);
     check('services grid rendered', await win.locator(t('services-grid')).count() === 1);
 
@@ -176,6 +187,8 @@ async function run() {
           if (!card) { bad.push(`${name}: no card`); continue; }
           const buttons = [...card.querySelectorAll('button')].map((b) => b.textContent.trim());
           if (!buttons.includes('Stop')) bad.push(`${name}: offers "${buttons[0]}" not "Stop"`);
+          if (!buttons.some((b) => /Modify with AI/.test(b))) bad.push(`${name}: no "Modify with AI"`);
+          if (!buttons.includes('Trash')) bad.push(`${name}: destructive button is not labelled "Trash"`);
           if (!card.querySelector('.url-link')) bad.push(`${name}: no URL shown`);
         }
         return bad;
@@ -426,13 +439,20 @@ async function run() {
       wpEngines.join(','));
 
     // Version inputs only appear where --version means something.
-    await win.click(`${t('framework-php')} input`);
-    check('php shows its version selector', await win.isVisible('#php-version-group'));
-    await win.click(`${t('framework-django')} input`);
-    check('django shows no version selector',
-      !(await win.isVisible('#php-version-group'))
-      && !(await win.isVisible('#laravel-version-group'))
-      && !(await win.isVisible('#wordpress-version-group')));
+    // Only laravel and wordpress genuinely honour --version. php's documented
+    // "8 or 7" is dead (frameworks/php.sh reads no version and the only image is
+    // nginx-php8), and octobercms pins its own, so offering a control for those
+    // would be lying about what the CLI will do.
+    await win.click(`${t('framework-laravel')} input`);
+    check('laravel offers a version field', await win.isVisible('#laravel-version-group'));
+    await win.click(`${t('framework-wordpress')} input`);
+    check('wordpress offers a version field', await win.isVisible('#wordpress-version-group'));
+    for (const fw of ['php', 'django', 'octobercms', 'express']) {
+      await win.click(`${t(`framework-${fw}`)} input`);
+      const anyVersion = (await win.isVisible('#laravel-version-group'))
+        || (await win.isVisible('#wordpress-version-group'));
+      check(`${fw} offers no version field`, !anyVersion);
+    }
 
     // The catalogue note is the only thing that explains an in-house framework.
     await win.click(`${t('framework-kavera')} input`);

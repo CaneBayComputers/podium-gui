@@ -163,9 +163,15 @@ interface CatalogFramework {
 
 let frameworkCatalog: CatalogFramework[] = [];
 
-// `--version` only means something for these three; everything else takes the
-// framework's own current release.
-const VERSIONED_FRAMEWORKS = ['laravel', 'wordpress', 'php'];
+// `--version` only genuinely does something for these two:
+//   laravel   -> sets CUR_LARAVEL_BRANCH, validated against Laravel's git tags
+//   wordpress -> downloads wordpress-<version>.tar.gz
+// The CLI's help also advertises `php: 8 or 7`, but frameworks/php.sh contains
+// no version handling at all and the only PHP image in the tree is nginx-php8 —
+// passing a PHP version silently gets you 8.3 either way. October CMS pins its
+// own version through OCTOBER_VERSION rather than this flag. Reported upstream;
+// offering a control for any of those would be lying to the user.
+const VERSIONED_FRAMEWORKS = ['laravel', 'wordpress'];
 
 async function loadFrameworkCatalog(): Promise<void> {
     if (frameworkCatalog.length > 0) return;
@@ -257,8 +263,7 @@ function toggleVersionGroups(): void {
 
     const versionGroups: Array<[string, string]> = [
         ['laravel-version-group', 'laravel'],
-        ['wordpress-version-group', 'wordpress'],
-        ['php-version-group', 'php']
+        ['wordpress-version-group', 'wordpress']
     ];
 
     for (const [id, owner] of versionGroups) {
@@ -490,8 +495,9 @@ function renderProjects(): void {
                             `<button class="btn btn-warning btn-sm" onclick="stopProject('${project.name}')">Stop</button>` :
                             `<button class="btn btn-success btn-sm" onclick="startProject('${project.name}')">Start</button>`
                         }
+                        <button class="btn btn-create btn-sm" onclick="modifyWithAI('${project.name}')" title="Continue the AI session in this project">✨ Modify with AI</button>
                         <button class="btn btn-secondary btn-sm" onclick="editProject('${project.name}')">Edit</button>
-                        <button class="btn btn-danger btn-sm" onclick="showRemoveProjectModal('${project.name}')">Remove</button>
+                        <button class="btn btn-danger btn-sm" onclick="showRemoveProjectModal('${project.name}')">Trash</button>
                     </div>
                 </div>
             </div>
@@ -1416,7 +1422,48 @@ let buildFitAddon: any = null;
 let buildSessionId = '';
 let buildResizeHandler: (() => void) | null = null;
 
-async function openBuildTerminal(projectName: string, idea: string): Promise<void> {
+// Continue the AI session on an existing project.
+//
+// `podium resume <project>` starts the project, prints its status and URL, waits
+// for a keypress, then reopens the agent with its previous conversation
+// (`claude --continue`, `codex resume --last`, `gemini --resume latest`,
+// `aider --restore-chat-history`). It is interactive by design, which is exactly
+// what the embedded terminal is for — the keypress and everything after it are
+// the user's to drive.
+async function modifyWithAI(projectName: string): Promise<void> {
+    const { agent } = await ipcRenderer.invoke('get-ai-agent');
+    if (!agent) {
+        showError('No AI agent is configured. Run `podium ai-set` in a terminal first.');
+        return;
+    }
+
+    // resume takes the project name and cds itself, so run it from the projects
+    // directory rather than inside the project.
+    const projectsDir = await ipcRenderer.invoke('get-projects-dir');
+    await openAgentTerminal({
+        title: `✨ ${projectName}`,
+        status: 'Resuming the AI session — press a key in the terminal when prompted.',
+        cwd: projectsDir,
+        command: 'podium',
+        args: ['resume', projectName],
+        sessionKey: `resume-${projectName}`
+    });
+}
+
+interface AgentTerminalOptions {
+    title: string;
+    status: string;
+    cwd: string;
+    command: string;
+    args: string[];
+    sessionKey: string;
+    /** Shown if the pty cannot start, so the user can run it themselves. */
+    fallbackHint?: string;
+}
+
+// One embedded-terminal implementation for both agent entry points: the build
+// hand-off after `create`, and "Modify with AI" on an existing project.
+async function openAgentTerminal(options: AgentTerminalOptions): Promise<void> {
     const { Terminal } = require('@xterm/xterm');
     const { FitAddon } = require('@xterm/addon-fit');
 
@@ -1426,11 +1473,11 @@ async function openBuildTerminal(projectName: string, idea: string): Promise<voi
     if (!host) return;
 
     closeModal();
-    if (title) title.textContent = `🛠️ Building ${projectName}`;
-    if (status) status.textContent = 'Session running — type to answer the agent.';
+    if (title) title.textContent = options.title;
+    if (status) status.textContent = options.status;
 
     host.innerHTML = '';
-    buildSessionId = `build-${projectName}-${performance.now()}`;
+    buildSessionId = `${options.sessionKey}-${performance.now()}`;
 
     buildTerm = new Terminal({
         fontSize: 13,
@@ -1468,15 +1515,8 @@ async function openBuildTerminal(projectName: string, idea: string): Promise<voi
     };
     window.addEventListener('resize', buildResizeHandler);
 
-    // `podium ai` runs in the project directory and picks up the AGENTS.md
-    // handoff file that create/install/new wrote there.
-    const projectsDir = await ipcRenderer.invoke('get-projects-dir');
     const started = await ipcRenderer.invoke(
-        'pty-start',
-        buildSessionId,
-        `${projectsDir}/${projectName}`,
-        'podium',
-        ['ai', idea]
+        'pty-start', buildSessionId, options.cwd, options.command, options.args
     );
 
     if (!started.ok) {
@@ -1484,9 +1524,24 @@ async function openBuildTerminal(projectName: string, idea: string): Promise<voi
         buildTerm.writeln(`\x1b[2m${started.error || ''}\x1b[0m`);
         buildTerm.writeln('');
         buildTerm.writeln('Run this yourself instead:');
-        buildTerm.writeln(`\x1b[36m  cd ${projectsDir}/${projectName} && podium ai\x1b[0m`);
+        buildTerm.writeln(`\x1b[36m  ${options.fallbackHint || `cd ${options.cwd} && ${options.command} ${options.args.join(' ')}`}\x1b[0m`);
         if (status) status.textContent = 'Embedded terminal unavailable — run the command above.';
     }
+}
+
+// Phase 3 of create: hand the original idea to the agent inside the finished
+// project, which picks up the AGENTS.md handoff file written there.
+async function openBuildTerminal(projectName: string, idea: string): Promise<void> {
+    const projectsDir = await ipcRenderer.invoke('get-projects-dir');
+    await openAgentTerminal({
+        title: `🛠️ Building ${projectName}`,
+        status: 'Session running — type to answer the agent.',
+        cwd: `${projectsDir}/${projectName}`,
+        command: 'podium',
+        args: ['ai', idea],
+        sessionKey: `build-${projectName}`,
+        fallbackHint: `cd ${projectsDir}/${projectName} && podium ai`
+    });
 }
 
 ipcRenderer.on('pty-data', (_event: any, payload: { sessionId: string; data: string }) => {
@@ -2015,11 +2070,6 @@ async function submitNewProject(): Promise<void> {
             if (version) {
                 args.push('--version', version);
             }
-        } else if (projectType === 'php') {
-            const phpVersion = (document.getElementById('php-version') as HTMLSelectElement)?.value;
-            if (phpVersion) {
-                args.push('--version', phpVersion);
-            }
         }
 
         // GitHub: exactly one of these, never both. The org flag is
@@ -2344,6 +2394,7 @@ async function submitEditProject(): Promise<void> {
 (window as any).renderClassification = renderClassification;
 (window as any).setCreateStage = setCreateStage;
 (window as any).closeBuildTerminal = closeBuildTerminal;
+(window as any).modifyWithAI = modifyWithAI;
 (window as any).showInstallApp = showInstallApp;
 (window as any).renderAppCatalog = renderAppCatalog;
 (window as any).selectApp = selectApp;
