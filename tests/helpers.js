@@ -20,7 +20,10 @@ const DEBUG_DIR = path.join(ROOT, 'debug');
  */
 async function launchApp(options = {}) {
   const app = await electron.launch({
-    args: [path.join(ROOT, 'dist', 'main.js'), ...(options.args || [])],
+    // --no-focus so a test run does not steal the keyboard from whoever is at
+    // the machine. Playwright drives the window over CDP, which does not need
+    // it focused, so this costs the tests nothing.
+    args: [path.join(ROOT, 'dist', 'main.js'), '--no-focus', ...(options.args || [])],
     cwd: ROOT,
     env: { ...process.env, ...(options.env || {}) }
   });

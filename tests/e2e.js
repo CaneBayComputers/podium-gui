@@ -261,6 +261,98 @@ async function run() {
     await win.click('#install-app-modal .modal-close');
     await win.waitForTimeout(200);
 
+    // --- Create with AI (phase 1 choices, rendered natively) ------------
+    //
+    // Driven from a FIXTURE, not a live classification: a real
+    // `podium create --classify-only` is an AI round-trip — slow, costs tokens,
+    // and returns different candidates run to run. The contract itself was
+    // verified against the real CLI by hand; what matters here is that the GUI
+    // renders that contract correctly and never offers a database for an app.
+    console.log('\ncreate with ai');
+    await win.click(t('create-ai'));
+    await win.waitForSelector('#create-ai-modal.show', { timeout: 5000 });
+    check('create modal opens', await win.isVisible('#create-ai-modal'));
+
+    const FIXTURE = {
+      status: 'success',
+      project_name: 'team-process-wiki',
+      recommended: 'app',
+      customization_requested: false,
+      database: { slug: 'mysql', reason: 'Relational docs with concurrent edits.' },
+      candidates: [
+        { kind: 'app', slug: 'bookstack', display: 'BookStack', reason: 'Purpose-built wiki.', database: 'mysql' },
+        { kind: 'app', slug: 'trilium', display: 'Trilium Notes', reason: 'Hierarchical notes.', database: '' },
+        { kind: 'framework', slug: 'laravel', display: 'Laravel', reason: 'Custom page models.',
+          databases: ['mysql', 'postgres', 'sqlite'] }
+      ]
+    };
+
+    await win.evaluate((fixture) => {
+      // renderClassification() adopts the fixture as the current classification,
+      // so the click handlers work exactly as they do after a real classify.
+      window.renderClassification(fixture);
+      // Drive the real stage transition rather than forcing display, so the
+      // footer buttons and hidden stages are exercised too.
+      window.setCreateStage('choose');
+    }, FIXTURE);
+
+    check('choose stage swaps the footer to the create action',
+      await win.isVisible(t('create-confirm')) && !(await win.isVisible(t('create-classify'))));
+    check('choose stage hides the idea input', !(await win.isVisible('#create-stage-idea')));
+
+    const candidateCount = await win.locator('#create-candidates .candidate').count();
+    check('renders every candidate', candidateCount === 3, `${candidateCount} of 3`);
+
+    const recBadges = await win.locator('#create-candidates .rec-badge').count();
+    check('marks exactly one recommendation', recBadges === 1, `${recBadges} badges`);
+
+    // The recommendation is the first candidate of the RECOMMENDED KIND, not
+    // simply the first row — same rule the CLI menu uses.
+    const badgedSlug = await win.locator('#create-candidates .candidate:has(.rec-badge) .app-slug').textContent();
+    check('recommends the first candidate of the recommended kind',
+      badgedSlug?.trim() === 'bookstack', badgedSlug || '');
+
+    check('prefills the suggested project name',
+      (await win.locator(t('create-name')).inputValue()) === 'team-process-wiki');
+
+    // An app's database is fixed by its installer — never offer a choice.
+    await win.click(t('candidate-bookstack'));
+    check('app selection hides the database picker',
+      !(await win.isVisible('#create-database-group')));
+    const fixedText = await win.textContent('#create-fixed-db-text');
+    check('app shows its fixed database as information',
+      /mysql/i.test(fixedText || '') && /installer/i.test(fixedText || ''), fixedText || '');
+
+    await win.click(t('candidate-trilium'));
+    const selfContainedText = await win.textContent('#create-fixed-db-text');
+    check('self-contained app says so rather than naming an engine',
+      /internally/i.test(selfContainedText || ''), selfContainedText || '');
+
+    // A framework offers only the engines it actually supports, recommended first.
+    await win.click(t('candidate-laravel'));
+    check('framework selection shows the database picker',
+      await win.isVisible('#create-database-group'));
+    const engines = await win.locator('#create-database option').evaluateAll((o) => o.map((x) => x.value));
+    check('offers only engines the framework supports',
+      engines.length === 3 && ['mysql', 'postgres', 'sqlite'].every((e) => engines.includes(e)),
+      engines.join(','));
+    check('recommended engine is first', engines[0] === 'mysql', engines.join(','));
+
+    await screenshot(win, '06-create-choices');
+
+    // A null project_name means the idea implied no subject — ask, don't invent.
+    await win.evaluate((fixture) => {
+      window.renderClassification({ ...fixture, project_name: null });
+    }, FIXTURE);
+    check('empty name when the idea implies none',
+      (await win.locator(t('create-name')).inputValue()) === '');
+    const nameHelp = await win.textContent('#create-name-help');
+    check('prompts for a name instead of inventing one',
+      /pick one|does not suggest/i.test(nameHelp || ''), nameHelp || '');
+
+    await win.click('#create-ai-modal .modal-close');
+    await win.waitForTimeout(200);
+
     // --- Clone modal (mode selector added during the CLI re-sync) -------
     console.log('\nclone');
     await win.click(t('clone-project'));

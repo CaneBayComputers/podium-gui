@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Podium - PHP Development Platform</title>
     <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css">
 </head>
 <body>
     <div class="app">
@@ -17,6 +18,7 @@
                     <span id="debug-indicator" class="debug-indicator" style="display: none;">DEBUG MODE - F5 to refresh</span>
                 </div>
                 <div class="header-actions">
+                    <button class="btn btn-create" onclick="showCreateWithAI()" data-testid="create-ai">✨ Create with AI</button>
                     <button class="btn btn-success" onclick="startAllProjects()" data-testid="start-all">Start All</button>
                     <button class="btn btn-warning" onclick="stopAllProjects()" data-testid="stop-all">Stop All</button>
                     <button class="btn btn-primary" onclick="createNewProject()" data-testid="new-project">+ New Project</button>
@@ -251,6 +253,109 @@
         </div>
 
         <!-- Clone Project Modal -->
+        <!--
+            Phase 3 of create: the AI build session. A real pty, not a streamed
+            one-off, because the agent asks clarifying questions and expects
+            answers — which a non-interactive run cannot provide.
+        -->
+        <div id="build-terminal-modal" class="modal terminal-modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3 id="build-terminal-title">🛠️ Building</h3>
+                    <button class="modal-close" onclick="closeBuildTerminal()">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div id="build-terminal" class="build-terminal" data-testid="build-terminal"></div>
+                    <p class="form-help" id="build-terminal-status">Session running — type to answer the agent.</p>
+                </div>
+                <div class="form-actions">
+                    <button class="btn btn-secondary" onclick="closeBuildTerminal()" data-testid="build-terminal-close">Close</button>
+                </div>
+            </div>
+        </div>
+
+        <!--
+            Create with AI — the flagship path. The user describes what they
+            want; Podium works out the stack. This drives `podium create`'s
+            three phases natively rather than shelling out to it in one call:
+            the CLI presents interactive terminal menus between classify and
+            create, which a GUI cannot answer, and its non-interactive mode
+            silently takes the top recommendation — discarding the choice that
+            is the entire point.
+
+            Phase 1 is `podium create --classify-only --json-output`.
+            Phase 2 is `podium install` / `podium new`, same as the other flows.
+            Phase 3 hands off to the AI agent in an embedded terminal.
+        -->
+        <div id="create-ai-modal" class="modal create-modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>✨ Create with AI</h3>
+                    <button class="modal-close" onclick="closeModal()">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <!-- Stage 1: describe -->
+                    <div id="create-stage-idea">
+                        <div class="form-group">
+                            <label for="create-idea">What do you want to build?</label>
+                            <textarea id="create-idea" rows="3" data-testid="create-idea"
+                                      placeholder="e.g. track which guitar pedals I have lent out to friends"></textarea>
+                            <span class="form-help">Plain English. Podium works out the stack and builds it.</span>
+                            <div class="field-error" id="create-idea-error"></div>
+                        </div>
+                        <div id="create-no-agent" class="agent-warning" style="display: none;">
+                            No AI agent is configured. Run <code>podium ai-set</code> in a terminal first.
+                        </div>
+                    </div>
+
+                    <!-- Stage 2: thinking -->
+                    <div id="create-stage-thinking" style="display: none;">
+                        <div class="thinking-block">
+                            <div class="loading-spinner"></div>
+                            <p>Working out which stack fits…</p>
+                            <p class="form-help">This asks the AI agent and usually takes under a minute.</p>
+                        </div>
+                    </div>
+
+                    <!-- Stage 3: choose -->
+                    <div id="create-stage-choose" style="display: none;">
+                        <p class="stage-intro">How would you like to build this?</p>
+                        <div id="create-candidates" class="candidate-list" data-testid="create-candidates"></div>
+
+                        <div class="form-group" id="create-database-group" style="display: none;">
+                            <label for="create-database">Database</label>
+                            <select id="create-database" data-testid="create-database"></select>
+                            <span class="form-help" id="create-database-why"></span>
+                        </div>
+
+                        <div class="form-group" id="create-fixed-db" style="display: none;">
+                            <span class="form-help" id="create-fixed-db-text"></span>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="create-name">Project name</label>
+                            <input type="text" id="create-name" maxlength="50" data-testid="create-name">
+                            <span class="form-help" id="create-name-help">Becomes the project directory and the hostname.</span>
+                            <div class="field-error" id="create-name-error"></div>
+                        </div>
+                    </div>
+
+                    <!-- Stage 4: building -->
+                    <div id="create-stage-building" style="display: none;">
+                        <p id="create-build-title">Creating…</p>
+                        <pre id="create-output" class="install-output" data-testid="create-output"></pre>
+                    </div>
+                </div>
+                <div class="form-actions">
+                    <button class="btn btn-secondary" onclick="closeModal()" id="create-cancel-btn">Cancel</button>
+                    <button class="btn btn-primary" onclick="handleClassifyIdea()" id="create-classify-btn"
+                            data-testid="create-classify">Work out the stack</button>
+                    <button class="btn btn-primary" onclick="handleCreateFromChoice()" id="create-confirm-btn"
+                            data-testid="create-confirm" style="display: none;" disabled>Create it</button>
+                </div>
+            </div>
+        </div>
+
         <!--
             Install an app (`podium install <app> [name]`) is deliberately a
             SEPARATE flow from New Project (`podium new <framework> <name>`).

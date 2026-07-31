@@ -63,6 +63,23 @@ npm run build-ts
 npm run package
 ```
 
+## Launching without stealing focus
+
+```bash
+electron dist/main.js --no-focus
+```
+
+Opens the window **unfocused and behind the other windows**, for background or
+automated launches — a test run should not grab the keyboard from whoever is at
+the machine. The e2e harness passes it automatically.
+
+On X11 the stacking part uses `wmctrl`/`xdotool` if either is installed; without
+them the window still opens unfocused, which is the part that matters. The
+`below` hint is cleared the first time the window is focused, so once you click
+it, it behaves like any other window rather than being stuck at the back.
+
+A normal launch (`npm start`, or double-clicking the app) focuses as usual.
+
 ## Testing
 
 The GUI is driven end-to-end with Playwright, which supports Electron natively —

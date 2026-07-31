@@ -1012,6 +1012,409 @@ function handleCreateProject(): void {
 // Functions made globally available at end of file
 
 // ---------------------------------------------------------------------------
+// Create with AI (`podium create`, driven phase by phase)
+//
+// Phase 1 classify -> render choices natively -> phase 2 create -> phase 3 build.
+// Shelling out to `podium create` in one call is not an option: it presents
+// interactive terminal menus a GUI cannot answer, and --json-output silently
+// auto-picks the top recommendation instead.
+// ---------------------------------------------------------------------------
+
+interface ClassifyCandidate {
+    kind: 'app' | 'framework';
+    slug: string;
+    display: string;
+    reason: string;
+    database?: string;
+    databases?: string[];
+}
+
+interface Classification {
+    status: 'success' | 'error';
+    message?: string;
+    project_name: string | null;
+    recommended: 'app' | 'framework';
+    customization_requested: boolean;
+    database?: { slug: string; reason: string } | null;
+    candidates: ClassifyCandidate[];
+}
+
+let classification: Classification | null = null;
+let chosenCandidate: ClassifyCandidate | null = null;
+let currentIdea = '';
+
+async function showCreateWithAI(): Promise<void> {
+    classification = null;
+    chosenCandidate = null;
+    currentIdea = '';
+
+    (document.getElementById('create-idea') as HTMLTextAreaElement).value = '';
+    (document.getElementById('create-name') as HTMLInputElement).value = '';
+    (document.getElementById('create-output') as HTMLElement).textContent = '';
+    clearFieldErrors();
+    setCreateStage('idea');
+    showModal('create-ai-modal');
+
+    // Creating is meaningless without an agent; say so up front rather than
+    // failing a minute later inside the classifier.
+    const { agent } = await ipcRenderer.invoke('get-ai-agent');
+    const warning = document.getElementById('create-no-agent');
+    const classifyBtn = document.getElementById('create-classify-btn') as HTMLButtonElement;
+
+    if (warning) warning.style.display = agent ? 'none' : 'block';
+    if (classifyBtn) classifyBtn.disabled = !agent;
+}
+
+function setCreateStage(stage: 'idea' | 'thinking' | 'choose' | 'building'): void {
+    const stages: Record<string, string> = {
+        idea: 'create-stage-idea',
+        thinking: 'create-stage-thinking',
+        choose: 'create-stage-choose',
+        building: 'create-stage-building'
+    };
+
+    for (const [name, id] of Object.entries(stages)) {
+        const el = document.getElementById(id);
+        if (el) el.style.display = name === stage ? 'block' : 'none';
+    }
+
+    const classifyBtn = document.getElementById('create-classify-btn') as HTMLButtonElement;
+    const confirmBtn = document.getElementById('create-confirm-btn') as HTMLButtonElement;
+    const cancelBtn = document.getElementById('create-cancel-btn') as HTMLButtonElement;
+
+    if (classifyBtn) classifyBtn.style.display = stage === 'idea' ? '' : 'none';
+    if (confirmBtn) confirmBtn.style.display = stage === 'choose' ? '' : 'none';
+    if (cancelBtn) cancelBtn.textContent = stage === 'building' ? 'Close' : 'Cancel';
+}
+
+async function handleClassifyIdea(): Promise<void> {
+    const idea = (document.getElementById('create-idea') as HTMLTextAreaElement)?.value?.trim() || '';
+
+    clearFieldErrors();
+    if (!idea) {
+        showFieldError('create-idea', 'Describe what you want to build.');
+        return;
+    }
+
+    currentIdea = idea;
+    setCreateStage('thinking');
+
+    const result: Classification = await ipcRenderer.invoke('classify-idea', idea);
+
+    if (result.status !== 'success' || result.candidates.length === 0) {
+        setCreateStage('idea');
+        showFieldError('create-idea', result.message || 'Could not work out a stack for that.');
+        return;
+    }
+
+    renderClassification(result);
+    setCreateStage('choose');
+}
+
+// Split out so the rendering can be tested with a fixture rather than a live
+// AI round-trip, which is slow and non-deterministic.
+function renderClassification(result: Classification): void {
+    const list = document.getElementById('create-candidates');
+    if (!list) return;
+
+    // Rendering a classification makes it the current one. selectCandidate and
+    // handleCreateFromChoice both read this, so setting it here keeps the two
+    // in step and makes the function usable on its own.
+    classification = result;
+
+    // The CLI orders these apps-first, framework-last, and marks whichever kind
+    // it actually recommends — not simply the first row.
+    const recommendedIndex = result.candidates.findIndex((c) => c.kind === result.recommended);
+
+    list.innerHTML = result.candidates.map((candidate, index) => {
+        const tag = candidate.kind === 'app'
+            ? 'ready to run — live in about 2 minutes'
+            : 'custom build — exactly what you asked for, more time and tokens';
+        const badge = index === recommendedIndex
+            ? '<span class="rec-badge">Recommended</span>'
+            : '';
+
+        return `
+            <div class="candidate" onclick="selectCandidate(${index})" data-testid="candidate-${escapeHtml(candidate.slug)}">
+                <div class="candidate-header">
+                    <strong>${escapeHtml(candidate.display)}</strong>
+                    <code class="app-slug">${escapeHtml(candidate.slug)}</code>
+                    ${badge}
+                </div>
+                <p class="candidate-tag">${tag}</p>
+                <p class="app-note">${escapeHtml(candidate.reason)}</p>
+            </div>
+        `;
+    }).join('');
+
+    // Prefill the name only when the idea implied a real subject; the CLI
+    // returns null rather than inventing "flask-app", and that means ask.
+    const nameInput = document.getElementById('create-name') as HTMLInputElement;
+    const nameHelp = document.getElementById('create-name-help');
+    if (nameInput) nameInput.value = result.project_name || '';
+    if (nameHelp) {
+        nameHelp.textContent = result.project_name
+            ? 'Becomes the project directory and the hostname.'
+            : 'Your description does not suggest a name — pick one.';
+    }
+
+    selectCandidate(recommendedIndex >= 0 ? recommendedIndex : 0);
+}
+
+function selectCandidate(index: number): void {
+    if (!classification) return;
+
+    const candidate = classification.candidates[index];
+    if (!candidate) return;
+
+    chosenCandidate = candidate;
+
+    document.querySelectorAll('#create-candidates .candidate').forEach((el, i) => {
+        el.classList.toggle('selected', i === index);
+    });
+
+    const dbGroup = document.getElementById('create-database-group');
+    const dbSelect = document.getElementById('create-database') as HTMLSelectElement;
+    const dbWhy = document.getElementById('create-database-why');
+    const fixed = document.getElementById('create-fixed-db');
+    const fixedText = document.getElementById('create-fixed-db-text');
+
+    if (candidate.kind === 'app') {
+        // The installer's compose fixes the engine — never offer a choice here.
+        if (dbGroup) dbGroup.style.display = 'none';
+        if (fixed) fixed.style.display = 'block';
+        if (fixedText) {
+            fixedText.textContent = candidate.database
+                ? `Database: ${candidate.database} — set by the ${candidate.display} installer.`
+                : `Database: managed internally by ${candidate.display}.`;
+        }
+    } else {
+        if (fixed) fixed.style.display = 'none';
+        if (dbGroup) dbGroup.style.display = 'block';
+
+        // Offer only engines this framework actually supports, recommended first.
+        const allowed = candidate.databases || [];
+        const recommended = classification.database?.slug || '';
+        const ordered = allowed.includes(recommended)
+            ? [recommended, ...allowed.filter((d) => d !== recommended)]
+            : allowed;
+
+        if (dbSelect) {
+            dbSelect.innerHTML = ordered.map((db, i) =>
+                `<option value="${escapeHtml(db)}">${escapeHtml(db)}${i === 0 && db === recommended ? ' (recommended)' : ''}</option>`
+            ).join('');
+        }
+        if (dbWhy) {
+            dbWhy.textContent = allowed.includes(recommended)
+                ? (classification.database?.reason || '')
+                : `Only engines ${candidate.display} supports are offered.`;
+        }
+    }
+
+    const confirmBtn = document.getElementById('create-confirm-btn') as HTMLButtonElement;
+    if (confirmBtn) {
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = candidate.kind === 'app'
+            ? `Install ${candidate.display}`
+            : `Create ${candidate.display} project`;
+    }
+}
+
+async function handleCreateFromChoice(): Promise<void> {
+    if (!classification || !chosenCandidate) return;
+
+    clearFieldErrors();
+
+    const name = (document.getElementById('create-name') as HTMLInputElement)?.value?.trim() || '';
+    const validation = validateProjectName(name);
+    if (!validation.valid) {
+        showFieldError('create-name', validation.error!);
+        return;
+    }
+
+    const sanitized = sanitizeContainerName(name);
+    if (!sanitized) {
+        showFieldError('create-name', 'Project name must contain at least one valid character.');
+        return;
+    }
+
+    const sudoOk = await ipcRenderer.invoke('ensure-sudo');
+    if (!sudoOk) {
+        showError('Could not authenticate for the hosts file change. Run it from a terminal instead.');
+        return;
+    }
+
+    const candidate = chosenCandidate;
+    installInProgress = true;
+    setCreateStage('building');
+
+    const title = document.getElementById('create-build-title');
+    if (title) {
+        title.textContent = candidate.kind === 'app'
+            ? `Installing ${candidate.display} as "${sanitized}"…`
+            : `Creating ${candidate.display} project "${sanitized}"…`;
+    }
+
+    // Phase 2 is deterministic and identical to the existing flows — no AI.
+    const args = candidate.kind === 'app'
+        ? ['install', candidate.slug, sanitized, '--one-off']
+        : ['new', candidate.slug, sanitized,
+           ...((document.getElementById('create-database') as HTMLSelectElement)?.value
+               ? ['--database', (document.getElementById('create-database') as HTMLSelectElement).value]
+               : []),
+           '--one-off'];
+
+    try {
+        const result = await ipcRenderer.invoke('execute-command-stream', 'podium', args);
+        installInProgress = false;
+
+        if (result.code !== 0) {
+            showError(`Create failed (exit ${result.code}). See the output above.`);
+            if (title) title.textContent = `Creating "${sanitized}" failed (exit ${result.code}).`;
+            return;
+        }
+
+        loadProjects();
+        loadServices();
+
+        // Phase 3. The build is skipped only for a ready-to-run app that the
+        // idea asked nothing extra of — a framework scaffold is empty, so it
+        // always needs building regardless of customization_requested.
+        const needsBuild = !(candidate.kind === 'app' && classification!.customization_requested === false);
+
+        if (needsBuild) {
+            if (title) title.textContent = `"${sanitized}" is ready — now building your idea.`;
+            openBuildTerminal(sanitized, currentIdea);
+        } else {
+            if (title) title.textContent = `${candidate.display} is installed — http://${sanitized}/`;
+            showSuccess(`${candidate.display} installed at http://${sanitized}/`);
+        }
+    } catch (error) {
+        installInProgress = false;
+        showError('Error creating project: ' + (error as Error).message);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3: the AI build session, in a real embedded terminal
+// ---------------------------------------------------------------------------
+
+let buildTerm: any = null;
+let buildFitAddon: any = null;
+let buildSessionId = '';
+let buildResizeHandler: (() => void) | null = null;
+
+async function openBuildTerminal(projectName: string, idea: string): Promise<void> {
+    const { Terminal } = require('@xterm/xterm');
+    const { FitAddon } = require('@xterm/addon-fit');
+
+    const host = document.getElementById('build-terminal');
+    const title = document.getElementById('build-terminal-title');
+    const status = document.getElementById('build-terminal-status');
+    if (!host) return;
+
+    closeModal();
+    if (title) title.textContent = `🛠️ Building ${projectName}`;
+    if (status) status.textContent = 'Session running — type to answer the agent.';
+
+    host.innerHTML = '';
+    buildSessionId = `build-${projectName}-${performance.now()}`;
+
+    buildTerm = new Terminal({
+        fontSize: 13,
+        fontFamily: 'monospace',
+        cursorBlink: true,
+        theme: { background: '#0f0f23', foreground: '#f8fafc' }
+    });
+    buildFitAddon = new FitAddon();
+    buildTerm.loadAddon(buildFitAddon);
+    buildTerm.open(host);
+
+    showModal('build-terminal-modal');
+
+    // Fit after the modal is actually visible, or the measurement is wrong.
+    setTimeout(() => {
+        try {
+            buildFitAddon.fit();
+            ipcRenderer.invoke('pty-resize', buildSessionId, buildTerm.cols, buildTerm.rows);
+        } catch (error) {
+            console.log('terminal fit failed:', error);
+        }
+    }, 60);
+
+    buildTerm.onData((data: string) => {
+        ipcRenderer.invoke('pty-input', buildSessionId, data);
+    });
+
+    buildResizeHandler = () => {
+        try {
+            buildFitAddon.fit();
+            ipcRenderer.invoke('pty-resize', buildSessionId, buildTerm.cols, buildTerm.rows);
+        } catch (error) {
+            // terminal torn down mid-resize
+        }
+    };
+    window.addEventListener('resize', buildResizeHandler);
+
+    // `podium ai` runs in the project directory and picks up the AGENTS.md
+    // handoff file that create/install/new wrote there.
+    const projectsDir = await ipcRenderer.invoke('get-projects-dir');
+    const started = await ipcRenderer.invoke(
+        'pty-start',
+        buildSessionId,
+        `${projectsDir}/${projectName}`,
+        'podium',
+        ['ai', idea]
+    );
+
+    if (!started.ok) {
+        buildTerm.writeln('\r\n\x1b[31mCould not start an embedded terminal.\x1b[0m');
+        buildTerm.writeln(`\x1b[2m${started.error || ''}\x1b[0m`);
+        buildTerm.writeln('');
+        buildTerm.writeln('Run this yourself instead:');
+        buildTerm.writeln(`\x1b[36m  cd ${projectsDir}/${projectName} && podium ai\x1b[0m`);
+        if (status) status.textContent = 'Embedded terminal unavailable — run the command above.';
+    }
+}
+
+ipcRenderer.on('pty-data', (_event: any, payload: { sessionId: string; data: string }) => {
+    if (buildTerm && payload.sessionId === buildSessionId) {
+        buildTerm.write(payload.data);
+    }
+});
+
+ipcRenderer.on('pty-exit', (_event: any, payload: { sessionId: string; exitCode: number }) => {
+    if (payload.sessionId !== buildSessionId) return;
+
+    const status = document.getElementById('build-terminal-status');
+    if (status) {
+        status.textContent = payload.exitCode === 0
+            ? 'Session finished. Your project is ready.'
+            : `Session exited with code ${payload.exitCode}.`;
+    }
+    if (buildTerm) buildTerm.writeln(`\r\n\x1b[2m[session ended: ${payload.exitCode}]\x1b[0m`);
+
+    loadProjects();
+});
+
+function closeBuildTerminal(): void {
+    if (buildSessionId) {
+        ipcRenderer.invoke('pty-kill', buildSessionId);
+    }
+    if (buildResizeHandler) {
+        window.removeEventListener('resize', buildResizeHandler);
+        buildResizeHandler = null;
+    }
+    if (buildTerm) {
+        buildTerm.dispose();
+        buildTerm = null;
+    }
+    buildSessionId = '';
+    closeModal();
+    loadProjects();
+}
+
+// ---------------------------------------------------------------------------
 // Install an app (`podium install <app> [name]`)
 //
 // Distinct from New Project on purpose: `new` scaffolds a framework you write,
@@ -1802,6 +2205,13 @@ async function submitEditProject(): Promise<void> {
 }
 
 // Export functions for global access
+(window as any).showCreateWithAI = showCreateWithAI;
+(window as any).handleClassifyIdea = handleClassifyIdea;
+(window as any).selectCandidate = selectCandidate;
+(window as any).handleCreateFromChoice = handleCreateFromChoice;
+(window as any).renderClassification = renderClassification;
+(window as any).setCreateStage = setCreateStage;
+(window as any).closeBuildTerminal = closeBuildTerminal;
 (window as any).showInstallApp = showInstallApp;
 (window as any).renderAppCatalog = renderAppCatalog;
 (window as any).selectApp = selectApp;

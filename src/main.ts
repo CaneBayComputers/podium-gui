@@ -42,9 +42,17 @@ function createWindow(): void {
     }
   }
 
+  // --no-focus: open without stealing focus, and try to come up behind whatever
+  // the user is working in. Meant for automated/background launches (the e2e
+  // harness passes it) so a test run does not grab the keyboard mid-sentence.
+  // A normal double-click launch still focuses, which is what people expect.
+  const noFocus: boolean = process.argv.includes('--no-focus');
+
   mainWindow = new BrowserWindow({
     width: 2000,
     height: 1200,
+    // Render offscreen first, then decide how to present it.
+    show: false,
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
@@ -52,6 +60,53 @@ function createWindow(): void {
     },
     icon: path.join(__dirname, '../assets/icon.png'),
     title: 'Podium - PHP Development Platform'
+  });
+
+  mainWindow.once('ready-to-show', () => {
+    if (!mainWindow) return;
+
+    if (!noFocus) {
+      mainWindow.show();
+      return;
+    }
+
+    // showInactive presents the window without activating it — no focus steal.
+    mainWindow.showInactive();
+    mainWindow.blur();
+
+    // Stacking order is the window manager's call and Electron has no
+    // "send to back", so on X11 ask the WM directly. Best-effort by design:
+    // if neither tool is installed the window simply stays where it is,
+    // unfocused, which is the part that actually matters.
+    //
+    // The `below` state has to be added and then REMOVED. Adding it drops the
+    // window to the bottom; leaving it set makes that permanent, so the window
+    // stays behind everything else even after the user clicks it — which is
+    // worse than the problem being solved. Clearing the state afterwards keeps
+    // the position without keeping the rule. `demands_attention` goes too:
+    // that is the taskbar highlight, and a background launch should not be
+    // asking for attention at all.
+    if (process.platform === 'linux') {
+      const title = 'Podium - PHP Development Platform';
+      const wm = (state: string) =>
+        `xdotool search --name '${title}' set_window --urgency 0 2>/dev/null; ` +
+        `wmctrl -r '${title}' -b ${state} 2>/dev/null`;
+
+      setTimeout(() => {
+        const lower = spawn('sh', ['-c', wm('add,below')], { stdio: 'ignore' });
+        lower.on('error', () => { /* no wmctrl/xdotool; nothing to do */ });
+      }, 120);
+
+      // Clear the rule the moment the user actually clicks the window, not on
+      // a timer. A timer either fires too early (the window drifts back up the
+      // stack) or leaves the state set (the window is stuck behind everything
+      // forever). Tying it to focus gives both halves: it opens underneath
+      // everything and behaves like a normal window as soon as it is wanted.
+      mainWindow.once('focus', () => {
+        const clear = spawn('sh', ['-c', wm('remove,below,demands_attention')], { stdio: 'ignore' });
+        clear.on('error', () => { /* as above */ });
+      });
+    }
   });
 
   // Set up custom application menu
@@ -442,6 +497,8 @@ ipcMain.handle('get-app-catalog', async (): Promise<{ apps: CatalogApp[]; error?
 // "stopped" either way, which in the UI reads as "a service is down" rather
 // than "you never turned this on" — so the GUI filters them by what is actually
 // enabled in OPTIONAL_SERVICES.
+ipcMain.handle('get-projects-dir', async (): Promise<string> => getProjectsDir());
+
 ipcMain.handle('get-optional-services', async (): Promise<string[]> => {
   const raw = readEnvValue('OPTIONAL_SERVICES');
   if (!raw) return [];
@@ -450,6 +507,165 @@ ipcMain.handle('get-optional-services', async (): Promise<string[]> => {
     .split(/[\s,]+/)
     .map((name) => name.trim().toLowerCase())
     .filter((name) => name !== '');
+});
+
+// ---------------------------------------------------------------------------
+// Embedded terminal (phase 3 of create)
+//
+// The build hand-off is a genuinely interactive agent session — it asks
+// clarifying questions and expects answers. Streaming a one-off would lose
+// that, so the GUI hosts a real pty and lets `podium ai` run in it exactly as
+// it would in a terminal.
+// ---------------------------------------------------------------------------
+
+const ptySessions = new Map<string, any>();
+
+ipcMain.handle('pty-start', async (
+  event: IpcMainInvokeEvent,
+  sessionId: string,
+  cwd: string,
+  command: string,
+  args: string[] = []
+): Promise<{ ok: boolean; error?: string }> => {
+  try {
+    // Required lazily: node-pty is a native module, and a machine where the
+    // rebuild did not run should degrade to "open a terminal yourself" rather
+    // than taking the whole app down at startup.
+    const pty = require('node-pty');
+
+    if (ptySessions.has(sessionId)) {
+      ptySessions.get(sessionId).kill();
+      ptySessions.delete(sessionId);
+    }
+
+    const shell = pty.spawn(command, args, {
+      name: 'xterm-color',
+      cols: 100,
+      rows: 28,
+      cwd: fs.existsSync(cwd) ? cwd : os.homedir(),
+      env: { ...process.env, TERM: 'xterm-256color' }
+    });
+
+    shell.onData((data: string) => {
+      if (!event.sender.isDestroyed()) {
+        event.sender.send('pty-data', { sessionId, data });
+      }
+    });
+
+    shell.onExit(({ exitCode }: { exitCode: number }) => {
+      ptySessions.delete(sessionId);
+      if (!event.sender.isDestroyed()) {
+        event.sender.send('pty-exit', { sessionId, exitCode });
+      }
+    });
+
+    ptySessions.set(sessionId, shell);
+    debugLog('Started pty session', { sessionId, command, args, cwd });
+    return { ok: true };
+  } catch (error) {
+    debugLog('Failed to start pty', { sessionId, error: (error as Error).message });
+    return { ok: false, error: (error as Error).message };
+  }
+});
+
+ipcMain.handle('pty-input', async (event: IpcMainInvokeEvent, sessionId: string, data: string): Promise<void> => {
+  ptySessions.get(sessionId)?.write(data);
+});
+
+ipcMain.handle('pty-resize', async (event: IpcMainInvokeEvent, sessionId: string, cols: number, rows: number): Promise<void> => {
+  try {
+    ptySessions.get(sessionId)?.resize(cols, rows);
+  } catch (error) {
+    // A resize racing process exit is not worth surfacing.
+  }
+});
+
+ipcMain.handle('pty-kill', async (event: IpcMainInvokeEvent, sessionId: string): Promise<void> => {
+  const session = ptySessions.get(sessionId);
+  if (session) {
+    try { session.kill(); } catch (error) { /* already gone */ }
+    ptySessions.delete(sessionId);
+  }
+});
+
+interface ClassifyCandidate {
+  kind: 'app' | 'framework';
+  slug: string;
+  display: string;
+  reason: string;
+  database?: string;      // apps: fixed by the installer ("" = self-contained)
+  databases?: string[];   // frameworks: the engines this one actually supports
+}
+
+interface Classification {
+  status: 'success' | 'error';
+  message?: string;
+  project_name: string | null;
+  recommended: 'app' | 'framework';
+  customization_requested: boolean;
+  database?: { slug: string; reason: string } | null;
+  candidates: ClassifyCandidate[];
+}
+
+// Phase 1 of `podium create`, on its own. The CLI works out which stack fits and
+// returns JSON; the GUI renders the choices natively instead of the terminal
+// menus, then drives phase 2 with `podium install` / `podium new` directly.
+//
+// Deliberately NOT `podium create` in one shot: that presents interactive menus
+// a GUI cannot answer, and its non-interactive path silently takes the top
+// recommendation — which discards the user's choice, the whole point of asking.
+ipcMain.handle('classify-idea', async (event: IpcMainInvokeEvent, idea: string): Promise<Classification> => {
+  const failure = (message: string): Classification => ({
+    status: 'error',
+    message,
+    project_name: null,
+    recommended: 'framework',
+    customization_requested: true,
+    candidates: []
+  });
+
+  if (!idea || idea.trim() === '') {
+    return failure('Describe what you want to build first.');
+  }
+
+  // Classification is an AI round-trip — tens of seconds is normal.
+  const result = await runPodium(['create', '--classify-only', '--json-output', idea.trim()]);
+
+  // Judge by exit code, never by whether the output happens to parse.
+  if (result.code !== 0) {
+    try {
+      const parsed = JSON.parse(result.stdout || '{}');
+      if (parsed.message) return failure(parsed.message);
+    } catch (error) {
+      // fall through to the generic message
+    }
+    return failure(result.stderr || 'Could not work out a stack for that description.');
+  }
+
+  try {
+    const parsed = JSON.parse(result.stdout);
+    debugLog('Classified idea', { idea, candidates: parsed.candidates?.length });
+    return parsed as Classification;
+  } catch (error) {
+    return failure('The classifier returned something unreadable.');
+  }
+});
+
+// `podium create` is meaningless without an AI agent, and AI_AGENT is empty on a
+// fresh install. ai-set reports it as JSON (its own --help documents this), so
+// there is no need to read the env file.
+ipcMain.handle('get-ai-agent', async (): Promise<{ agent: string; model: string }> => {
+  const result = await runPodium(['ai-set', '--json-output']);
+
+  if (result.code !== 0) return { agent: '', model: '' };
+
+  try {
+    const parsed = JSON.parse(result.stdout);
+    // Unconfigured is reported as "" rather than null.
+    return { agent: parsed.agent || '', model: parsed.model || '' };
+  } catch (error) {
+    return { agent: '', model: '' };
+  }
 });
 
 // Installing writes to /etc/hosts (via setup + up), so the renderer asks for a
