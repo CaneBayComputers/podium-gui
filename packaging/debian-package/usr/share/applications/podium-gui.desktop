@@ -1,9 +1,9 @@
 [Desktop Entry]
 Version=1.0
 Type=Application
-Name=Podium GUI
+Name=Podium
 Comment=Professional PHP Development Environment with Desktop Interface
-Exec=podium gui
+Exec=podium-gui
 Icon=podium-gui
 Terminal=false
 StartupNotify=true

@@ -28,6 +28,32 @@ Podium GUI is the premium graphical interface for the Podium development platfor
 2. Install the package (deb/dmg/exe)
 3. The installer will automatically install Podium CLI if needed
 
+### From a Shell Installer
+
+```bash
+git clone https://github.com/CaneBayComputers/podium-gui.git
+cd podium-gui
+./install-ubuntu.sh          # or install-fedora.sh / install-arch.sh / install-mac.sh
+```
+
+**The Podium CLI is installed first if it is missing.** The GUI is a front end
+for the CLI and is useless without it, so it is never installable alone — if
+`podium` is not on PATH, the matching CLI installer runs first (from a sibling
+`podium-cli/` checkout when there is one, otherwise fetched from GitHub).
+
+Run from a checkout and that checkout is installed (symlinked), rather than a
+fresh clone — so a development tree stays the live install.
+
+The installers also handle a few things worth knowing about:
+
+- **Node is version-checked, not just detected.** Ubuntu 24.04 still ships
+  Node 18, which is too old for the build tooling; the installer upgrades to 20+.
+- **`node-pty` is rebuilt against Electron's ABI**, or the embedded build
+  terminal cannot load. A failure here is a warning, not an abort — the GUI
+  works without it.
+- **`xdotool`/`wmctrl`** are installed to support `--no-focus`; without them the
+  window still opens unfocused.
+
 ### From Source
 ```bash
 # Clone the repository

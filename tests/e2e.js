@@ -398,6 +398,69 @@ async function run() {
     check('catalogue entries carry slug/display/database/note',
       ['slug', 'display', 'database', 'note'].every((k) => k in shaped),
       JSON.stringify(shaped));
+    // --- Installers -----------------------------------------------------
+    //
+    // Shell, not UI, but they belong in the same gate: each behaviour below was
+    // found by running installers on clean machines, and each is invisible
+    // until it bites. A syntax slip or a dropped guard should fail here rather
+    // than on someone's fresh install.
+    console.log('\ninstallers');
+    const { execSync } = require('child_process');
+    const fsMod = require('fs');
+    const pathMod = require('path');
+    const { ROOT } = require('./helpers');
+
+    const REQUIRED = [
+      // Cloud images and CI grant NOPASSWD alongside a password-requiring rule,
+      // and plain `sudo -v` prompts anyway — which aborted the CLI installer.
+      ['probes sudo -n before sudo -v', /sudo -n true/],
+      // set -e is inherited by the subshell; without `|| true` the keepalive
+      // dies instantly and the trap kills a dead PID.
+      ['guards the sudo keepalive', /sudo -n -v 2>\/dev\/null \|\| true/],
+      // A bare `exit` returns the status of `kill`, reporting failure after a
+      // fully successful install.
+      ['trap preserves the exit status', /trap 'rc=\$\?;/],
+      // Otherwise ./podium-gui/install-*.sh from the parent silently re-clones
+      // instead of installing the checkout you are standing in.
+      ['detects a local checkout', /BASH_SOURCE\[0\]/],
+      // The GUI is useless without the CLI, so it is never installable alone.
+      ['installs the CLI first', /command -v podium/],
+      // Ubuntu 24.04 still ships Node 18; presence is not enough.
+      ['checks the Node VERSION, not just presence', /NODE_MIN_MAJOR/],
+      // node-pty must match Electron's ABI or the embedded terminal fails.
+      ['rebuilds native modules for Electron', /electron\/rebuild/]
+    ];
+
+    for (const file of ['install-ubuntu.sh', 'install-fedora.sh', 'install-arch.sh', 'install-mac.sh']) {
+      const full = pathMod.join(ROOT, file);
+      check(`${file} exists and is executable`,
+        fsMod.existsSync(full) && (fsMod.statSync(full).mode & 0o111) !== 0);
+
+      let syntaxOk = true;
+      try {
+        execSync(`bash -n ${JSON.stringify(full)}`, { stdio: 'pipe' });
+      } catch (error) {
+        syntaxOk = false;
+      }
+      check(`${file} parses`, syntaxOk);
+
+      const body = fsMod.readFileSync(full, 'utf8');
+      const missing = REQUIRED.filter(([, re]) => !re.test(body)).map(([label]) => label);
+      check(`${file} keeps every hard-won guard`, missing.length === 0, missing.join('; '));
+    }
+
+    // Arch-only landmines, both from the CLI's installer.
+    const archBody = fsMod.readFileSync(pathMod.join(ROOT, 'install-arch.sh'), 'utf8');
+    check('arch initialises the pacman keyring', /pacman-key --init/.test(archBody));
+    check('arch warns when the running kernel was replaced',
+      /usr\/lib\/modules\/\$\(uname -r\)/.test(archBody));
+
+    // The menu entry must invoke the launcher. `podium gui` is not a CLI
+    // subcommand — it printed "Unknown command: gui" and did nothing.
+    const desktop = fsMod.readFileSync(
+      pathMod.join(ROOT, 'packaging/debian-package/usr/share/applications/podium-gui.desktop'), 'utf8');
+    check('desktop entry execs the launcher, not a nonexistent subcommand',
+      /^Exec=podium-gui$/m.test(desktop), desktop.match(/^Exec=.*$/m)?.[0] || '');
   } finally {
     await app.close();
   }
