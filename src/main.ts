@@ -635,6 +635,9 @@ interface ClassifyCandidate {
   databases?: string[];   // frameworks: the engines this one actually supports
 }
 
+// Cached after the first successful probe; the CLI does not change mid-session.
+let classifyOnlySupported = false;
+
 interface Classification {
   status: 'success' | 'error';
   message?: string;
@@ -664,6 +667,26 @@ ipcMain.handle('classify-idea', async (event: IpcMainInvokeEvent, idea: string):
 
   if (!idea || idea.trim() === '') {
     return failure('Describe what you want to build first.');
+  }
+
+  // Confirm the CLI actually supports --classify-only before using it.
+  //
+  // This is not defensive padding. A CLI predating the flag does not reject it:
+  // it falls through to an ordinary `podium create --json-output`, which is
+  // non-interactive, auto-picks the top recommendation and BUILDS THE PROJECT.
+  // Observed on a machine running an older CLI — asking it to classify an idea
+  // installed Gitea. The GUI and CLI ship separately, so this drift is normal
+  // and has to be caught before the command runs, not after.
+  if (!classifyOnlySupported) {
+    const help = await runPodium(['create', '--help']);
+    if (!/--classify-only/.test(help.stdout + help.stderr)) {
+      return failure(
+        'This Podium CLI is too old to classify an idea safely — it has no ' +
+        '--classify-only flag, and running create would build a project ' +
+        'straight away. Update the CLI, then try again.'
+      );
+    }
+    classifyOnlySupported = true;
   }
 
   // Classification is an AI round-trip — tens of seconds is normal.

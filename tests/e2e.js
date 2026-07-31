@@ -466,6 +466,58 @@ async function run() {
     check('catalogue entries carry slug/display/database/note',
       ['slug', 'display', 'database', 'note'].every((k) => k in shaped),
       JSON.stringify(shaped));
+    // --- Modal wiring ---------------------------------------------------
+    console.log('\nmodal wiring');
+
+    // The Help modal was nested INSIDE the About modal, so adding .show to it
+    // could never make it visible — its parent is display:none. The button had
+    // never worked. Assert the structural fact, not just the symptom.
+    const nesting = await win.evaluate(() => {
+      const help = document.getElementById('help-modal');
+      const about = document.getElementById('about-modal');
+      return {
+        exists: !!help,
+        nestedInAnotherModal: !!help && !!help.closest('.modal:not(#help-modal)'),
+        insideAbout: !!(about && help && about.contains(help))
+      };
+    });
+    check('help modal is not nested inside another modal',
+      nesting.exists && !nesting.nestedInAnotherModal && !nesting.insideAbout,
+      JSON.stringify(nesting));
+
+    // Every modal must be a top-level element for the same reason.
+    const badlyNested = await win.evaluate(() =>
+      [...document.querySelectorAll('.modal')]
+        .filter((m) => m.parentElement && m.parentElement.closest('.modal'))
+        .map((m) => m.id));
+    check('no modal is nested inside another', badlyNested.length === 0, badlyNested.join(','));
+
+    for (const id of ['help-modal', 'about-modal']) {
+      await win.evaluate((m) => window.showModal(m), id);
+      await win.waitForTimeout(400);
+      check(`${id} actually becomes visible`, await win.isVisible(`#${id}`));
+      await win.evaluate(() => window.closeModal());
+      await win.waitForTimeout(300);
+    }
+
+    // showFieldError used to delete the markup's <div id="…-error"> and append
+    // an id-less replacement, making every one of those ids dead weight.
+    const errorSlots = await win.evaluate(() => {
+      const before = [...document.querySelectorAll('[id$="-error"]')].map((e) => e.id);
+      window.showFieldError('create-idea', 'test message');
+      const after = [...document.querySelectorAll('[id$="-error"]')].map((e) => e.id);
+      const filled = document.getElementById('create-idea-error')?.textContent || '';
+      window.clearFieldErrors();
+      const cleared = document.getElementById('create-idea-error')?.textContent || '';
+      const survived = [...document.querySelectorAll('[id$="-error"]')].map((e) => e.id);
+      return { before: before.length, after: after.length, filled, cleared, survived: survived.length };
+    });
+    check('showFieldError writes into the markup\'s own error slot',
+      errorSlots.filled === 'test message', JSON.stringify(errorSlots));
+    check('clearFieldErrors empties rather than destroys the slot',
+      errorSlots.cleared === '' && errorSlots.survived === errorSlots.before,
+      JSON.stringify(errorSlots));
+
     // --- Installers -----------------------------------------------------
     //
     // Shell, not UI, but they belong in the same gate: each behaviour below was

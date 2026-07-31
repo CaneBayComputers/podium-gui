@@ -1882,35 +1882,49 @@ function sanitizeMetadata(text: string): string {
 // Function to show form validation errors
 function showFieldError(fieldId: string, message: string): void {
     const field = document.getElementById(fieldId) as HTMLInputElement;
-    if (field) {
-        field.style.borderColor = '#e74c3c';
-        
-        // Remove any existing error message
-        const existingError = field.parentNode?.querySelector('.field-error');
-        if (existingError) {
-            existingError.remove();
-        }
-        
-        // Add new error message
-        const errorDiv = document.createElement('div');
-        errorDiv.className = 'field-error';
-        errorDiv.textContent = message;
-        field.parentNode?.appendChild(errorDiv);
+    if (!field) return;
+
+    field.style.borderColor = '#e74c3c';
+
+    // Reuse the markup's own <div id="<field>-error"> when it exists. The
+    // previous version removed it and appended a replacement with no id, which
+    // made every id in the HTML dead weight and the errors unaddressable.
+    const named = document.getElementById(`${fieldId}-error`);
+    if (named) {
+        named.textContent = message;
+        named.classList.add('field-error');
+        return;
     }
+
+    const existingError = field.parentNode?.querySelector('.field-error');
+    if (existingError) {
+        existingError.remove();
+    }
+
+    const errorDiv = document.createElement('div');
+    errorDiv.className = 'field-error';
+    errorDiv.textContent = message;
+    field.parentNode?.appendChild(errorDiv);
 }
 
 // Function to clear field errors
 function clearFieldErrors(): void {
-    const fields = ['project-name', 'project-description'];
-    fields.forEach(fieldId => {
-        const field = document.getElementById(fieldId) as HTMLInputElement;
-        if (field) {
-            field.style.borderColor = '';
-            const errorDiv = field.parentNode?.querySelector('.field-error');
-            if (errorDiv) {
-                errorDiv.remove();
-            }
+    // Clear every error slot rather than a hardcoded pair of fields — the forms
+    // have grown well past project-name/description, and errors on the others
+    // used to persist across reopening a modal.
+    //
+    // Empty the markup's own <div id="…-error"> instead of removing it; those
+    // elements are addressable and must survive.
+    document.querySelectorAll('.field-error').forEach((el) => {
+        if (el.id.endsWith('-error')) {
+            el.textContent = '';
+        } else {
+            el.remove();
         }
+    });
+
+    document.querySelectorAll<HTMLElement>('input, select, textarea').forEach((field) => {
+        field.style.borderColor = '';
     });
 }
 
@@ -2481,6 +2495,8 @@ async function showCliHelp(): Promise<void> {
 (window as any).createNewProject = createNewProject;
 (window as any).cloneProject = cloneProject;
 (window as any).closeModal = closeModal;
+(window as any).showFieldError = showFieldError;
+(window as any).clearFieldErrors = clearFieldErrors;
 (window as any).submitNewProject = submitNewProject;
 (window as any).submitCloneProject = submitCloneProject;
 (window as any).handleCreateProject = handleCreateProject;

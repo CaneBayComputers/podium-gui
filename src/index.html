@@ -81,12 +81,14 @@
                             <label>Project Name</label>
                             <input type="text" id="project-name" data-testid="project-name" placeholder="My Awesome Project" required>
                             <small class="form-help">Will be sanitized for container name (spaces→dashes, lowercase)</small>
+                            <div class="field-error" id="project-name-error"></div>
                         </div>
 
                         <div class="form-group">
                             <label>Description</label>
                             <input type="text" id="project-description" data-testid="project-description" placeholder="A brief description of your project">
                             <small class="form-help">Optional description shown on the project tile</small>
+                            <div class="field-error" id="project-description-error"></div>
                         </div>
 
                         <div class="form-group">
@@ -528,6 +530,8 @@
             </div>
         </div>
 
+    </div>
+
         <!-- Help Modal -->
         <div id="help-modal" class="modal">
             <div class="modal-content modal-large">
@@ -627,7 +631,6 @@
                 </div>
             </div>
         </div>
-    </div>
 
     <script src="../dist/renderer.js"></script>
 
