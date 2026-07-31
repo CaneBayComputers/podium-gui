@@ -1223,6 +1223,11 @@ async function showAiSettings(): Promise<void> {
 }
 
 function onAiAgentChange(): void {
+    // Switching agents invalidates any previous validation message. Without
+    // this, selecting aider, failing validation, then switching to Claude left
+    // "aider requires a model" sitting under a field marked optional.
+    clearFieldErrors();
+
     const agent = (document.getElementById('ai-agent') as HTMLSelectElement)?.value || '';
     const rules = AI_AGENT_RULES[agent];
 

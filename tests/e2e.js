@@ -569,6 +569,13 @@ async function run() {
     check('non-aider agents hide the endpoint field',
       !(await win.isVisible('#ai-api-base-group')));
 
+    // Switching agents must clear the previous agent's validation message —
+    // "aider requires a model" sitting under a field marked (optional) was
+    // visible in a screenshot while every assertion passed.
+    check('switching agents clears the stale validation error',
+      ((await win.textContent('#ai-model-error')) || '').trim() === '',
+      await win.textContent('#ai-model-error'));
+
     await screenshot(win, '08-ai-settings');
     await win.click('#ai-settings-modal .modal-close');
     await win.waitForTimeout(300);

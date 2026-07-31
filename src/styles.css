@@ -1978,3 +1978,13 @@ span.status-indicator {
     white-space: pre-wrap;
     word-break: break-word;
 }
+
+/* Requirement hints sit inline with their label rather than wrapping onto a
+   line of their own, which read as a second heading. */
+label > .form-help {
+    display: inline;
+    margin-left: 0.4rem;
+    font-weight: 400;
+    text-transform: none;
+    letter-spacing: normal;
+}
