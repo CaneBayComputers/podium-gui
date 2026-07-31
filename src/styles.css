@@ -1535,3 +1535,131 @@ span.status-indicator {
     padding-top: 1.5rem;
     border-top: 1px solid var(--border-subtle);
 }
+/* ---------------------------------------------------------------------------
+   Install-an-app modal — catalogue picker + live install output
+   --------------------------------------------------------------------------- */
+
+.install-modal .modal-content {
+    max-width: 780px;
+    width: 92vw;
+}
+
+.app-count {
+    color: var(--text-muted);
+    font-weight: 400;
+    font-size: 0.85em;
+}
+
+.app-list {
+    max-height: 42vh;
+    overflow-y: auto;
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    background: var(--bg-secondary);
+    margin-bottom: 1rem;
+}
+
+.app-list-empty {
+    padding: 1.5rem;
+    text-align: center;
+    color: var(--text-muted);
+}
+
+.app-entry {
+    padding: 0.7rem 0.9rem;
+    border-bottom: 1px solid var(--border-subtle);
+    cursor: pointer;
+    transition: background 0.12s ease;
+}
+
+.app-entry:last-child {
+    border-bottom: none;
+}
+
+.app-entry:hover {
+    background: var(--card-hover);
+}
+
+.app-entry.selected {
+    background: var(--card-hover);
+    box-shadow: inset 3px 0 0 var(--accent-blue);
+}
+
+.app-entry-header {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+}
+
+.app-entry-header strong {
+    color: var(--text-primary);
+}
+
+.app-slug {
+    color: var(--text-muted);
+    font-size: 0.8em;
+    background: var(--bg-tertiary);
+    padding: 0.1rem 0.4rem;
+    border-radius: 4px;
+}
+
+.app-db {
+    margin-left: auto;
+    font-size: 0.75em;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--accent-green);
+    border: 1px solid var(--accent-green);
+    border-radius: 999px;
+    padding: 0.05rem 0.5rem;
+}
+
+.app-db-none {
+    color: var(--text-muted);
+    border-color: var(--border-accent);
+}
+
+.app-note {
+    margin: 0.35rem 0 0;
+    font-size: 0.85em;
+    color: var(--text-secondary);
+    line-height: 1.4;
+}
+
+.install-output {
+    max-height: 46vh;
+    overflow-y: auto;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    padding: 0.8rem;
+    font-size: 0.8rem;
+    line-height: 1.45;
+    color: var(--text-secondary);
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+/* The catalogue list is tall enough to push the action buttons below the fold
+   on open — .modal-content scrolls as one block, so the primary action was
+   off-screen until the user filtered the list. Make the modal a flex column
+   with only the body scrolling, and pin the footer. */
+.install-modal .modal-content {
+    display: flex;
+    flex-direction: column;
+    max-height: 85vh;
+}
+
+.install-modal .modal-body {
+    overflow-y: auto;
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+.install-modal .form-actions {
+    flex: 0 0 auto;
+    margin-top: 0;
+    background: var(--card-bg);
+    border-top: 1px solid var(--border-subtle);
+}

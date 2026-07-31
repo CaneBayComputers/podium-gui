@@ -17,12 +17,13 @@
                     <span id="debug-indicator" class="debug-indicator" style="display: none;">DEBUG MODE - F5 to refresh</span>
                 </div>
                 <div class="header-actions">
-                    <button class="btn btn-success" onclick="startAllProjects()">Start All</button>
-                    <button class="btn btn-warning" onclick="stopAllProjects()">Stop All</button>
-                    <button class="btn btn-primary" onclick="createNewProject()">+ New Project</button>
-                    <button class="btn btn-primary" onclick="cloneProject()">📥 Clone</button>
+                    <button class="btn btn-success" onclick="startAllProjects()" data-testid="start-all">Start All</button>
+                    <button class="btn btn-warning" onclick="stopAllProjects()" data-testid="stop-all">Stop All</button>
+                    <button class="btn btn-primary" onclick="createNewProject()" data-testid="new-project">+ New Project</button>
+                    <button class="btn btn-primary" onclick="cloneProject()" data-testid="clone-project">📥 Clone</button>
+                    <button class="btn btn-primary" onclick="showInstallApp()" data-testid="install-app">📦 Install App</button>
 
-                    <button class="btn btn-secondary btn-small" onclick="showHelpModal()" title="Help & CLI Commands">❓ Help</button>
+                    <button class="btn btn-secondary btn-small" onclick="showHelpModal()" data-testid="help-modal-open" title="Help & CLI Commands">❓ Help</button>
                     <button class="btn btn-secondary btn-small" onclick="openUrl('https://patreon.com/canebaycomputers')" title="Support on Patreon">❤️ Patreon</button>
                     <button class="btn btn-secondary btn-small" onclick="openUrl('https://securelink-prod.valorpaytech.com:4430/?redirect=1&uid=6e840752-8751-11f0-a74f-12a0879a85b1')" title="Donate">💳 Donate</button>
 
@@ -36,7 +37,7 @@
             <section class="dashboard">
 
                 <!-- Projects Grid -->
-                <div id="projects-grid" class="projects-grid">
+                <div id="projects-grid" data-testid="projects-grid" class="projects-grid">
                     <!-- Projects will be loaded here -->
                     <div class="project-card placeholder">
                         <div class="project-icon">🚀</div>
@@ -53,13 +54,13 @@
                 <div class="services-header">
                     <h3>Shared Services</h3>
                     <div class="services-controls">
-                        <button class="btn btn-success btn-small" onclick="startServices()">▶ Start Services</button>
-                        <button class="btn btn-warning btn-small" onclick="stopServices()">⏹ Stop Services</button>
+                        <button class="btn btn-success btn-small" onclick="startServices()" data-testid="start-services">▶ Start Services</button>
+                        <button class="btn btn-warning btn-small" onclick="stopServices()" data-testid="stop-services">⏹ Stop Services</button>
                         <button class="btn btn-primary btn-small" onclick="openUrl('http://phpmyadmin')">🗄️ phpMyAdmin</button>
                         <button class="btn btn-primary btn-small" onclick="openUrl('http://localhost:8025')">📧 MailHog</button>
                     </div>
                 </div>
-                <div id="services-grid" class="services-grid">
+                <div id="services-grid" data-testid="services-grid" class="services-grid">
                     <!-- Services will be loaded dynamically -->
                 </div>
             </section>
@@ -76,19 +77,19 @@
                     <form id="new-project-form">
                         <div class="form-group">
                             <label>Project Name</label>
-                            <input type="text" id="project-name" placeholder="My Awesome Project" required>
+                            <input type="text" id="project-name" data-testid="project-name" placeholder="My Awesome Project" required>
                             <small class="form-help">Will be sanitized for container name (spaces→dashes, lowercase)</small>
                         </div>
 
                         <div class="form-group">
                             <label>Description</label>
-                            <input type="text" id="project-description" placeholder="A brief description of your project">
+                            <input type="text" id="project-description" data-testid="project-description" placeholder="A brief description of your project">
                             <small class="form-help">Optional description shown on the project tile</small>
                         </div>
 
                         <div class="form-group">
                             <label>Project Emoji</label>
-                            <select id="project-emoji">
+                            <select id="project-emoji" data-testid="project-emoji">
                                 <option value="🚀">🚀 Rocket</option>
                                 <option value="💻">💻 Computer</option>
                                 <option value="🌟">🌟 Star</option>
@@ -110,41 +111,41 @@
                         <div class="form-group">
                             <label>Project Type</label>
                             <div class="radio-group">
-                                <label><input type="radio" name="project-type" value="laravel" checked> Laravel</label>
-                                <label><input type="radio" name="project-type" value="wordpress"> WordPress</label>
-                                <label><input type="radio" name="project-type" value="php"> PHP</label>
+                                <label><input type="radio" name="project-type" value="laravel" data-testid="framework-laravel" checked> Laravel</label>
+                                <label><input type="radio" name="project-type" value="wordpress" data-testid="framework-wordpress"> WordPress</label>
+                                <label><input type="radio" name="project-type" value="php" data-testid="framework-php"> PHP</label>
                             </div>
                         </div>
 
                         <div class="form-group" id="laravel-version-group">
                             <label>Laravel Version</label>
-                            <input type="text" id="laravel-version" placeholder="latest" value="latest">
+                            <input type="text" id="laravel-version" data-testid="laravel-version" placeholder="latest" value="latest">
                             <small class="form-help">Enter version (e.g., 11.2.1) or "latest" for newest release</small>
                         </div>
 
                         <div class="form-group" id="wordpress-version-group" style="display: none;">
                             <label>WordPress Version</label>
-                            <input type="text" id="wordpress-version" placeholder="latest" value="latest">
+                            <input type="text" id="wordpress-version" data-testid="wordpress-version" placeholder="latest" value="latest">
                             <small class="form-help">Enter version (e.g., 6.4.2) or "latest" for newest release</small>
                         </div>
 
                         <div class="form-group">
                             <label>
-                                <input type="checkbox" id="create-github-repo" />
+                                <input type="checkbox" id="create-github-repo" data-testid="create-github-repo" />
                                 Create GitHub repository
                             </label>
                         </div>
 
                         <div class="form-group" id="github-options" style="display: none;">
                             <label>GitHub Organization (Optional)</label>
-                            <input type="text" id="organization" placeholder="mycompany">
+                            <input type="text" id="organization" data-testid="github-organization" placeholder="mycompany">
                             <small class="form-help">Leave blank to create in your personal account</small>
                         </div>
                     </form>
                 </div>
                 <div class="modal-footer">
                     <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-                    <button class="btn btn-primary" onclick="handleCreateProject()">Create Project</button>
+                    <button class="btn btn-primary" onclick="handleCreateProject()" data-testid="create-project-submit">Create Project</button>
                 </div>
             </div>
         </div>
@@ -160,14 +161,14 @@
                     <p>Are you sure you want to remove the project <strong id="remove-project-name"></strong>?</p>
                     <div class="form-group" style="margin-top: 1.5rem;">
                         <label>
-                            <input type="checkbox" id="preserve-database" />
+                            <input type="checkbox" id="preserve-database" data-testid="preserve-database" />
                             Preserve database (keep project data)
                         </label>
                     </div>
                 </div>
                 <div class="modal-footer">
                     <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-                    <button class="btn btn-danger" onclick="confirmRemoveProject()">Remove Project</button>
+                    <button class="btn btn-danger" onclick="confirmRemoveProject()" data-testid="remove-project-confirm">Remove Project</button>
                 </div>
             </div>
         </div>
@@ -183,17 +184,17 @@
                     <form id="edit-project-form">
                         <div class="form-group">
                             <label>Display Name</label>
-                            <input type="text" id="edit-display-name" required>
+                            <input type="text" id="edit-display-name" data-testid="edit-display-name" required>
                         </div>
 
                         <div class="form-group">
                             <label>Description</label>
-                            <input type="text" id="edit-description" placeholder="Optional description">
+                            <input type="text" id="edit-description" data-testid="edit-description" placeholder="Optional description">
                         </div>
 
                         <div class="form-group">
                             <label>Project Emoji</label>
-                            <select id="edit-emoji">
+                            <select id="edit-emoji" data-testid="edit-emoji">
                                 <option value="🚀">🚀 Rocket</option>
                                 <option value="💻">💻 Computer</option>
                                 <option value="🌟">🌟 Star</option>
@@ -215,7 +216,7 @@
                 </div>
                 <div class="modal-footer">
                     <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-                    <button class="btn btn-primary" onclick="submitEditProject()">Save Changes</button>
+                    <button class="btn btn-primary" onclick="submitEditProject()" data-testid="edit-project-submit">Save Changes</button>
                 </div>
             </div>
         </div>
@@ -235,14 +236,14 @@
                     <div class="flush-section">
                         <h4>⚠️ Danger Zone</h4>
                         <p>Flushing will permanently delete all data in this service.</p>
-                        <button class="btn btn-danger" onclick="flushServiceData()" id="flush-button">
+                        <button class="btn btn-danger" onclick="flushServiceData()" id="flush-button" data-testid="flush-service">
                             🗑️ Flush All Data
                         </button>
                     </div>
                 </div>
                 <div class="modal-footer">
                     <button class="btn btn-secondary" onclick="closeModal()">Close</button>
-                    <button class="btn btn-primary" onclick="refreshServiceStats()" id="refresh-stats-button">
+                    <button class="btn btn-primary" onclick="refreshServiceStats()" id="refresh-stats-button" data-testid="refresh-service-stats">
                         🔄 Refresh Stats
                     </button>
                 </div>
@@ -250,6 +251,53 @@
         </div>
 
         <!-- Clone Project Modal -->
+        <!--
+            Install an app (`podium install <app> [name]`) is deliberately a
+            SEPARATE flow from New Project (`podium new <framework> <name>`).
+            New Project scaffolds something you write; Install deploys finished
+            software someone else wrote, with its database fixed by the
+            installer — so this modal never asks the user to choose one.
+        -->
+        <div id="install-app-modal" class="modal install-modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>📦 Install an App</h3>
+                    <button class="modal-close" onclick="closeModal()">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div id="install-picker">
+                        <div class="form-group">
+                            <label for="install-search">Search <span id="install-app-count" class="app-count"></span></label>
+                            <input type="text" id="install-search" placeholder="Filter by name or slug…"
+                                   oninput="renderAppCatalog()" autocomplete="off" data-testid="install-search">
+                        </div>
+
+                        <div id="install-app-list" class="app-list" data-testid="install-app-list">
+                            <p class="app-list-empty">Loading catalogue…</p>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="install-project-name">Project Name (optional):</label>
+                            <input type="text" id="install-project-name" maxlength="50"
+                                   placeholder="Defaults to the app's slug" data-testid="install-project-name">
+                            <span class="form-help">Becomes the project directory and the hostname you browse to.</span>
+                            <div class="field-error" id="install-project-name-error"></div>
+                        </div>
+                    </div>
+
+                    <div id="install-progress" style="display: none;">
+                        <p id="install-progress-title">Installing…</p>
+                        <pre id="install-output" class="install-output" data-testid="install-output"></pre>
+                    </div>
+                </div>
+                <div class="form-actions">
+                    <button class="btn btn-secondary" onclick="closeModal()" id="install-cancel-btn" data-testid="install-cancel">Cancel</button>
+                    <button class="btn btn-primary" onclick="handleInstallApp()" id="install-submit-btn"
+                            data-testid="install-submit" disabled>Install</button>
+                </div>
+            </div>
+        </div>
+
         <div id="clone-project-modal" class="modal">
             <div class="modal-content">
                 <div class="modal-header">
@@ -260,19 +308,29 @@
                     <form id="clone-project-form">
                         <div class="form-group">
                             <label for="clone-repo-url">Git Repository URL:</label>
-                            <input type="url" id="clone-repo-url" name="repoUrl" required placeholder="https://github.com/user/repo.git">
+                            <input type="url" id="clone-repo-url" data-testid="clone-repo-url" name="repoUrl" required placeholder="https://github.com/user/repo.git">
                             <span class="form-help">Enter the full Git repository URL to clone</span>
                             <div class="field-error" id="clone-repo-url-error"></div>
                         </div>
                         <div class="form-group">
+                            <label for="clone-mode">How should this repo be handled?</label>
+                            <select id="clone-mode" name="cloneMode" data-testid="clone-mode">
+                                <option value="work-directly" selected>Work directly &mdash; keep the original as upstream</option>
+                                <option value="fork">Fork &mdash; fork to your GitHub account and work from the fork</option>
+                                <option value="new-repo">New repo &mdash; create a fresh GitHub repo for this project</option>
+                            </select>
+                            <span class="form-help">Required by <code>podium clone</code>. Fork and new-repo need the GitHub CLI to be authenticated.</span>
+                            <div class="field-error" id="clone-mode-error"></div>
+                        </div>
+                        <div class="form-group">
                             <label for="clone-project-name">Local Project Name (optional):</label>
-                            <input type="text" id="clone-project-name" name="projectName" maxlength="50" placeholder="Leave empty to use repository name">
+                            <input type="text" id="clone-project-name" name="projectName" maxlength="50" placeholder="Leave empty to use repository name" data-testid="clone-project-name">
                             <span class="form-help">If empty, will use the repository name</span>
                             <div class="field-error" id="clone-project-name-error"></div>
                         </div>
                         <div class="form-actions">
                             <button type="button" onclick="closeModal()">Cancel</button>
-                            <button type="submit">📥 Clone Project</button>
+                            <button type="submit" data-testid="clone-submit">📥 Clone Project</button>
                         </div>
                     </form>
                 </div>

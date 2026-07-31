@@ -63,6 +63,59 @@ npm run build-ts
 npm run package
 ```
 
+## Testing
+
+The GUI is driven end-to-end with Playwright, which supports Electron natively —
+it launches the real app, queries and clicks the renderer DOM, and can call into
+the **main** process to exercise IPC handlers directly.
+
+```bash
+npm run test:e2e     # builds TypeScript, then runs tests/e2e.js
+```
+
+The suite is deliberately **read-only**: it never creates, installs, clones or
+removes a project, and never stops the shared services. It does require Podium to
+be installed and configured (`/etc/podium-cli/.env` with `PROJECTS_DIR`), since it
+asserts against real `podium status` output. A real `podium install` run is
+verified separately on a throwaway box.
+
+Screenshots are written to a gitignored `debug/` directory with predictable
+names (`01-dashboard.png`, `02-install-picker.png`, …), so a failing run can point
+at an exact image.
+
+### Writing tests
+
+Select elements by `data-testid`, never by CSS class or DOM position — restyling
+must not break selectors, or an agent silently clicks the wrong thing:
+
+```js
+const { launchApp, screenshot, t } = require('./helpers');
+
+const { app, win } = await launchApp();
+await win.click(t('install-app'));
+await screenshot(win, 'install-picker');
+
+// Reach into the main process. `require` is NOT in scope inside app.evaluate(),
+// but the electron module is injected and ipcMain exposes its invoke handlers,
+// so the real handler runs rather than a reimplementation of it.
+const catalog = await app.evaluate(async ({ ipcMain }) =>
+  ipcMain._invokeHandlers.get('get-app-catalog')({})
+);
+
+await app.close();
+```
+
+Two traps worth knowing, both of which produced convincing false results here:
+
+- **Screenshot animations.** Modals animate in (`fadeIn` + `scaleIn`, 0.3s).
+  Capturing immediately yields a half-transparent overlay that looks like a
+  serious CSS bug. `helpers.screenshot()` passes `animations: 'disabled'` to
+  fast-forward them; use it rather than `win.screenshot()` directly.
+- **`offsetParent` on fixed elements.** The loading splash is `position: fixed`,
+  and fixed elements always report `offsetParent === null` — so using that to
+  detect "hidden" passes instantly and every subsequent assertion races the
+  initial render. Check `display`/`visibility` instead.
+
 ## License
 
 This software is proprietary and requires a valid license for use. 

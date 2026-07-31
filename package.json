@@ -15,7 +15,9 @@
     "pack": "npm run build-ts && electron-builder --dir",
     "dist": "npm run build-ts && electron-builder --publish=never",
     "clean": "rm -rf dist",
-    "rebuild": "npm run clean && npm run build-ts"
+    "rebuild": "npm run clean && npm run build-ts",
+    "test:e2e": "npm run build-ts && node tests/e2e.js",
+    "test": "npm run test:e2e"
   },
   "keywords": [
     "php",
@@ -31,6 +33,7 @@
     "@types/node": "^20.19.11",
     "electron": "^28.0.0",
     "electron-builder": "^24.0.0",
+    "playwright": "^1.62.1",
     "typescript": "^5.9.2"
   },
   "dependencies": {

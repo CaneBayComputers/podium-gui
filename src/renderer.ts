@@ -70,11 +70,13 @@ document.addEventListener('DOMContentLoaded', (): void => {
     // Show initial loading screen
     showInitialLoading();
     
-    // Initialize app components
-    Promise.all([
+    // Read which optional services are enabled BEFORE the first render, so
+    // minio/meilisearch are never briefly shown as "Stopped" on a machine that
+    // simply never enabled them.
+    loadOptionalServices().then(() => Promise.all([
         loadProjects(),
         loadServices()
-    ]).then(() => {
+    ])).then(() => {
         setupEventListeners();
         
         // Show debug indicator if in debug mode
@@ -166,9 +168,10 @@ function toggleVersionGroups(): void {
 
 async function loadProjects(): Promise<void> {
     try {
-        // Use podium status command with JSON output for cleaner parsing
-        const result = await ipcRenderer.invoke('execute-podium', 'status', ['--json-output']);
-        
+        // `--all` is required: podium status lists only RUNNING projects by
+        // default, so without it the grid is empty whenever nothing is up.
+        const result = await ipcRenderer.invoke('execute-podium', 'status', ['--all', '--json-output']);
+
         // Check if command succeeded
         if (result.code !== 0) {
             console.log('Podium status command failed, likely no projects or services stopped');
@@ -177,8 +180,9 @@ async function loadProjects(): Promise<void> {
             renderProjects();
             return;
         }
-        
+
         parseProjectStatusJSON(result.stdout);
+        await hydrateProjectMetadata();
         renderProjects();
     } catch (error) {
         console.error('Failed to load projects:', error);
@@ -232,13 +236,23 @@ function parseProjectStatusJSON(statusOutput: string): void {
                     status: 'stopped'
                 };
                 
-                // Determine overall status
-                if (project.dockerRunning && project.portMapped) {
-                    project.status = 'running';
-                } else if (project.dockerRunning) {
+                // Determine overall status.
+                //
+                // `port_mapped` is NOT a liveness signal. Podium routes to a
+                // project by hostname via its VPC IP (http://<project>/), so an
+                // adapted multi-service compose — anything `podium install`
+                // produces with an nginx front — runs perfectly with no host
+                // port published at all. Requiring port_mapped here marked a
+                // verified-healthy install (HTTP 200) as stopped, offered a
+                // "Start" button for an already-running container, and hid its
+                // URL. The container being up is what "running" means.
+                if (!project.dockerRunning) {
+                    project.status = 'stopped';
+                } else if (projectData.ping_status && projectData.ping_status !== 'ok' && projectData.ping_status !== 'skipped') {
+                    // Container is up but not answering on the VPC yet.
                     project.status = 'starting';
                 } else {
-                    project.status = 'stopped';
+                    project.status = 'running';
                 }
                 
                 // Detect project type from name (simplified)
@@ -267,6 +281,42 @@ function parseProjectStatusJSON(statusOutput: string): void {
     }
 }
 
+// `podium status` reports operational state only — it has no display_name,
+// description or emoji, and the CLI no longer writes an x-metadata block. The
+// GUI owns that metadata and reads it back from each project's compose file.
+// Cached by project name and applied at RENDER time, not parse time.
+// parseProjectStatusJSON() rebuilds the shared `projects` array from scratch and
+// is called by both loadProjects() and loadServices() — so anything written onto
+// the project objects gets wiped by whichever call finishes last. Keeping
+// metadata in its own map makes it survive that.
+let projectMetadata: Record<string, { display_name: string; description: string; emoji: string }> = {};
+
+async function hydrateProjectMetadata(): Promise<void> {
+    await Promise.all(projects.map(async (project: Project) => {
+        try {
+            const metadata = await ipcRenderer.invoke('get-project-metadata', project.name);
+            if (metadata) {
+                projectMetadata[project.name] = metadata;
+            }
+        } catch (error) {
+            console.log(`No metadata for ${project.name}:`, error);
+        }
+    }));
+}
+
+/** Merge cached display metadata onto a freshly parsed project. */
+function withMetadata(project: Project): Project {
+    const metadata = projectMetadata[project.name];
+    if (!metadata) return project;
+
+    const merged: Project = { ...project };
+    if (metadata.display_name) merged.display_name = metadata.display_name;
+    if (metadata.description) merged.description = metadata.description;
+    if (metadata.emoji) merged.emoji = metadata.emoji;
+
+    return merged;
+}
+
 // Legacy function - redirects to JSON version
 function parseProjectStatus(statusOutput: string): void {
     console.log('DEBUG: parseProjectStatus called - redirecting to JSON version');
@@ -289,9 +339,13 @@ function renderProjects(): void {
         return;
     }
 
-    grid.innerHTML = projects.map((project: Project) => {
+    grid.innerHTML = projects.map((parsed: Project) => {
+        // Apply cached display metadata here rather than trusting the parsed
+        // object — see projectMetadata for why.
+        const project = withMetadata(parsed);
+
         // Use emoji from metadata or fallback to type-based icon
-        const projectIcon = project.emoji || 
+        const projectIcon = project.emoji ||
                            (project.type === 'laravel' ? '🎯' : 
                             project.type === 'wordpress' ? '📝' : '🐘');
         
@@ -319,11 +373,11 @@ function renderProjects(): void {
                 ${descriptionHtml}
                 <div class="project-details">
                     <div class="project-urls">
-                        ${project.status === 'running' && project.localUrl ? `<a href="#" class="url-link" onclick="event.preventDefault(); openUrl('${project.localUrl}'); return false;">${project.localUrl}</a>` : ''}
-                        ${project.status === 'running' && project.lanUrl ? `<a href="#" class="url-link" onclick="event.preventDefault(); openUrl('${project.lanUrl}'); return false;">${project.lanUrl}</a>` : ''}
+                        ${project.status !== 'stopped' && project.localUrl ? `<a href="#" class="url-link" onclick="event.preventDefault(); openUrl('${project.localUrl}'); return false;">${project.localUrl}</a>` : ''}
+                        ${project.status !== 'stopped' && project.portMapped && project.lanUrl ? `<a href="#" class="url-link" onclick="event.preventDefault(); openUrl('${project.lanUrl}'); return false;">${project.lanUrl}</a>` : ''}
                     </div>
                     <div class="project-actions">
-                        ${project.status === 'running' ? 
+                        ${project.status !== 'stopped' ?
                             `<button class="btn btn-warning btn-sm" onclick="stopProject('${project.name}')">Stop</button>` :
                             `<button class="btn btn-success btn-sm" onclick="startProject('${project.name}')">Start</button>`
                         }
@@ -340,7 +394,7 @@ function renderProjects(): void {
 
 async function loadServices(): Promise<void> {
     try {
-        const result = await ipcRenderer.invoke('execute-podium', 'status', ['--json-output']);
+        const result = await ipcRenderer.invoke('execute-podium', 'status', ['--all', '--json-output']);
         
         if (result.code !== 0) {
             console.log('Services status command failed, likely no services running');
@@ -353,6 +407,20 @@ async function loadServices(): Promise<void> {
     } catch (error) {
         console.error('Failed to load services:', error);
         renderServices();
+    }
+}
+
+// Optional shared services, per the CLI's `podium enable-service`. Kept as a
+// list rather than inferred, so a core service is never hidden by accident.
+const OPTIONAL_SERVICE_NAMES = ['minio', 'meilisearch'];
+let enabledOptionalServices: string[] = [];
+
+async function loadOptionalServices(): Promise<void> {
+    try {
+        enabledOptionalServices = await ipcRenderer.invoke('get-optional-services') || [];
+    } catch (error) {
+        console.log('Could not read OPTIONAL_SERVICES:', error);
+        enabledOptionalServices = [];
     }
 }
 
@@ -371,7 +439,27 @@ function renderServices(): void {
         return;
     }
 
-    servicesGrid.innerHTML = Object.entries(sharedServices).map(([serviceName, service]: [string, SharedService]) => {
+    // Hide optional services this machine has not enabled. podium status reports
+    // minio/meilisearch as "stopped" whether or not they were ever turned on,
+    // and a red "Stopped" card reads as a broken service rather than an unused
+    // feature. Anything enabled via `podium enable-service` shows normally.
+    const visibleServices = Object.entries(sharedServices).filter(([serviceName]) => {
+        const key = serviceName.replace(/^podium-/, '').toLowerCase();
+        return !OPTIONAL_SERVICE_NAMES.includes(key) || enabledOptionalServices.includes(key);
+    });
+
+    if (visibleServices.length === 0) {
+        servicesGrid.innerHTML = `
+            <div class="service-card">
+                <div class="service-status">⚪</div>
+                <h4>No Services</h4>
+                <p>Start Podium to see shared services</p>
+            </div>
+        `;
+        return;
+    }
+
+    servicesGrid.innerHTML = visibleServices.map(([serviceName, service]: [string, SharedService]) => {
         const statusIcon = service.status === 'running' ? '🟢' : '🔴';
         const statusText = service.status === 'running' ? 'Running' : 'Stopped';
         
@@ -481,11 +569,13 @@ async function removeProject(projectName: string): Promise<void> {
     try {
         showLoadingOverlay('Removing Project', `Removing project ${projectName}...`);
         
-        const args = [projectName, '--force', '--json-output'];
-        if (preserveDatabase) {
-            args.push('--preserve-database');
-        }
-        
+        // podium remove PRESERVES the database by default; --force-db-delete is
+        // what drops it. (The legacy --force flag is an alias for
+        // --force-db-delete, not "skip prompts" — passing it here used to delete
+        // databases the user asked to keep.)
+        const args = [projectName, '--json-output'];
+        args.push(preserveDatabase ? '--preserve-database' : '--force-db-delete');
+
         const result = await ipcRenderer.invoke('execute-podium', 'remove', args);
         
         hideLoadingOverlay();
@@ -706,7 +796,7 @@ if (ipcRenderer) {
 async function testStartProject(projectName: string): Promise<void> {
     console.log('🧪 Testing startProject with:', projectName);
     try {
-        const result = await ipcRenderer.invoke('execute-command', 'podium', ['start', projectName]);
+        const result = await ipcRenderer.invoke('execute-podium', 'up', [projectName]);
         console.log('✅ Command result:', result);
     } catch (error) {
         console.error('❌ Command failed:', error);
@@ -717,7 +807,10 @@ async function testStartProject(projectName: string): Promise<void> {
 async function startServices(): Promise<void> {
     try {
         showLoadingOverlay('Starting Services', 'Starting all shared services...');
-        const result = await ipcRenderer.invoke('execute-podium', 'start-services', ['--json-output']);
+        // No flags: the podium dispatcher invokes start_services.sh/stop_services.sh
+        // without forwarding arguments, so --json-output never reaches them.
+        // Success is judged by the exit code.
+        const result = await ipcRenderer.invoke('execute-podium', 'start-services', []);
         
         hideLoadingOverlay();
         
@@ -741,7 +834,7 @@ async function startServices(): Promise<void> {
 async function stopServices(): Promise<void> {
     try {
         showLoadingOverlay('Stopping Services', 'Stopping all shared services...');
-        const result = await ipcRenderer.invoke('execute-podium', 'stop-services', ['--json-output']);
+        const result = await ipcRenderer.invoke('execute-podium', 'stop-services', []);
         
         hideLoadingOverlay();
         
@@ -918,6 +1011,203 @@ function handleCreateProject(): void {
 
 // Functions made globally available at end of file
 
+// ---------------------------------------------------------------------------
+// Install an app (`podium install <app> [name]`)
+//
+// Distinct from New Project on purpose: `new` scaffolds a framework you write,
+// `install` deploys finished software. The database is fixed by each installer,
+// so it is shown as information and never offered as a choice.
+// ---------------------------------------------------------------------------
+
+interface CatalogApp {
+    slug: string;
+    display: string;
+    database: string;
+    note: string;
+}
+
+let appCatalog: CatalogApp[] = [];
+let selectedApp: CatalogApp | null = null;
+let installInProgress = false;
+
+async function showInstallApp(): Promise<void> {
+    selectedApp = null;
+    installInProgress = false;
+
+    // Reset the modal from any previous run
+    const search = document.getElementById('install-search') as HTMLInputElement;
+    const nameInput = document.getElementById('install-project-name') as HTMLInputElement;
+    const output = document.getElementById('install-output');
+    if (search) search.value = '';
+    if (nameInput) nameInput.value = '';
+    if (output) output.textContent = '';
+
+    setInstallView('picker');
+    showModal('install-app-modal');
+
+    if (appCatalog.length === 0) {
+        const result = await ipcRenderer.invoke('get-app-catalog');
+        appCatalog = result.apps || [];
+
+        if (result.error) {
+            console.error('Failed to load app catalogue:', result.error);
+            const list = document.getElementById('install-app-list');
+            if (list) {
+                list.innerHTML = `<p class="app-list-empty">Could not read the app catalogue.<br><small>${escapeHtml(result.error)}</small></p>`;
+            }
+            return;
+        }
+    }
+
+    renderAppCatalog();
+}
+
+function setInstallView(view: 'picker' | 'progress'): void {
+    const picker = document.getElementById('install-picker');
+    const progress = document.getElementById('install-progress');
+    const submit = document.getElementById('install-submit-btn') as HTMLButtonElement;
+    const cancel = document.getElementById('install-cancel-btn') as HTMLButtonElement;
+
+    if (picker) picker.style.display = view === 'picker' ? 'block' : 'none';
+    if (progress) progress.style.display = view === 'progress' ? 'block' : 'none';
+    if (submit) submit.style.display = view === 'picker' ? '' : 'none';
+    if (cancel) cancel.textContent = view === 'picker' ? 'Cancel' : 'Close';
+}
+
+function escapeHtml(value: string): string {
+    const div = document.createElement('div');
+    div.textContent = value;
+    return div.innerHTML;
+}
+
+function renderAppCatalog(): void {
+    const list = document.getElementById('install-app-list');
+    const countLabel = document.getElementById('install-app-count');
+    if (!list) return;
+
+    const query = ((document.getElementById('install-search') as HTMLInputElement)?.value || '')
+        .trim()
+        .toLowerCase();
+
+    const matches = query === ''
+        ? appCatalog
+        : appCatalog.filter((app: CatalogApp) =>
+            app.slug.toLowerCase().includes(query) ||
+            app.display.toLowerCase().includes(query) ||
+            app.note.toLowerCase().includes(query));
+
+    if (countLabel) {
+        countLabel.textContent = query === ''
+            ? `(${appCatalog.length} apps)`
+            : `(${matches.length} of ${appCatalog.length})`;
+    }
+
+    if (matches.length === 0) {
+        list.innerHTML = '<p class="app-list-empty">No apps match that search.</p>';
+        return;
+    }
+
+    list.innerHTML = matches.map((app: CatalogApp) => {
+        const selected = selectedApp?.slug === app.slug ? ' selected' : '';
+        // Empty database means the app manages its own storage internally.
+        const database = app.database
+            ? `<span class="app-db">${escapeHtml(app.database)}</span>`
+            : '<span class="app-db app-db-none">self-contained</span>';
+        const note = app.note ? `<p class="app-note">${escapeHtml(app.note)}</p>` : '';
+
+        return `
+            <div class="app-entry${selected}" onclick="selectApp('${escapeHtml(app.slug)}')" data-testid="app-${escapeHtml(app.slug)}">
+                <div class="app-entry-header">
+                    <strong>${escapeHtml(app.display)}</strong>
+                    <code class="app-slug">${escapeHtml(app.slug)}</code>
+                    ${database}
+                </div>
+                ${note}
+            </div>
+        `;
+    }).join('');
+}
+
+function selectApp(slug: string): void {
+    selectedApp = appCatalog.find((app: CatalogApp) => app.slug === slug) || null;
+
+    const submit = document.getElementById('install-submit-btn') as HTMLButtonElement;
+    if (submit) {
+        submit.disabled = selectedApp === null;
+        submit.textContent = selectedApp ? `Install ${selectedApp.display}` : 'Install';
+    }
+
+    renderAppCatalog();
+}
+
+async function handleInstallApp(): Promise<void> {
+    if (!selectedApp || installInProgress) return;
+
+    clearFieldErrors();
+
+    const projectName = (document.getElementById('install-project-name') as HTMLInputElement)?.value?.trim() || '';
+    if (projectName) {
+        const validation = validateProjectName(projectName);
+        if (!validation.valid) {
+            showFieldError('install-project-name', validation.error!);
+            return;
+        }
+    }
+
+    // Installing writes /etc/hosts through setup + up.
+    const sudoOk = await ipcRenderer.invoke('ensure-sudo');
+    if (!sudoOk) {
+        showError('Could not authenticate for the hosts file change. Run the install from a terminal instead.');
+        return;
+    }
+
+    const app = selectedApp;
+    const target = projectName || app.slug;
+
+    installInProgress = true;
+    setInstallView('progress');
+
+    const title = document.getElementById('install-progress-title');
+    if (title) title.textContent = `Installing ${app.display} as "${target}"… this can take several minutes.`;
+
+    // Deliberately NOT --json-output: it suppresses all human-readable output,
+    // including the URL, credentials and notes printed at the end, and would
+    // leave a failure with an empty stdout. --one-off skips the AI handoff,
+    // which has nothing to attach to in a GUI.
+    const args = ['install', app.slug];
+    if (projectName) args.push(projectName);
+    args.push('--one-off');
+
+    try {
+        const result = await ipcRenderer.invoke('execute-command-stream', 'podium', args);
+
+        installInProgress = false;
+
+        if (result.code === 0) {
+            showSuccess(`${app.display} installed at http://${target}/`);
+            if (title) title.textContent = `${app.display} is installed — http://${target}/`;
+        } else {
+            showError(`Install failed (exit ${result.code}). See the output above.`);
+            if (title) title.textContent = `Install of ${app.display} failed (exit ${result.code}).`;
+        }
+
+        loadProjects();
+        loadServices();
+    } catch (error) {
+        installInProgress = false;
+        showError('Error installing app: ' + (error as Error).message);
+    }
+}
+
+// Live output from the streamed install
+ipcRenderer.on('command-stream-data', (_event: any, payload: { type: string; data: string }) => {
+    const output = document.getElementById('install-output');
+    if (!output || !installInProgress) return;
+
+    output.textContent += payload.data;
+    output.scrollTop = output.scrollHeight;
+});
+
 function cloneProject(): void {
     showModal('clone-project-modal');
 }
@@ -961,12 +1251,16 @@ async function submitCloneProject(): Promise<void> {
         closeModal();
         showLoadingOverlay('Cloning Project', `Cloning ${repoUrl}...`);
         
-        const args = [repoUrl];
+        // Signature is `podium clone <mode> <repo> [name]` — the mode positional
+        // is required and the command hard-errors without it.
+        const cloneMode = (document.getElementById('clone-mode') as HTMLSelectElement)?.value || 'work-directly';
+
+        const args = [cloneMode, repoUrl];
         if (projectName && projectName.trim()) {
             args.push(projectName.trim());
         }
         args.push('--json-output');
-        
+
         const result = await ipcRenderer.invoke('execute-podium', 'clone', args);
         
         hideLoadingOverlay();
@@ -1170,16 +1464,14 @@ async function submitNewProject(): Promise<void> {
         closeModal();
         showLoadingOverlay('Creating Project', `Creating ${projectType} project: ${projectName}...`);
         
-        // Use the sanitized container name for the actual project creation
-        const args = [sanitizedContainerName, '--framework', projectType, '--database', 'mysql', '--no-github', '--json-output'];
-        
-        // Add metadata parameters (use original projectName as display name)
-        args.push('--display-name', sanitizeMetadata(projectName));
-        if (projectDescription) {
-            args.push('--description', sanitizeMetadata(projectDescription));
-        }
-        args.push('--emoji', projectEmoji);
-        
+        // Signature is `podium new <framework> <name>` — framework is the FIRST
+        // positional, not a flag. There is no --framework option, and the
+        // display-name/description/emoji flags no longer exist; the GUI stores
+        // that metadata itself after creation (see updateMetadataAfterCreate).
+        // The database is left to the CLI, which auto-selects a supported engine
+        // per framework and rejects combinations that don't work.
+        const args = [projectType, sanitizedContainerName, '--json-output'];
+
         // Add version if specified
         if (projectType === 'laravel') {
             const versionInput = document.getElementById('laravel-version') as HTMLInputElement;
@@ -1195,19 +1487,32 @@ async function submitNewProject(): Promise<void> {
             }
         }
         
-        // Add GitHub options if specified
+        // GitHub: exactly one of these, never both. The org flag is
+        // --github-org (not --org, which the CLI rejects as unknown).
         const createGithub = (document.getElementById('create-github-repo') as HTMLInputElement)?.checked;
         if (createGithub) {
-            args.push('--github');
-            const org = (document.getElementById('organization') as HTMLInputElement)?.value;
-            if (org) args.push('--org', org);
+            const org = (document.getElementById('organization') as HTMLInputElement)?.value?.trim();
+            if (org) {
+                args.push('--github-org', org);
+            } else {
+                args.push('--github');
+            }
+        } else {
+            args.push('--no-github');
         }
-        
+
         const result = await ipcRenderer.invoke('execute-podium', 'new', args);
-        
+
         hideLoadingOverlay();
-        
+
         if (result.code === 0) {
+            // The CLI no longer stores display metadata, so persist it here.
+            await ipcRenderer.invoke('update-project-metadata', sanitizedContainerName, {
+                display_name: sanitizeMetadata(projectName),
+                description: projectDescription ? sanitizeMetadata(projectDescription) : '',
+                emoji: projectEmoji
+            });
+
             showSuccess(`Project "${projectName}" created successfully!`);
         } else {
             showError(`Failed to create project: ${result.stderr || result.stdout}`);
@@ -1415,12 +1720,16 @@ function editProject(projectName: string): void {
     currentProjectName = projectName;
     
     // Find the project data
-    const project = projects.find(p => p.name === projectName);
-    if (!project) {
+    const parsed = projects.find(p => p.name === projectName);
+    if (!parsed) {
         showError('Project not found');
         return;
     }
-    
+
+    // Same reason as renderProjects: read display metadata from the cache, not
+    // from the parsed status object, which does not carry it.
+    const project = withMetadata(parsed);
+
     // Populate the form
     const displayNameField = document.getElementById('edit-display-name') as HTMLInputElement;
     const descriptionField = document.getElementById('edit-description') as HTMLInputElement;
@@ -1468,7 +1777,17 @@ async function submitEditProject(): Promise<void> {
         hideLoadingOverlay();
         
         if (result.success) {
+            // Keep the cache in step with what was just written to disk, so the
+            // grid reflects the edit immediately rather than after a refresh.
+            projectMetadata[currentProjectName] = {
+                display_name: displayName,
+                description: description,
+                emoji: emoji
+            };
+
             showSuccess(`Project "${displayName}" updated successfully!`);
+            renderProjects();
+
             // Refresh project list
             setTimeout(() => {
                 loadProjects();
@@ -1483,6 +1802,10 @@ async function submitEditProject(): Promise<void> {
 }
 
 // Export functions for global access
+(window as any).showInstallApp = showInstallApp;
+(window as any).renderAppCatalog = renderAppCatalog;
+(window as any).selectApp = selectApp;
+(window as any).handleInstallApp = handleInstallApp;
 (window as any).refreshProjects = refreshProjects;
 (window as any).manualRefresh = manualRefresh;
 (window as any).startAutoRefresh = startAutoRefresh;

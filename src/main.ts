@@ -195,28 +195,43 @@ function createWindow(): void {
 
 type PodiumStatus = 'configured' | 'not-configured' | 'not-installed';
 
+// Podium's machine-wide config. Written by `podium configure`; the CLI reads it
+// from this fixed path, so there is nothing to search for.
+const PODIUM_ENV_PATH = '/etc/podium-cli/.env';
+
+// Installed location of the CLI itself. Only used as a fallback when `podium`
+// is not on PATH.
+const PODIUM_CLI_DIR = '/usr/local/share/podium-cli';
+
+// Read a single KEY=value out of Podium's config. Returns null when the file is
+// absent, the key is missing, or the value is empty.
+function readEnvValue(key: string): string | null {
+  try {
+    if (!fs.existsSync(PODIUM_ENV_PATH)) return null;
+
+    const match = fs.readFileSync(PODIUM_ENV_PATH, 'utf8').match(new RegExp(`^${key}=(.*)$`, 'm'));
+    const value = match?.[1]?.trim().replace(/^["']|["']$/g, '') ?? '';
+
+    return value === '' ? null : value;
+  } catch (error) {
+    debugLog('Failed to read Podium config', { key, error: (error as Error).message });
+    return null;
+  }
+}
+
 function checkPodiumStatus(): PodiumStatus {
   try {
     // Check if podium command exists in PATH
-    execSync('podium help --no-coloring', { stdio: 'pipe' });
-    
-    // Podium CLI exists, now check if it's configured
-    // Look for docker-stack/.env in common installation locations
-    const possibleConfigPaths: string[] = [
-      '/usr/local/share/podium-cli/docker-stack/.env',
-      path.join(os.homedir(), 'cbc-development/docker-stack/.env'),
-      path.join(os.homedir(), 'podium-cli/docker-stack/.env'),
-      path.join(__dirname, '../../cbc-development/docker-stack/.env'),
-      path.join(__dirname, '../../podium-cli/docker-stack/.env')
-    ];
-    
-    for (const configPath of possibleConfigPaths) {
-      if (fs.existsSync(configPath)) {
-        return 'configured';
-      }
+    execSync('podium help --no-colors', { stdio: 'pipe' });
+
+    // Installed. Configured means the env file exists AND names a projects
+    // directory — `podium configure` writes PROJECTS_DIR, and every project
+    // command depends on it.
+    if (!fs.existsSync(PODIUM_ENV_PATH)) {
+      return 'not-configured';
     }
-    
-    return 'not-configured';
+
+    return readEnvValue('PROJECTS_DIR') !== null ? 'configured' : 'not-configured';
   } catch (error) {
     return 'not-installed';
   }
@@ -251,18 +266,16 @@ interface CommandResult {
 // IPC handlers for communicating with Podium CLI
 ipcMain.handle('execute-podium-script', async (event: IpcMainInvokeEvent, scriptName: string, args: string[] = []): Promise<CommandResult> => {
   return new Promise((resolve, reject) => {
-    // Find podium-cli directory
-    const podiumStatus: PodiumStatus = checkPodiumStatus();
-    const podiumCliPath: string | null = podiumStatus === 'configured' ? '/usr/local/share/podium-cli' : null;
-    if (!podiumCliPath) {
+    if (!fs.existsSync(PODIUM_CLI_DIR)) {
       reject(new Error('Podium CLI not found'));
       return;
     }
-    
-    const scriptPath: string = path.join(podiumCliPath, 'scripts', scriptName);
-    
+
+    // Scripts live under src/scripts/, not scripts/.
+    const scriptPath: string = path.join(PODIUM_CLI_DIR, 'src', 'scripts', scriptName);
+
     const childProcess: ChildProcess = spawn('bash', [scriptPath, ...args], {
-      cwd: podiumCliPath,
+      cwd: PODIUM_CLI_DIR,
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env, NO_COLOR: '1' }
     });
@@ -280,7 +293,7 @@ ipcMain.handle('execute-podium-script', async (event: IpcMainInvokeEvent, script
 
     childProcess.on('close', (code: number | null) => {
       resolve({
-        code: code || 0,
+        code: code ?? 1,
         stdout,
         stderr
       });
@@ -321,8 +334,9 @@ async function refreshSudoTimestamp(): Promise<boolean> {
 
 ipcMain.handle('execute-podium', async (event: IpcMainInvokeEvent, subcommand: string, args: string[] = []): Promise<CommandResult> => {
   return new Promise(async (resolve, reject) => {
-    // Commands that modify hosts file need sudo timestamp
-    const sudoCommands = ['new', 'clone', 'setup'];
+    // Commands that modify hosts file need sudo timestamp. `install` runs
+    // `podium setup` + `podium up` internally, so it needs one too.
+    const sudoCommands = ['new', 'clone', 'setup', 'install'];
     if (sudoCommands.includes(subcommand)) {
       debugLog(`Command '${subcommand}' requires sudo, refreshing timestamp`);
       const sudoSuccess = await refreshSudoTimestamp();
@@ -336,56 +350,112 @@ ipcMain.handle('execute-podium', async (event: IpcMainInvokeEvent, subcommand: s
       }
     }
     
-    // Try to use global podium command first, then fallback to local
-    const allArgs: string[] = [subcommand, ...args, '--json-output'];
-    
-    // Try global podium command first
-    let childProcess: ChildProcess = spawn('podium', allArgs, {
-      cwd: os.homedir(), // Run from user's home directory
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env, NO_COLOR: '1' }
-    });
+    // Callers own their flags. `--json-output` is NOT added here: it suppresses
+    // all human-readable output including error text, so a command can fail with
+    // an empty stdout. Only pass it where the caller actually parses JSON, and
+    // always judge success by the exit code.
+    const allArgs: string[] = [subcommand, ...args];
 
-    // If global command fails, try local podium script
-    childProcess.on('error', (error: Error) => {
-      const podiumStatus: PodiumStatus = checkPodiumStatus();
-      const podiumCliPath: string | null = podiumStatus === 'configured' ? '/usr/local/share/podium-cli' : null;
-      if (!podiumCliPath) {
-        reject(new Error('Podium CLI not found'));
-        return;
-      }
-      
-      const podiumPath: string = path.join(podiumCliPath, 'podium');
-      childProcess = spawn('bash', [podiumPath, ...allArgs], {
-        cwd: os.homedir(), // Run from user's home directory, not CLI directory
+    // Collect a spawned process into a CommandResult. Listeners are attached to
+    // the process that is actually running — the previous version re-assigned
+    // the variable in the fallback path and left the listeners on the dead one,
+    // so the fallback never resolved.
+    const run = (command: string, commandArgs: string[]): ChildProcess => {
+      const child: ChildProcess = spawn(command, commandArgs, {
+        cwd: os.homedir(), // Run from user's home directory
         stdio: ['pipe', 'pipe', 'pipe'],
         env: { ...process.env, NO_COLOR: '1' }
       });
-    });
 
-    let stdout: string = '';
-    let stderr: string = '';
+      let stdout: string = '';
+      let stderr: string = '';
 
-    childProcess.stdout?.on('data', (data: Buffer) => {
-      stdout += data.toString();
-    });
-
-    childProcess.stderr?.on('data', (data: Buffer) => {
-      stderr += data.toString();
-    });
-
-    childProcess.on('close', (code: number | null) => {
-      resolve({
-        code: code || 0,
-        stdout,
-        stderr
+      child.stdout?.on('data', (data: Buffer) => {
+        stdout += data.toString();
       });
-    });
 
-    childProcess.on('error', (error: Error) => {
-      reject(error);
+      child.stderr?.on('data', (data: Buffer) => {
+        stderr += data.toString();
+      });
+
+      child.on('close', (code: number | null) => {
+        debugLog('Podium command finished', { subcommand, args, code });
+        resolve({ code: code ?? 1, stdout, stderr });
+      });
+
+      return child;
+    };
+
+    // Try the global podium command first, then fall back to the installed copy.
+    const primary: ChildProcess = run('podium', allArgs);
+
+    primary.on('error', () => {
+      const podiumPath: string = path.join(PODIUM_CLI_DIR, 'src', 'podium');
+      if (!fs.existsSync(podiumPath)) {
+        reject(new Error('Podium CLI not found'));
+        return;
+      }
+
+      const fallback: ChildProcess = run('bash', [podiumPath, ...allArgs]);
+      fallback.on('error', (error: Error) => reject(error));
     });
   });
+});
+
+interface CatalogApp {
+  slug: string;
+  display: string;
+  database: string;
+  note: string;
+}
+
+// The app catalogue is generated by the CLI from its installers
+// (src/scripts/build_catalog.sh), so it is read at runtime rather than
+// duplicated here — a hardcoded copy would rot on every installer change.
+ipcMain.handle('get-app-catalog', async (): Promise<{ apps: CatalogApp[]; error?: string }> => {
+  const catalogPath = path.join(PODIUM_CLI_DIR, 'src', 'catalog', 'apps.json');
+
+  try {
+    if (!fs.existsSync(catalogPath)) {
+      return { apps: [], error: `App catalogue not found at ${catalogPath}` };
+    }
+
+    const parsed = JSON.parse(fs.readFileSync(catalogPath, 'utf8'));
+    const apps: CatalogApp[] = (parsed.apps ?? []).map((app: any) => ({
+      slug: app.slug ?? '',
+      display: app.display ?? app.slug ?? '',
+      // Empty database means the app manages its own storage internally.
+      database: app.database ?? '',
+      note: app.note ?? ''
+    })).filter((app: CatalogApp) => app.slug !== '');
+
+    debugLog('Loaded app catalogue', { count: apps.length });
+    return { apps };
+  } catch (error) {
+    debugLog('Failed to read app catalogue', { error: (error as Error).message });
+    return { apps: [], error: (error as Error).message };
+  }
+});
+
+// MinIO and Meilisearch are OPTIONAL shared services, off unless enabled per
+// machine with `podium enable-service`. `podium status` reports them as
+// "stopped" either way, which in the UI reads as "a service is down" rather
+// than "you never turned this on" — so the GUI filters them by what is actually
+// enabled in OPTIONAL_SERVICES.
+ipcMain.handle('get-optional-services', async (): Promise<string[]> => {
+  const raw = readEnvValue('OPTIONAL_SERVICES');
+  if (!raw) return [];
+
+  return raw
+    .split(/[\s,]+/)
+    .map((name) => name.trim().toLowerCase())
+    .filter((name) => name !== '');
+});
+
+// Installing writes to /etc/hosts (via setup + up), so the renderer asks for a
+// sudo timestamp before starting the streamed command.
+ipcMain.handle('ensure-sudo', async (): Promise<boolean> => {
+  return refreshSudoTimestamp();
 });
 
 interface ProjectStatusResult {
@@ -444,7 +514,7 @@ ipcMain.handle('execute-command', async (event: IpcMainInvokeEvent, command: str
     });
 
     process.on('close', (code: number | null) => {
-      const result: CommandResult = { code: code || 0, stdout, stderr };
+      const result: CommandResult = { code: code ?? 1, stdout, stderr };
       debugLog('Command completed', { command, result });
       resolve(result);
     });
@@ -532,8 +602,8 @@ ipcMain.handle('execute-command-stream', async (event: IpcMainInvokeEvent, comma
     childProcess.on('close', (code: number | null) => {
       const result: StreamCommandResult = { 
         success: code === 0,
-        code: code || 0,
-        exitCode: code || 0,
+        code: code ?? 1,
+        exitCode: code ?? 1,
         stdout,
         stderr
       };
@@ -725,54 +795,154 @@ ipcMain.handle('show-directory-dialog', async (event: IpcMainInvokeEvent, option
   }
 });
 
-// Handler for updating project metadata directly in docker-compose.yaml
-ipcMain.handle("update-project-metadata", async (event: IpcMainInvokeEvent, projectName: string, metadata: { display_name: string; description: string; emoji: string }): Promise<{ success: boolean; error?: string }> => {
+interface ProjectMetadata {
+  display_name: string;
+  description: string;
+  emoji: string;
+}
+
+// Resolve the projects directory from Podium's own config rather than guessing
+// at a list of candidate paths. `podium projects-dir` prints the same value.
+function getProjectsDir(): string {
+  return readEnvValue('PROJECTS_DIR') ?? path.join(os.homedir(), 'podium-projects');
+}
+
+// Run a podium subcommand and collect its text output. The service panels use
+// this rather than driving docker directly, so custom container names and any
+// future CLI fixes are picked up for free.
+function runPodium(args: string[]): Promise<CommandResult> {
+  return new Promise((resolve) => {
+    const child = spawn('podium', args, {
+      cwd: os.homedir(),
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env, NO_COLOR: '1' }
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    child.stdout?.on('data', (data: Buffer) => { stdout += data.toString(); });
+    child.stderr?.on('data', (data: Buffer) => { stderr += data.toString(); });
+    child.on('close', (code: number | null) => {
+      resolve({ code: code ?? 1, stdout: stdout.trim(), stderr: stderr.trim() });
+    });
+    child.on('error', (error: Error) => {
+      resolve({ code: 1, stdout: '', stderr: error.message });
+    });
+
+    child.stdin?.end();
+  });
+}
+
+function parseMemcachedStats(output: string): Record<string, string> {
+  const stats: Record<string, string> = {};
+
+  for (const line of output.split(/\r?\n/)) {
+    if (!line.startsWith('STAT ')) continue;
+
+    const parts = line.trim().split(' ');
+    if (parts.length >= 3 && parts[1] && parts[2]) {
+      stats[parts[1]] = parts[2];
+    }
+  }
+
+  // Format bytes as human readable
+  if (stats.bytes) {
+    const bytes = parseInt(stats.bytes);
+    if (bytes > 1024 * 1024) {
+      stats.bytes = `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+    } else if (bytes > 1024) {
+      stats.bytes = `${(bytes / 1024).toFixed(2)} KB`;
+    } else {
+      stats.bytes = `${bytes} B`;
+    }
+  }
+
+  return stats;
+}
+
+function composePathFor(projectName: string): string | null {
+  const composePath = path.join(getProjectsDir(), projectName, 'docker-compose.yaml');
+  return fs.existsSync(composePath) ? composePath : null;
+}
+
+// Display metadata (friendly name, description, emoji) is a GUI-only concern —
+// the CLI no longer writes or reports an x-metadata block, and `podium status`
+// does not return these fields. The GUI keeps them in the project's
+// docker-compose.yaml under the compose-standard `x-` extension prefix, which
+// Docker ignores, and reads them back itself.
+ipcMain.handle('get-project-metadata', async (event: IpcMainInvokeEvent, projectName: string): Promise<ProjectMetadata | null> => {
   try {
-    // Find projects directory - look in common locations
-    const possibleProjectsPaths: string[] = [
-      path.join(os.homedir(), 'cbc-projects'),
-      path.join(os.homedir(), 'podium-projects'), 
-      path.join(os.homedir(), 'projects'),
-      '/usr/local/share/podium-projects',
-      '/var/www/html'
-    ];
-    
-    let projectsDir: string | null = null;
-    
-    // Try to find the project in each possible location
-    for (const possiblePath of possibleProjectsPaths) {
-      const testPath = path.join(possiblePath, projectName);
-      if (fs.existsSync(testPath)) {
-        projectsDir = possiblePath;
-        break;
+    const composePath = composePathFor(projectName);
+    if (!composePath) return null;
+
+    const content = fs.readFileSync(composePath, 'utf8');
+    const block = content.match(/x-metadata:\s*\n([\s\S]*?)(?=\n\s*\S+:\s*$|\n\S|$)/);
+    const body = block?.[1];
+    if (!body) return null;
+
+    const read = (key: string): string => {
+      const match = body.match(new RegExp(`^\\s*${key}:\\s*"?(.*?)"?\\s*$`, 'm'));
+      return match?.[1] ?? '';
+    };
+
+    return {
+      display_name: read('name'),
+      description: read('description'),
+      emoji: read('emoji')
+    };
+  } catch (error) {
+    debugLog('Error reading project metadata', { projectName, error: (error as Error).message });
+    return null;
+  }
+});
+
+// Handler for updating project metadata directly in docker-compose.yaml
+ipcMain.handle('update-project-metadata', async (event: IpcMainInvokeEvent, projectName: string, metadata: ProjectMetadata): Promise<{ success: boolean; error?: string }> => {
+  try {
+    const composePath = composePathFor(projectName);
+    if (!composePath) {
+      return { success: false, error: 'Project docker-compose.yaml not found' };
+    }
+
+    let content = fs.readFileSync(composePath, 'utf8');
+
+    // Escape double quotes so a name like `My "Cool" App` can't break the YAML.
+    const quote = (value: string): string => `"${(value || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+
+    if (/x-metadata:/.test(content)) {
+      content = content.replace(/(x-metadata:\s*\n(?:[\s\S]*?\n)??\s*emoji:\s*).*/, `$1${quote(metadata.emoji)}`);
+      content = content.replace(/(x-metadata:\s*\n(?:[\s\S]*?\n)??\s*name:\s*).*/, `$1${quote(metadata.display_name)}`);
+      content = content.replace(/(x-metadata:\s*\n(?:[\s\S]*?\n)??\s*description:\s*).*/, `$1${quote(metadata.description)}`);
+    } else {
+      // `podium new` no longer emits an x-metadata block, so create one on the
+      // web-facing service, matching the indentation the CLI's compose uses.
+      const service = content.match(/^(\s{2})(\w[\w-]*):\s*\n(\s{4})image:/m);
+      if (!service) {
+        return { success: false, error: 'Could not locate a service to attach metadata to' };
       }
+
+      const indent = service[3];
+      const block = [
+        `${indent}x-metadata:`,
+        `${indent}  type: "podium-project"`,
+        `${indent}  version: "1.0.0"`,
+        `${indent}  emoji: ${quote(metadata.emoji)}`,
+        `${indent}  name: ${quote(metadata.display_name)}`,
+        `${indent}  description: ${quote(metadata.description)}`,
+        ''
+      ].join('\n');
+
+      // Insert immediately after the service's image line.
+      content = content.replace(/^(\s{4}image:.*\n)/m, `$1${block}`);
     }
-    
-    if (!projectsDir) {
-      return { success: false, error: "Could not find projects directory" };
-    }
-    
-    const dockerComposePath = path.join(projectsDir, projectName, "docker-compose.yaml");
-    
-    if (!fs.existsSync(dockerComposePath)) {
-      return { success: false, error: "Project docker-compose.yaml not found" };
-    }
-    
-    // Read the current file
-    let content = fs.readFileSync(dockerComposePath, "utf8");
-    
-    // Update the metadata fields in the x-metadata section using more specific regex
-    content = content.replace(/(x-metadata:\s*\n\s*emoji:\s*)".*"/, `$1"${metadata.emoji}"`);
-    content = content.replace(/(x-metadata:[\s\S]*?name:\s*)".*"/, `$1"${metadata.display_name}"`);
-    content = content.replace(/(x-metadata:[\s\S]*?description:\s*)".*"/, `$1"${metadata.description}"`);
-    
-    // Write the updated content back
-    fs.writeFileSync(dockerComposePath, content, "utf8");
-    
-    debugLog("Updated project metadata", { projectName, metadata, dockerComposePath });
+
+    fs.writeFileSync(composePath, content, 'utf8');
+
+    debugLog('Updated project metadata', { projectName, metadata, composePath });
     return { success: true };
   } catch (error) {
-    debugLog("Error updating project metadata", { error: (error as Error).message, stack: (error as Error).stack });
+    debugLog('Error updating project metadata', { error: (error as Error).message, stack: (error as Error).stack });
     return { success: false, error: (error as Error).message };
   }
 });
@@ -780,39 +950,19 @@ ipcMain.handle("update-project-metadata", async (event: IpcMainInvokeEvent, proj
 // Handler for getting service statistics
 ipcMain.handle("get-service-stats", async (event: IpcMainInvokeEvent, serviceName: string): Promise<{ success: boolean; stats?: any; error?: string }> => {
   try {
-    let command: string;
-    let args: string[];
-    
-    if (serviceName === "redis") {
-      command = "docker";
-      args = ["exec", "redis", "redis-cli", "INFO"];
-    } else if (serviceName === "memcached") {
-      command = "docker";
-      args = ["exec", "memcached", "echo", "stats", "|", "nc", "localhost", "11211"];
-    } else {
+    if (serviceName === "memcached") {
+      const memcached = await runPodium(["memcache-stats"]);
+      if (memcached.code !== 0) {
+        return { success: false, error: memcached.stderr || "Failed to get stats" };
+      }
+      return { success: true, stats: parseMemcachedStats(memcached.stdout) };
+    }
+
+    if (serviceName !== "redis") {
       return { success: false, error: "Unsupported service" };
     }
-    
-    const result = await new Promise<CommandResult>((resolve) => {
-      const process = spawn(command, args, {
-        stdio: ["pipe", "pipe", "pipe"]
-      });
-      
-      let stdout = "";
-      let stderr = "";
-      
-      process.stdout?.on("data", (data: Buffer) => {
-        stdout += data.toString();
-      });
-      
-      process.stderr?.on("data", (data: Buffer) => {
-        stderr += data.toString();
-      });
-      
-      process.on("close", (code: number | null) => {
-        resolve({ code: code || 0, stdout: stdout.trim(), stderr: stderr.trim() });
-      });
-    });
+
+    const result = await runPodium(["redis", "INFO"]);
     
     if (result.code !== 0) {
       return { success: false, error: result.stderr || "Failed to get stats" };
@@ -821,19 +971,19 @@ ipcMain.handle("get-service-stats", async (event: IpcMainInvokeEvent, serviceNam
     let stats: any = {};
     
     if (serviceName === "redis") {
-      // Parse Redis INFO output
-      const lines = result.stdout.split("\\n");
-      for (const line of lines) {
-        if (line.includes(":")) {
-          const parts = line.split(":");
-          const key = parts[0];
-          const value = parts[1];
-          if (key && value) {
-            stats[key.trim()] = value.trim();
-          }
+      // Parse Redis INFO output. Note: this split used to be "\\n", which is a
+      // literal backslash-n, so no line ever matched and stats came back empty.
+      for (const line of result.stdout.split(/\r?\n/)) {
+        if (line.startsWith("#") || !line.includes(":")) continue;
+
+        const separator = line.indexOf(":");
+        const key = line.slice(0, separator).trim();
+        const value = line.slice(separator + 1).trim();
+        if (key && value) {
+          stats[key] = value;
         }
       }
-      
+
       // Calculate total keys from keyspace info
       let totalKeys = 0;
       for (const [key, value] of Object.entries(stats)) {
@@ -843,32 +993,8 @@ ipcMain.handle("get-service-stats", async (event: IpcMainInvokeEvent, serviceNam
         }
       }
       stats.total_keys = totalKeys.toString();
-      
-    } else if (serviceName === "memcached") {
-      // Parse Memcached stats output
-      const lines = result.stdout.split("\\n");
-      for (const line of lines) {
-        if (line.startsWith("STAT ")) {
-          const parts = line.split(" ");
-          if (parts.length >= 3 && parts[1] && parts[2]) {
-            stats[parts[1]] = parts[2];
-          }
-        }
-      }
-      
-      // Format bytes as human readable
-      if (stats.bytes) {
-        const bytes = parseInt(stats.bytes);
-        if (bytes > 1024 * 1024) {
-          stats.bytes = `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
-        } else if (bytes > 1024) {
-          stats.bytes = `${(bytes / 1024).toFixed(2)} KB`;
-        } else {
-          stats.bytes = `${bytes} B`;
-        }
-      }
     }
-    
+
     debugLog("Service stats retrieved", { serviceName, stats });
     return { success: true, stats };
   } catch (error) {
@@ -880,40 +1006,12 @@ ipcMain.handle("get-service-stats", async (event: IpcMainInvokeEvent, serviceNam
 // Handler for flushing service data
 ipcMain.handle("flush-service-data", async (event: IpcMainInvokeEvent, serviceName: string): Promise<{ success: boolean; error?: string }> => {
   try {
-    let command: string;
-    let args: string[];
-    
-    if (serviceName === "redis") {
-      command = "docker";
-      args = ["exec", "redis", "redis-cli", "FLUSHALL"];
-    } else if (serviceName === "memcached") {
-      command = "docker";
-      args = ["exec", "memcached", "echo", "flush_all", "|", "nc", "localhost", "11211"];
-    } else {
+    if (serviceName !== "redis" && serviceName !== "memcached") {
       return { success: false, error: "Unsupported service" };
     }
-    
-    const result = await new Promise<CommandResult>((resolve) => {
-      const process = spawn(command, args, {
-        stdio: ["pipe", "pipe", "pipe"]
-      });
-      
-      let stdout = "";
-      let stderr = "";
-      
-      process.stdout?.on("data", (data: Buffer) => {
-        stdout += data.toString();
-      });
-      
-      process.stderr?.on("data", (data: Buffer) => {
-        stderr += data.toString();
-      });
-      
-      process.on("close", (code: number | null) => {
-        resolve({ code: code || 0, stdout: stdout.trim(), stderr: stderr.trim() });
-      });
-    });
-    
+
+    const result = await runPodium([serviceName === "redis" ? "redis-flush" : "memcache-flush"]);
+
     if (result.code !== 0) {
       return { success: false, error: result.stderr || "Failed to flush data" };
     }
