@@ -599,6 +599,37 @@ async function run() {
     });
     check('overlay stays clean for short actions', quiet === 'none', quiet);
 
+    // A failed create keeps the overlay up with its output, rather than
+    // concatenating all of stdout — curl progress bars included — into a toast.
+    const failState = await win.evaluate(async () => {
+      window.showLoadingOverlay('Creating', 'working', true);
+      window.__feedOverlay('some/output\nComposer could not find a composer.json file\n');
+      window.failLoadingOverlay('Could not create the project', 'podium new exited with code 1.');
+      await new Promise((r) => setTimeout(r, 200));
+      const spinner = document.querySelector('#loading-overlay .loading-spinner');
+      return {
+        overlayVisible: document.getElementById('loading-overlay').style.display !== 'none',
+        outputVisible: document.getElementById('loading-output').style.display === 'block',
+        outputKept: document.getElementById('loading-output').textContent.includes('composer.json'),
+        dismissShown: document.getElementById('loading-dismiss').style.display !== 'none',
+        spinnerHidden: spinner.style.display === 'none',
+        message: document.getElementById('loading-message').textContent
+      };
+    });
+    check('failure keeps the overlay and its output on screen',
+      failState.overlayVisible && failState.outputVisible && failState.outputKept,
+      JSON.stringify(failState));
+    check('failure swaps the spinner for a dismiss button',
+      failState.spinnerHidden && failState.dismissShown, JSON.stringify(failState));
+
+    await win.evaluate(() => window.hideLoadingOverlay());
+    const restored = await win.evaluate(() => ({
+      spinner: document.querySelector('#loading-overlay .loading-spinner').style.display,
+      dismiss: document.getElementById('loading-dismiss').style.display
+    }));
+    check('dismissing restores the overlay for next time',
+      restored.spinner !== 'none' && restored.dismiss === 'none', JSON.stringify(restored));
+
     // --- Terminals ------------------------------------------------------
     //
     // Sessions are independent and must survive the window being hidden — the

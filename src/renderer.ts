@@ -829,8 +829,30 @@ ipcRenderer.on('command-stream-data', (_event: any, payload: { type: string; dat
     output.scrollTop = output.scrollHeight;
 });
 
+// Keep the overlay up with its output when something fails, so the user can
+// actually read why. Previously the whole of stdout — curl progress bars and
+// all — was concatenated into a toast, which was unreadable.
+function failLoadingOverlay(message: string, details: string): void {
+    overlayStreaming = false;
+
+    const messageEl = document.getElementById('loading-message');
+    const detailsEl = document.getElementById('loading-details');
+    const spinner = document.querySelector('#loading-overlay .loading-spinner') as HTMLElement;
+    const dismiss = document.getElementById('loading-dismiss');
+
+    if (messageEl) messageEl.textContent = message;
+    if (detailsEl) detailsEl.textContent = details;
+    if (spinner) spinner.style.display = 'none';
+    if (dismiss) dismiss.style.display = 'inline-block';
+}
+
 function hideLoadingOverlay(): void {
     overlayStreaming = false;
+
+    const spinner = document.querySelector('#loading-overlay .loading-spinner') as HTMLElement;
+    const dismiss = document.getElementById('loading-dismiss');
+    if (spinner) spinner.style.display = '';
+    if (dismiss) dismiss.style.display = 'none';
     const overlay = document.getElementById('loading-overlay');
     if (overlay) {
         overlay.style.display = 'none';
@@ -2340,6 +2362,16 @@ async function submitNewProject(): Promise<void> {
         const result = await ipcRenderer.invoke('execute-command-stream', 'podium',
             ['new', ...args.filter((a) => a !== '--json-output')]);
 
+        if (result.code !== 0) {
+            // Leave the overlay up: the output pane above already holds the real
+            // reason, and it is far more use than a toast full of progress bars.
+            failLoadingOverlay(
+                'Could not create the project',
+                `podium new exited with code ${result.code}. The output above shows why.`
+            );
+            return;
+        }
+
         hideLoadingOverlay();
 
         if (result.code === 0) {
@@ -2351,8 +2383,6 @@ async function submitNewProject(): Promise<void> {
             });
 
             showSuccess(`Project "${projectName}" created successfully!`);
-        } else {
-            showError(`Failed to create project: ${result.stderr || result.stdout}`);
         }
         
         // Refresh project list
@@ -2640,6 +2670,7 @@ async function submitEditProject(): Promise<void> {
 
 // Export functions for global access
 (window as any).showLoadingOverlay = showLoadingOverlay;
+(window as any).failLoadingOverlay = failLoadingOverlay;
 (window as any).hideLoadingOverlay = hideLoadingOverlay;
 // Test hook: feed the overlay as if execute-command-stream had emitted.
 (window as any).__feedOverlay = (data: string) => {

@@ -548,6 +548,10 @@
                 <!-- Live CLI output for long operations. Hidden unless the
                      caller streams something, so short actions stay clean. -->
                 <pre id="loading-output" class="loading-output" data-testid="loading-output" style="display: none;"></pre>
+                <!-- Only shown when an operation fails, so the output stays
+                     readable instead of being dumped into a toast. -->
+                <button class="btn btn-secondary" id="loading-dismiss" data-testid="loading-dismiss"
+                        onclick="hideLoadingOverlay()" style="display: none; margin-top: 1rem;">Close</button>
             </div>
         </div>
 
