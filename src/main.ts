@@ -497,6 +497,44 @@ ipcMain.handle('get-app-catalog', async (): Promise<{ apps: CatalogApp[]; error?
 // "stopped" either way, which in the UI reads as "a service is down" rather
 // than "you never turned this on" — so the GUI filters them by what is actually
 // enabled in OPTIONAL_SERVICES.
+interface CatalogFramework {
+  slug: string;
+  display: string;
+  runtime: string;
+  databases: string[];
+  note: string;
+}
+
+// Read at runtime for the same reason as the app catalogue: frameworks.json is
+// the CLI's authority on which engines each framework ACTUALLY works with, and
+// a copy here would drift. The GUI previously hardcoded three of the thirteen
+// and sent `--database mysql` for all of them.
+ipcMain.handle('get-framework-catalog', async (): Promise<{ frameworks: CatalogFramework[]; error?: string }> => {
+  const catalogPath = path.join(PODIUM_CLI_DIR, 'src', 'catalog', 'frameworks.json');
+
+  try {
+    if (!fs.existsSync(catalogPath)) {
+      return { frameworks: [], error: `Framework catalogue not found at ${catalogPath}` };
+    }
+
+    const parsed = JSON.parse(fs.readFileSync(catalogPath, 'utf8'));
+    const frameworks: CatalogFramework[] = (parsed.frameworks ?? []).map((fw: any) => ({
+      slug: fw.slug ?? '',
+      display: fw.display ?? fw.slug ?? '',
+      runtime: fw.runtime ?? '',
+      // An empty/absent list means every engine is fine.
+      databases: Array.isArray(fw.databases) ? fw.databases : [],
+      note: fw.note ?? ''
+    })).filter((fw: CatalogFramework) => fw.slug !== '');
+
+    debugLog('Loaded framework catalogue', { count: frameworks.length });
+    return { frameworks };
+  } catch (error) {
+    debugLog('Failed to read framework catalogue', { error: (error as Error).message });
+    return { frameworks: [], error: (error as Error).message };
+  }
+});
+
 ipcMain.handle('get-projects-dir', async (): Promise<string> => getProjectsDir());
 
 ipcMain.handle('get-optional-services', async (): Promise<string[]> => {

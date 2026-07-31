@@ -377,9 +377,77 @@ async function run() {
     await win.click(t('new-project'));
     await win.waitForSelector('#new-project-modal.show', { timeout: 5000 });
     check('new project modal opens', await win.isVisible('#new-project-modal'));
-    for (const fw of ['laravel', 'wordpress', 'php']) {
-      check(`framework option "${fw}" present`, await win.locator(t(`framework-${fw}`)).count() === 1);
+
+    // Assert against the CLI's catalogue, not a list copied into the test —
+    // a hardcoded list here would drift exactly the way the form used to.
+    const fwCatalog = await app.evaluate(async ({ ipcMain }) =>
+      ipcMain._invokeHandlers.get('get-framework-catalog')({})
+    );
+    check('framework catalogue loads from the CLI',
+      !fwCatalog.error && fwCatalog.frameworks.length > 0,
+      fwCatalog.error || `${fwCatalog.frameworks?.length} frameworks`);
+
+    await win.waitForFunction(
+      () => document.querySelectorAll('#framework-list input[name="project-type"]').length > 0,
+      null, { timeout: 10000 }
+    );
+
+    const offered = await win.locator('#framework-list input[name="project-type"]')
+      .evaluateAll((els) => els.map((e) => e.value));
+    const expectedFw = fwCatalog.frameworks.map((f) => f.slug);
+    check(`offers every framework the CLI has (${expectedFw.length})`,
+      expectedFw.length === offered.length && expectedFw.every((s) => offered.includes(s)),
+      `missing: ${expectedFw.filter((s) => !offered.includes(s)).join(',') || 'none'}`);
+
+    // Each framework must offer only the engines it actually supports. This is
+    // the bug that made the form send `--database mysql` for all of them.
+    for (const fw of fwCatalog.frameworks) {
+      await win.click(`${t(`framework-${fw.slug}`)} input`);
+      const opts = await win.locator('#project-database option')
+        .evaluateAll((els) => els.map((e) => e.value));
+
+      // "" is the Auto entry, which sends no --database at all.
+      const engines = opts.filter((v) => v !== '');
+      const ok = engines.length === fw.databases.length
+        && fw.databases.every((d) => engines.includes(d));
+      if (!ok) {
+        check(`${fw.slug} offers exactly its supported engines`, false,
+          `expected [${fw.databases}] got [${engines}]`);
+        break;
+      }
     }
+    check('every framework offers exactly its supported engines', true);
+
+    // WordPress is the sharp case: MySQL only.
+    await win.click(`${t('framework-wordpress')} input`);
+    const wpEngines = await win.locator('#project-database option')
+      .evaluateAll((els) => els.map((e) => e.value).filter((v) => v !== ''));
+    check('wordpress offers only mysql', wpEngines.length === 1 && wpEngines[0] === 'mysql',
+      wpEngines.join(','));
+
+    // Version inputs only appear where --version means something.
+    await win.click(`${t('framework-php')} input`);
+    check('php shows its version selector', await win.isVisible('#php-version-group'));
+    await win.click(`${t('framework-django')} input`);
+    check('django shows no version selector',
+      !(await win.isVisible('#php-version-group'))
+      && !(await win.isVisible('#laravel-version-group'))
+      && !(await win.isVisible('#wordpress-version-group')));
+
+    // The catalogue note is the only thing that explains an in-house framework.
+    await win.click(`${t('framework-kavera')} input`);
+    const kaveraNote = await win.textContent('#framework-note');
+    check('shows the catalogue note for an in-house framework',
+      (kaveraNote || '').length > 20, kaveraNote || '<empty>');
+
+    // Same trap as the install modal: 13 frameworks plus a long catalogue note
+    // makes this form tall enough to push the submit button off screen.
+    const submitVisible = await win.locator(t('create-project-submit')).evaluate((el) => {
+      const box = el.getBoundingClientRect();
+      return box.bottom <= window.innerHeight && box.top >= 0 && box.height > 0;
+    });
+    check('create button stays within the viewport with the full catalogue', submitVisible);
+
     await screenshot(win, '05-new-project');
     await win.click('#new-project-modal .modal-close');
 

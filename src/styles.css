@@ -1679,6 +1679,7 @@ span.status-indicator {
     filter: brightness(1.15);
 }
 
+#new-project-modal .modal-content,
 .create-modal .modal-content,
 .terminal-modal .modal-content {
     display: flex;
@@ -1687,6 +1688,7 @@ span.status-indicator {
     max-height: 86vh;
 }
 
+#new-project-modal .modal-body,
 .create-modal .modal-body,
 .terminal-modal .modal-body {
     overflow-y: auto;
@@ -1694,6 +1696,7 @@ span.status-indicator {
     min-height: 0;
 }
 
+#new-project-modal .form-actions,
 .create-modal .form-actions,
 .terminal-modal .form-actions {
     flex: 0 0 auto;
@@ -1785,4 +1788,45 @@ span.status-indicator {
     border: 1px solid var(--border-subtle);
     border-radius: 8px;
     padding: 0.5rem;
+}
+
+/* Framework picker, built from the CLI's frameworks.json and grouped by runtime */
+.framework-group {
+    display: block;
+}
+
+.framework-runtime {
+    margin-bottom: 0.7rem;
+}
+
+.runtime-label {
+    display: block;
+    font-size: 0.72em;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    margin-bottom: 0.3rem;
+}
+
+.framework-options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 1rem;
+}
+
+.framework-option {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+#framework-note:not(:empty) {
+    display: block;
+    margin-top: 0.5rem;
+    padding: 0.5rem 0.7rem;
+    border-left: 2px solid var(--border-accent);
+    color: var(--text-secondary);
+    line-height: 1.4;
 }

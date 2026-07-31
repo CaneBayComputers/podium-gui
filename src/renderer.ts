@@ -144,26 +144,135 @@ function toggleGithubOptions(): void {
     }
 }
 
-function toggleVersionGroups(): void {
-    const projectType: string = (document.querySelector('input[name="project-type"]:checked') as HTMLInputElement).value;
-    const laravelGroup: HTMLElement | null = document.getElementById('laravel-version-group');
-    const wordpressGroup: HTMLElement | null = document.getElementById('wordpress-version-group');
-    
-    // Hide all version groups first
-    if (laravelGroup) laravelGroup.style.display = 'none';
-    if (wordpressGroup) wordpressGroup.style.display = 'none';
-    
-    // Show the appropriate version group and reset to "latest"
-    if (projectType === 'laravel' && laravelGroup) {
-        laravelGroup.style.display = 'block';
-        const versionInput = document.getElementById('laravel-version') as HTMLInputElement;
-        if (versionInput) versionInput.value = 'latest';
-    } else if (projectType === 'wordpress' && wordpressGroup) {
-        wordpressGroup.style.display = 'block';
-        const versionInput = document.getElementById('wordpress-version') as HTMLInputElement;
-        if (versionInput) versionInput.value = 'latest';
+// ---------------------------------------------------------------------------
+// Framework catalogue (New Project)
+//
+// Read from the CLI's src/catalog/frameworks.json rather than hardcoded. The
+// form used to offer 3 of the 13 frameworks and send `--database mysql` for
+// every one of them, which the CLI then silently coerced to whatever that
+// framework actually supports.
+// ---------------------------------------------------------------------------
+
+interface CatalogFramework {
+    slug: string;
+    display: string;
+    runtime: string;
+    databases: string[];
+    note: string;
+}
+
+let frameworkCatalog: CatalogFramework[] = [];
+
+// `--version` only means something for these three; everything else takes the
+// framework's own current release.
+const VERSIONED_FRAMEWORKS = ['laravel', 'wordpress', 'php'];
+
+async function loadFrameworkCatalog(): Promise<void> {
+    if (frameworkCatalog.length > 0) return;
+
+    const result = await ipcRenderer.invoke('get-framework-catalog');
+    frameworkCatalog = result.frameworks || [];
+
+    const list = document.getElementById('framework-list');
+    if (!list) return;
+
+    if (frameworkCatalog.length === 0) {
+        list.innerHTML = `<p class="app-list-empty">Could not read the framework catalogue.<br><small>${escapeHtml(result.error || '')}</small></p>`;
+        return;
     }
-    // Note: PHP doesn't need version selection
+
+    // Group by runtime, the way the CLI's own listing reads.
+    const runtimes: string[] = [];
+    for (const fw of frameworkCatalog) {
+        if (!runtimes.includes(fw.runtime)) runtimes.push(fw.runtime);
+    }
+
+    list.innerHTML = runtimes.map((runtime) => {
+        const rows = frameworkCatalog
+            .filter((fw) => fw.runtime === runtime)
+            .map((fw) => `
+                <label class="framework-option" data-testid="framework-${escapeHtml(fw.slug)}">
+                    <input type="radio" name="project-type" value="${escapeHtml(fw.slug)}"
+                           onchange="onFrameworkChange()">
+                    <span>${escapeHtml(fw.display)}</span>
+                </label>
+            `).join('');
+
+        return `
+            <div class="framework-runtime">
+                <span class="runtime-label">${escapeHtml(runtime)}</span>
+                <div class="framework-options">${rows}</div>
+            </div>
+        `;
+    }).join('');
+
+    // Laravel stays the default, as before.
+    const preferred = (list.querySelector('input[value="laravel"]')
+        || list.querySelector('input[name="project-type"]')) as HTMLInputElement | null;
+    if (preferred) preferred.checked = true;
+
+    onFrameworkChange();
+}
+
+function selectedFramework(): CatalogFramework | null {
+    const checked = document.querySelector('input[name="project-type"]:checked') as HTMLInputElement | null;
+    if (!checked) return null;
+    return frameworkCatalog.find((fw) => fw.slug === checked.value) || null;
+}
+
+function onFrameworkChange(): void {
+    const framework = selectedFramework();
+    if (!framework) return;
+
+    // Offer only the engines this framework actually works with. "Auto" is the
+    // default and sends no --database at all, letting the CLI apply its own
+    // per-framework rule rather than the GUI second-guessing it.
+    const select = document.getElementById('project-database') as HTMLSelectElement;
+    if (select) {
+        const options = ['<option value="">Auto — chosen by Podium</option>'];
+        for (const db of framework.databases) {
+            options.push(`<option value="${escapeHtml(db)}">${escapeHtml(db)}</option>`);
+        }
+        select.innerHTML = options.join('');
+    }
+
+    const help = document.getElementById('project-database-help');
+    if (help) {
+        help.textContent = framework.databases.length === 1
+            ? `${framework.display} only works with ${framework.databases[0]}.`
+            : 'Only engines this framework supports are offered.';
+    }
+
+    // The catalogue's note carries what the name alone cannot — in-house
+    // frameworks especially, which no one can be expected to recognise.
+    const note = document.getElementById('framework-note');
+    if (note) note.textContent = framework.note || '';
+
+    toggleVersionGroups();
+}
+
+function toggleVersionGroups(): void {
+    const framework = selectedFramework();
+    const slug = framework?.slug || '';
+
+    const versionGroups: Array<[string, string]> = [
+        ['laravel-version-group', 'laravel'],
+        ['wordpress-version-group', 'wordpress'],
+        ['php-version-group', 'php']
+    ];
+
+    for (const [id, owner] of versionGroups) {
+        const group = document.getElementById(id);
+        if (!group) continue;
+
+        const show = slug === owner && VERSIONED_FRAMEWORKS.includes(slug);
+        group.style.display = show ? 'block' : 'none';
+
+        if (show && owner !== 'php') {
+            const input = document.getElementById(`${owner}-version`) as HTMLInputElement;
+            if (input) input.value = 'latest';
+        }
+    }
 }
 
 async function loadProjects(): Promise<void> {
@@ -611,8 +720,10 @@ function openUrl(url: string): void {
     shell.openExternal(url);
 }
 
-function showCreateProject(): void {
+async function showCreateProject(): Promise<void> {
     showModal('new-project-modal');
+    // Built from the CLI's catalogue on first open, then cached.
+    await loadFrameworkCatalog();
 }
 
 
@@ -990,12 +1101,13 @@ async function stopAllProjects(): Promise<void> {
 }
 
 // Additional GUI functions
-function createNewProject(): void {
+async function createNewProject(): Promise<void> {
     console.log('DEBUG: createNewProject called');
-    console.log('DEBUG: About to call showModal with new-project-modal');
-    
+
     showModal('new-project-modal');
-    console.log('DEBUG: showModal call completed');
+    // The header button and the empty-state button are separate entry points;
+    // both need the catalogue built before the form is usable.
+    await loadFrameworkCatalog();
 }
 
 // Make this function available globally immediately
@@ -1871,25 +1983,31 @@ async function submitNewProject(): Promise<void> {
         // positional, not a flag. There is no --framework option, and the
         // display-name/description/emoji flags no longer exist; the GUI stores
         // that metadata itself after creation (see updateMetadataAfterCreate).
-        // The database is left to the CLI, which auto-selects a supported engine
-        // per framework and rejects combinations that don't work.
         const args = [projectType, sanitizedContainerName, '--json-output'];
 
-        // Add version if specified
-        if (projectType === 'laravel') {
-            const versionInput = document.getElementById('laravel-version') as HTMLInputElement;
+        // Only send --database when the user picked a specific engine. Left on
+        // "Auto" the CLI applies its own per-framework default, which is better
+        // than the GUI guessing: it used to hardcode mysql for every framework,
+        // and the CLI silently coerced it to something the framework supports.
+        const database = (document.getElementById('project-database') as HTMLSelectElement)?.value || '';
+        if (database) {
+            args.push('--database', database);
+        }
+
+        // --version only means something for these three.
+        if (projectType === 'laravel' || projectType === 'wordpress') {
+            const versionInput = document.getElementById(`${projectType}-version`) as HTMLInputElement;
             const version = versionInput?.value?.trim();
-            if (version && version !== '') {
+            if (version) {
                 args.push('--version', version);
             }
-        } else if (projectType === 'wordpress') {
-            const versionInput = document.getElementById('wordpress-version') as HTMLInputElement;
-            const version = versionInput?.value?.trim();
-            if (version && version !== '') {
-                args.push('--version', version);
+        } else if (projectType === 'php') {
+            const phpVersion = (document.getElementById('php-version') as HTMLSelectElement)?.value;
+            if (phpVersion) {
+                args.push('--version', phpVersion);
             }
         }
-        
+
         // GitHub: exactly one of these, never both. The org flag is
         // --github-org (not --org, which the CLI rejects as unknown).
         const createGithub = (document.getElementById('create-github-repo') as HTMLInputElement)?.checked;
@@ -2221,6 +2339,8 @@ async function submitEditProject(): Promise<void> {
 (window as any).startAutoRefresh = startAutoRefresh;
 (window as any).stopAutoRefresh = stopAutoRefresh;
 (window as any).showCreateProject = showCreateProject;
+(window as any).onFrameworkChange = onFrameworkChange;
+(window as any).loadFrameworkCatalog = loadFrameworkCatalog;
 (window as any).startProject = startProject;
 (window as any).stopProject = stopProject;
 (window as any).removeProject = removeProject;
