@@ -14,8 +14,11 @@ A desktop front end for [Podium CLI](https://github.com/CaneBayComputers/podium-
 - **Install an app** — browse and search the 100+ app library, install with a name. The database comes fixed by the installer, so there is nothing to get wrong.
 - **New project** — scaffold any supported framework with a database of your choosing.
 - **Clone** — pull an existing repo into a Podium project, work directly or fork it.
+- **Modify with AI** — every project tile can reopen its AI session where you left off, in an embedded terminal.
 - **Services at a glance** — start, stop and flush the shared services; live status for every project.
-- **Build terminal** — watch installs and builds stream as they happen, in the window.
+- **Embedded terminals, tabbed** — AI sessions run in real terminals inside the window. Several at once, each in its own tab; hiding the window leaves them running.
+- **AI agent setup** — choose between Claude, Codex, Gemini and Aider from the app. Podium installs the one you pick if it is not already on the machine.
+- **Live output** — creates and installs stream their CLI output as they run, and a failure keeps that output on screen instead of hiding it.
 
 Projects get PHP 8.3, Python 3 or Node 22 containers with nginx, supervisor and the database drivers already compiled in, and a real hostname instead of a port number.
 
