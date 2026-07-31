@@ -1959,3 +1959,22 @@ span.status-indicator {
     background: rgba(139, 92, 246, 0.15);
     filter: none;
 }
+
+/* Live CLI output inside the loading overlay. Scaffolding a framework runs
+   composer/npm/pip for minutes; a bare spinner gave no sign of progress. */
+.loading-output {
+    margin-top: 1rem;
+    max-height: 40vh;
+    width: min(80vw, 900px);
+    overflow-y: auto;
+    text-align: left;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    padding: 0.7rem;
+    font-size: 0.75rem;
+    line-height: 1.45;
+    color: var(--text-secondary);
+    white-space: pre-wrap;
+    word-break: break-word;
+}

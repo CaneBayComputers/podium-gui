@@ -715,6 +715,17 @@ ipcMain.handle('classify-idea', async (event: IpcMainInvokeEvent, idea: string):
 // `podium create` is meaningless without an AI agent, and AI_AGENT is empty on a
 // fresh install. ai-set reports it as JSON (its own --help documents this), so
 // there is no need to read the env file.
+// Full ai-set state, for the settings panel.
+ipcMain.handle('get-ai-agent-full', async (): Promise<any> => {
+  const result = await runPodium(['ai-set', '--json-output']);
+  if (result.code !== 0) return { agent: '', model: '', api_base: '', has_api_key: false };
+  try {
+    return JSON.parse(result.stdout);
+  } catch (error) {
+    return { agent: '', model: '', api_base: '', has_api_key: false };
+  }
+});
+
 ipcMain.handle('get-ai-agent', async (): Promise<{ agent: string; model: string }> => {
   const result = await runPodium(['ai-set', '--json-output']);
 

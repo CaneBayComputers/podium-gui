@@ -71,6 +71,7 @@
             <!-- Secondary links, moved out of the header -->
             <footer class="app-footer">
                 <div class="footer-links">
+                    <button class="btn btn-secondary btn-small" onclick="showAiSettings()" data-testid="ai-settings-open" title="Choose and install the AI agent">🤖 AI Agent</button>
                     <button class="btn btn-secondary btn-small" onclick="showHelpModal()" data-testid="help-modal-open" title="Help & CLI Commands">❓ Help</button>
                     <button class="btn btn-secondary btn-small" onclick="openUrl('https://github.com/CaneBayComputers/podium-cli')" data-testid="github-cli" title="Podium CLI on GitHub">🐙 Podium CLI on GitHub</button>
                     <button class="btn btn-secondary btn-small" onclick="openUrl('https://patreon.com/canebaycomputers')" data-testid="patreon" title="Support on Patreon">❤️ Patreon</button>
@@ -289,6 +290,67 @@
             one-off, because the agent asks clarifying questions and expects
             answers — which a non-interactive run cannot provide.
         -->
+        <!--
+            AI agent settings — `podium ai-set`.
+            The CLI installs the chosen agent if it is missing
+            (ensure_ai_agent_installed: npm -g for codex/gemini, curl installers
+            for claude/aider), so saving here can take a while and streams.
+        -->
+        <div id="ai-settings-modal" class="modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>🤖 AI Agent</h3>
+                    <button class="modal-close" onclick="closeModal()">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <p class="stage-intro">
+                        Used by Create with AI and Modify with AI. Podium installs the agent for you
+                        if it is not already on this machine.
+                    </p>
+
+                    <div class="form-group">
+                        <label for="ai-agent">Agent</label>
+                        <select id="ai-agent" data-testid="ai-agent" onchange="onAiAgentChange()">
+                            <option value="">None — disable AI features</option>
+                            <option value="claude">Claude Code</option>
+                            <option value="codex">Codex</option>
+                            <option value="gemini">Gemini</option>
+                            <option value="aider">Aider</option>
+                        </select>
+                        <span class="form-help" id="ai-agent-status"></span>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="ai-model">Model <span class="form-help" id="ai-model-req"></span></label>
+                        <input type="text" id="ai-model" data-testid="ai-model" placeholder="Leave blank for the agent's default">
+                        <div class="field-error" id="ai-model-error"></div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="ai-api-key">API Key <span class="form-help" id="ai-key-req"></span></label>
+                        <input type="password" id="ai-api-key" data-testid="ai-api-key" placeholder="Leave blank to use the agent's own sign-in">
+                        <span class="form-help" id="ai-key-note"></span>
+                        <div class="field-error" id="ai-api-key-error"></div>
+                    </div>
+
+                    <div class="form-group" id="ai-api-base-group" style="display: none;">
+                        <label for="ai-api-base">API Endpoint</label>
+                        <input type="text" id="ai-api-base" data-testid="ai-api-base" placeholder="https://api.example.com/v1">
+                        <span class="form-help">OpenAI-compatible endpoint (aider only).</span>
+                    </div>
+
+                    <div id="ai-settings-output-wrap" style="display: none;">
+                        <p class="form-help">Installing the agent — this can take a couple of minutes.</p>
+                        <pre id="ai-settings-output" class="install-output" data-testid="ai-settings-output"></pre>
+                    </div>
+                </div>
+                <div class="form-actions">
+                    <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+                    <button class="btn btn-primary" onclick="saveAiSettings()" data-testid="ai-settings-save">Save</button>
+                </div>
+            </div>
+        </div>
+
         <div id="build-terminal-modal" class="modal terminal-modal">
             <div class="modal-content">
                 <div class="modal-header">
@@ -483,6 +545,9 @@
                 <div class="loading-spinner"></div>
                 <h3 id="loading-message">Please wait...</h3>
                 <p id="loading-details">Processing your request</p>
+                <!-- Live CLI output for long operations. Hidden unless the
+                     caller streams something, so short actions stay clean. -->
+                <pre id="loading-output" class="loading-output" data-testid="loading-output" style="display: none;"></pre>
             </div>
         </div>
 

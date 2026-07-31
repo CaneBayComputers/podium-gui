@@ -538,6 +538,67 @@ async function run() {
       errorSlots.cleared === '' && errorSlots.survived === errorSlots.before,
       JSON.stringify(errorSlots));
 
+    // --- AI agent settings ----------------------------------------------
+    console.log('\nai agent settings');
+    await win.click(t('ai-settings-open'));
+    await win.waitForSelector('#ai-settings-modal.show', { timeout: 8000 });
+    check('AI settings panel opens', await win.isVisible('#ai-settings-modal'));
+
+    const agentOptions = await win.locator('#ai-agent option').evaluateAll((o) => o.map((x) => x.value));
+    check('offers every agent the CLI supports plus none',
+      ['', 'claude', 'codex', 'gemini', 'aider'].every((a) => agentOptions.includes(a)),
+      agentOptions.join(','));
+
+    // aider is the only agent needing a model and an endpoint — ai-set --help
+    // marks model and key required for it, and --api-base is aider-only.
+    await win.selectOption('#ai-agent', 'aider');
+    await win.waitForTimeout(250);
+    check('aider reveals the API endpoint field', await win.isVisible('#ai-api-base-group'));
+    check('aider marks the model required',
+      /required/i.test((await win.textContent('#ai-model-req')) || ''));
+
+    await win.fill(t('ai-model'), '');
+    await win.click(t('ai-settings-save'));
+    await win.waitForTimeout(600);
+    check('aider without a model is rejected before shelling out',
+      ((await win.textContent('#ai-model-error')) || '').length > 0,
+      await win.textContent('#ai-model-error'));
+
+    await win.selectOption('#ai-agent', 'claude');
+    await win.waitForTimeout(250);
+    check('non-aider agents hide the endpoint field',
+      !(await win.isVisible('#ai-api-base-group')));
+
+    await screenshot(win, '08-ai-settings');
+    await win.click('#ai-settings-modal .modal-close');
+    await win.waitForTimeout(300);
+
+    // --- Loading overlay output -----------------------------------------
+    // Scaffolding runs composer/npm/pip for minutes; the overlay used to show a
+    // spinner and nothing else, and it is what captured the nestjs failure.
+    console.log('\nloading overlay');
+    const overlay = await win.evaluate(async () => {
+      window.showLoadingOverlay('Test', 'streaming', true);
+      const before = document.getElementById('loading-output').style.display;
+      // Simulate what execute-command-stream sends.
+      window.__feedOverlay('hello from the CLI\n');
+      await new Promise((r) => setTimeout(r, 200));
+      const text = document.getElementById('loading-output').textContent;
+      window.hideLoadingOverlay();
+      const after = document.getElementById('loading-output').style.display;
+      return { before, text, afterHidden: after };
+    });
+    check('overlay shows an output pane when streaming', overlay.before === 'block', overlay.before);
+    check('overlay renders streamed output', /hello from the CLI/.test(overlay.text || ''), overlay.text);
+
+    const quiet = await win.evaluate(() => {
+      window.showLoadingOverlay('Test', 'no stream');
+      const shown = document.getElementById('loading-output').style.display;
+      window.hideLoadingOverlay();
+      return shown;
+    });
+    check('overlay stays clean for short actions', quiet === 'none', quiet);
+
     // --- Terminals ------------------------------------------------------
     //
     // Sessions are independent and must survive the window being hidden — the

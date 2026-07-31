@@ -788,19 +788,49 @@ function manualRefresh(): void {
 startAutoRefresh();
 
 // Loading overlay functions
-function showLoadingOverlay(message: string = 'Please wait...', details: string = 'Processing your request'): void {
+// When `streamOutput` is set, the overlay grows a live output pane fed by
+// command-stream-data. Long operations (scaffolding a framework pulls
+// composer/npm/pip) otherwise showed a spinner and nothing else for minutes.
+let overlayStreaming = false;
+
+function showLoadingOverlay(
+    message: string = 'Please wait...',
+    details: string = 'Processing your request',
+    streamOutput: boolean = false
+): void {
     const overlay = document.getElementById('loading-overlay');
     const messageEl = document.getElementById('loading-message');
     const detailsEl = document.getElementById('loading-details');
-    
+    const output = document.getElementById('loading-output');
+
     if (overlay && messageEl && detailsEl) {
         messageEl.textContent = message;
         detailsEl.textContent = details;
         overlay.style.display = 'flex';
     }
+
+    overlayStreaming = streamOutput;
+    if (output) {
+        output.textContent = '';
+        output.style.display = streamOutput ? 'block' : 'none';
+    }
 }
 
+// Fed by execute-command-stream. Kept separate from the install modal's pane so
+// the two can be open independently.
+ipcRenderer.on('command-stream-data', (_event: any, payload: { type: string; data: string }) => {
+    if (!overlayStreaming) return;
+
+    const output = document.getElementById('loading-output');
+    if (!output) return;
+
+    // Strip ANSI colour — this is a plain <pre>, not a terminal.
+    output.textContent += payload.data.replace(/\x1b\[[0-9;]*m/g, '');
+    output.scrollTop = output.scrollHeight;
+});
+
 function hideLoadingOverlay(): void {
+    overlayStreaming = false;
     const overlay = document.getElementById('loading-overlay');
     if (overlay) {
         overlay.style.display = 'none';
@@ -1128,6 +1158,121 @@ function handleCreateProject(): void {
 }
 
 // Functions made globally available at end of file
+
+// ---------------------------------------------------------------------------
+// AI agent settings (`podium ai-set`)
+//
+// Saving can INSTALL the agent — ai_set.sh's ensure_ai_agent_installed runs
+// `npm install -g` for codex/gemini and curl installers for claude/aider — so
+// this streams rather than spinning silently.
+// ---------------------------------------------------------------------------
+
+// Which fields each agent actually uses, from `podium ai-set --help`.
+const AI_AGENT_RULES: Record<string, { modelRequired: boolean; keyRequired: boolean; apiBase: boolean }> = {
+    claude: { modelRequired: false, keyRequired: false, apiBase: false },
+    codex:  { modelRequired: false, keyRequired: false, apiBase: false },
+    gemini: { modelRequired: false, keyRequired: false, apiBase: false },
+    aider:  { modelRequired: true,  keyRequired: true,  apiBase: true }
+};
+
+async function showAiSettings(): Promise<void> {
+    clearFieldErrors();
+    const output = document.getElementById('ai-settings-output');
+    const wrap = document.getElementById('ai-settings-output-wrap');
+    if (output) output.textContent = '';
+    if (wrap) wrap.style.display = 'none';
+
+    const current = await ipcRenderer.invoke('get-ai-agent-full');
+
+    (document.getElementById('ai-agent') as HTMLSelectElement).value = current.agent || '';
+    (document.getElementById('ai-model') as HTMLInputElement).value = current.model || '';
+    (document.getElementById('ai-api-base') as HTMLInputElement).value = current.api_base || '';
+    (document.getElementById('ai-api-key') as HTMLInputElement).value = '';
+
+    const note = document.getElementById('ai-key-note');
+    if (note) {
+        note.textContent = current.has_api_key
+            ? 'A key is stored. Leave blank to keep it, or clear the field and save to remove it.'
+            : 'No key stored.';
+    }
+
+    onAiAgentChange();
+    showModal('ai-settings-modal');
+}
+
+function onAiAgentChange(): void {
+    const agent = (document.getElementById('ai-agent') as HTMLSelectElement)?.value || '';
+    const rules = AI_AGENT_RULES[agent];
+
+    const status = document.getElementById('ai-agent-status');
+    if (status) {
+        status.textContent = agent
+            ? 'Podium installs this agent if it is not already present.'
+            : 'Create with AI and Modify with AI stay disabled without an agent.';
+    }
+
+    const baseGroup = document.getElementById('ai-api-base-group');
+    if (baseGroup) baseGroup.style.display = rules?.apiBase ? 'block' : 'none';
+
+    const modelReq = document.getElementById('ai-model-req');
+    if (modelReq) modelReq.textContent = rules?.modelRequired ? '(required)' : '(optional)';
+
+    const keyReq = document.getElementById('ai-key-req');
+    if (keyReq) keyReq.textContent = rules?.keyRequired ? '(required)' : '(optional)';
+}
+
+let aiSettingsStreaming = false;
+
+ipcRenderer.on('command-stream-data', (_event: any, payload: { type: string; data: string }) => {
+    if (!aiSettingsStreaming) return;
+    const output = document.getElementById('ai-settings-output');
+    if (!output) return;
+    output.textContent += payload.data.replace(/\x1b\[[0-9;]*m/g, '');
+    output.scrollTop = output.scrollHeight;
+});
+
+async function saveAiSettings(): Promise<void> {
+    clearFieldErrors();
+
+    const agent = (document.getElementById('ai-agent') as HTMLSelectElement)?.value || '';
+    const model = (document.getElementById('ai-model') as HTMLInputElement)?.value?.trim() || '';
+    const apiKey = (document.getElementById('ai-api-key') as HTMLInputElement)?.value?.trim() || '';
+    const apiBase = (document.getElementById('ai-api-base') as HTMLInputElement)?.value?.trim() || '';
+    const rules = AI_AGENT_RULES[agent];
+
+    if (agent && rules?.modelRequired && !model) {
+        showFieldError('ai-model', `${agent} requires a model.`);
+        return;
+    }
+
+    const args = ['ai-set', '--agent', agent];
+    if (model) args.push('--model', model);
+    if (apiKey) args.push('--api-key', apiKey);
+    if (apiBase) args.push('--api-base', apiBase);
+
+    const wrap = document.getElementById('ai-settings-output-wrap');
+    const output = document.getElementById('ai-settings-output');
+    if (wrap) wrap.style.display = 'block';
+    if (output) output.textContent = '';
+    aiSettingsStreaming = true;
+
+    try {
+        // Not --json-output: that suppresses the installer's progress, which is
+        // the whole reason this streams.
+        const result = await ipcRenderer.invoke('execute-command-stream', 'podium', args);
+        aiSettingsStreaming = false;
+
+        if (result.code === 0) {
+            showSuccess(agent ? `AI agent set to ${agent}.` : 'AI agent cleared.');
+            closeModal();
+        } else {
+            showError(`Could not set the AI agent (exit ${result.code}). See the output above.`);
+        }
+    } catch (error) {
+        aiSettingsStreaming = false;
+        showError('Error setting the AI agent: ' + (error as Error).message);
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Create with AI (`podium create`, driven phase by phase)
@@ -2149,7 +2294,7 @@ async function submitNewProject(): Promise<void> {
     
     try {
         closeModal();
-        showLoadingOverlay('Creating Project', `Creating ${projectType} project: ${projectName}...`);
+        showLoadingOverlay('Creating Project', `Creating ${projectType} project: ${projectName}...`, true);
         
         // Signature is `podium new <framework> <name>` — framework is the FIRST
         // positional, not a flag. There is no --framework option, and the
@@ -2189,7 +2334,11 @@ async function submitNewProject(): Promise<void> {
             args.push('--no-github');
         }
 
-        const result = await ipcRenderer.invoke('execute-podium', 'new', args);
+        // Streamed rather than buffered, so the overlay can show progress.
+        // --json-output is dropped here: it suppresses exactly the human-readable
+        // output we now want to display, and success is judged by exit code.
+        const result = await ipcRenderer.invoke('execute-command-stream', 'podium',
+            ['new', ...args.filter((a) => a !== '--json-output')]);
 
         hideLoadingOverlay();
 
@@ -2490,6 +2639,16 @@ async function submitEditProject(): Promise<void> {
 }
 
 // Export functions for global access
+(window as any).showLoadingOverlay = showLoadingOverlay;
+(window as any).hideLoadingOverlay = hideLoadingOverlay;
+// Test hook: feed the overlay as if execute-command-stream had emitted.
+(window as any).__feedOverlay = (data: string) => {
+    const output = document.getElementById('loading-output');
+    if (overlayStreaming && output) output.textContent += data;
+};
+(window as any).showAiSettings = showAiSettings;
+(window as any).onAiAgentChange = onAiAgentChange;
+(window as any).saveAiSettings = saveAiSettings;
 (window as any).showCreateWithAI = showCreateWithAI;
 (window as any).handleClassifyIdea = handleClassifyIdea;
 (window as any).selectCandidate = selectCandidate;
