@@ -26,6 +26,10 @@
                     <button class="btn btn-primary" onclick="createNewProject()" data-testid="new-project">+ New Project</button>
                     <button class="btn btn-primary" onclick="cloneProject()" data-testid="clone-project">📥 Clone</button>
                     <button class="btn btn-primary" onclick="showInstallApp()" data-testid="install-app">📦 Install App</button>
+                    <!-- Only appears while sessions are alive, so they can be
+                         reopened after the window is hidden. -->
+                    <button class="btn btn-secondary" onclick="showTerminals()" id="terminals-button"
+                            data-testid="terminals-button" style="display: none;">🖥️ Terminals</button>
                 </div>
             </div>
         </header>
@@ -288,15 +292,19 @@
         <div id="build-terminal-modal" class="modal terminal-modal">
             <div class="modal-content">
                 <div class="modal-header">
-                    <h3 id="build-terminal-title">🛠️ Building</h3>
-                    <button class="modal-close" onclick="closeBuildTerminal()">&times;</button>
+                    <h3 id="build-terminal-title">🖥️ Terminals</h3>
+                    <button class="modal-close" onclick="hideTerminals()">&times;</button>
                 </div>
+                <!-- One tab per live session. Sessions keep running when the
+                     window is closed; they are only killed by their own × . -->
+                <div id="terminal-tabs" class="terminal-tabs" data-testid="terminal-tabs"></div>
                 <div class="modal-body">
-                    <div id="build-terminal" class="build-terminal" data-testid="build-terminal"></div>
+                    <div id="terminal-panes" class="terminal-panes" data-testid="terminal-panes"></div>
                     <p class="form-help" id="build-terminal-status">Session running — type to answer the agent.</p>
                 </div>
                 <div class="form-actions">
-                    <button class="btn btn-secondary" onclick="closeBuildTerminal()" data-testid="build-terminal-close">Close</button>
+                    <button class="btn btn-secondary" onclick="hideTerminals()" data-testid="build-terminal-close">Hide</button>
+                    <button class="btn btn-danger" onclick="closeActiveTerminal()" data-testid="terminal-end-session">End session</button>
                 </div>
             </div>
         </div>

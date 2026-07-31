@@ -1781,13 +1781,93 @@ span.status-indicator {
     padding: 0.05rem 0.5rem;
 }
 
-.build-terminal {
-    height: 58vh;
-    min-height: 320px;
+/* The terminal fills whatever the modal leaves it rather than claiming a fixed
+   share of the viewport. A fixed height (58vh) plus header, tabs, status line
+   and footer added up to more than the modal's max-height, so the bottom of the
+   terminal ran past the panel. Everything is flex now and only the panes grow. */
+.terminal-modal .modal-content {
+    height: 86vh;
+}
+
+.terminal-modal .modal-body {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.terminal-panes {
+    position: relative;
+    flex: 1 1 auto;
+    min-height: 200px;
     background: #0f0f23;
     border: 1px solid var(--border-subtle);
     border-radius: 8px;
     padding: 0.5rem;
+    overflow: hidden;
+}
+
+.terminal-pane {
+    position: absolute;
+    inset: 0.5rem;
+}
+
+#build-terminal-status {
+    flex: 0 0 auto;
+    margin: 0.5rem 0 0;
+}
+
+.terminal-tabs {
+    display: none;
+    gap: 0.3rem;
+    padding: 0 1.2rem;
+    flex-wrap: wrap;
+    flex: 0 0 auto;
+}
+
+.terminal-tab {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.3rem 0.6rem;
+    border: 1px solid var(--border-subtle);
+    border-bottom: none;
+    border-radius: 6px 6px 0 0;
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    cursor: pointer;
+    max-width: 15rem;
+    white-space: nowrap;
+    overflow: hidden;
+}
+
+.terminal-tab:hover {
+    background: var(--card-hover);
+}
+
+.terminal-tab.active {
+    background: var(--card-bg);
+    color: var(--text-primary);
+    border-color: var(--accent-blue);
+}
+
+.terminal-tab.exited span {
+    opacity: 0.55;
+    text-decoration: line-through;
+}
+
+.tab-close {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 1rem;
+    line-height: 1;
+    padding: 0 0.1rem;
+}
+
+.tab-close:hover {
+    color: var(--neon-pink);
 }
 
 /* Framework picker, built from the CLI's frameworks.json and grouped by runtime */

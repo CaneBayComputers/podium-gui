@@ -1417,37 +1417,128 @@ async function handleCreateFromChoice(): Promise<void> {
 // Phase 3: the AI build session, in a real embedded terminal
 // ---------------------------------------------------------------------------
 
-let buildTerm: any = null;
-let buildFitAddon: any = null;
-let buildSessionId = '';
-let buildResizeHandler: (() => void) | null = null;
+interface TerminalSession {
+    id: string;
+    key: string;          // stable per target, so re-opening focuses rather than duplicates
+    label: string;
+    term: any;
+    fit: any;
+    pane: HTMLElement;
+    exited: boolean;
+    status: string;
+}
 
-// Continue the AI session on an existing project.
-//
-// `podium resume <project>` starts the project, prints its status and URL, waits
-// for a keypress, then reopens the agent with its previous conversation
-// (`claude --continue`, `codex resume --last`, `gemini --resume latest`,
-// `aider --restore-chat-history`). It is interactive by design, which is exactly
-// what the embedded terminal is for — the keypress and everything after it are
-// the user's to drive.
-async function modifyWithAI(projectName: string): Promise<void> {
-    const { agent } = await ipcRenderer.invoke('get-ai-agent');
-    if (!agent) {
-        showError('No AI agent is configured. Run `podium ai-set` in a terminal first.');
-        return;
+// Sessions outlive the window: hiding the terminal modal leaves them running,
+// and the header's Terminals button brings them back. Only the tab's × (or
+// "End session") kills a pty. The main process already keys ptys by id, so
+// nothing there needed changing.
+const terminalSessions = new Map<string, TerminalSession>();
+let activeTerminalId = '';
+let terminalResizeHandler: (() => void) | null = null;
+
+function updateTerminalsButton(): void {
+    const button = document.getElementById('terminals-button');
+    if (!button) return;
+
+    const live = terminalSessions.size;
+    button.style.display = live > 0 ? '' : 'none';
+    button.textContent = live > 1 ? `🖥️ Terminals (${live})` : '🖥️ Terminals';
+}
+
+function renderTerminalTabs(): void {
+    const bar = document.getElementById('terminal-tabs');
+    if (!bar) return;
+
+    bar.innerHTML = [...terminalSessions.values()].map((session) => `
+        <div class="terminal-tab${session.id === activeTerminalId ? ' active' : ''}${session.exited ? ' exited' : ''}"
+             onclick="activateTerminal('${session.id}')"
+             data-testid="terminal-tab-${escapeHtml(session.key)}">
+            <span>${escapeHtml(session.label)}</span>
+            <button class="tab-close" title="End this session"
+                    onclick="event.stopPropagation(); killTerminal('${session.id}')">&times;</button>
+        </div>
+    `).join('');
+
+    bar.style.display = terminalSessions.size > 1 ? 'flex' : 'none';
+    updateTerminalsButton();
+}
+
+function fitTerminal(session: TerminalSession): void {
+    try {
+        session.fit.fit();
+        ipcRenderer.invoke('pty-resize', session.id, session.term.cols, session.term.rows);
+    } catch (error) {
+        // A fit racing teardown is not worth surfacing.
+    }
+}
+
+function activateTerminal(id: string): void {
+    const session = terminalSessions.get(id);
+    if (!session) return;
+
+    activeTerminalId = id;
+    terminalSessions.forEach((s) => {
+        s.pane.style.display = s.id === id ? 'block' : 'none';
+    });
+
+    const status = document.getElementById('build-terminal-status');
+    if (status) status.textContent = session.status;
+
+    const title = document.getElementById('build-terminal-title');
+    if (title) title.textContent = terminalSessions.size > 1 ? '🖥️ Terminals' : session.label;
+
+    renderTerminalTabs();
+
+    // Fit only once visible — measuring a hidden pane gives the wrong rows.
+    setTimeout(() => {
+        fitTerminal(session);
+        session.term.focus();
+    }, 30);
+}
+
+function showTerminals(): void {
+    if (terminalSessions.size === 0) return;
+    showModal('build-terminal-modal');
+    activateTerminal(activeTerminalId && terminalSessions.has(activeTerminalId)
+        ? activeTerminalId
+        : [...terminalSessions.keys()][0]!);
+}
+
+// Closing the window does NOT end the sessions — that is what the tab × is for.
+function hideTerminals(): void {
+    closeModal();
+    updateTerminalsButton();
+    loadProjects();
+}
+
+function killTerminal(id: string): void {
+    const session = terminalSessions.get(id);
+    if (!session) return;
+
+    ipcRenderer.invoke('pty-kill', id);
+    try { session.term.dispose(); } catch (error) { /* already gone */ }
+    session.pane.remove();
+    terminalSessions.delete(id);
+
+    if (terminalSessions.size === 0) {
+        activeTerminalId = '';
+        if (terminalResizeHandler) {
+            window.removeEventListener('resize', terminalResizeHandler);
+            terminalResizeHandler = null;
+        }
+        closeModal();
+    } else if (activeTerminalId === id) {
+        activateTerminal([...terminalSessions.keys()][0]!);
+    } else {
+        renderTerminalTabs();
     }
 
-    // resume takes the project name and cds itself, so run it from the projects
-    // directory rather than inside the project.
-    const projectsDir = await ipcRenderer.invoke('get-projects-dir');
-    await openAgentTerminal({
-        title: `✨ ${projectName}`,
-        status: 'Resuming the AI session — press a key in the terminal when prompted.',
-        cwd: projectsDir,
-        command: 'podium',
-        args: ['resume', projectName],
-        sessionKey: `resume-${projectName}`
-    });
+    updateTerminalsButton();
+    loadProjects();
+}
+
+function closeActiveTerminal(): void {
+    if (activeTerminalId) killTerminal(activeTerminalId);
 }
 
 interface AgentTerminalOptions {
@@ -1467,66 +1558,93 @@ async function openAgentTerminal(options: AgentTerminalOptions): Promise<void> {
     const { Terminal } = require('@xterm/xterm');
     const { FitAddon } = require('@xterm/addon-fit');
 
-    const host = document.getElementById('build-terminal');
-    const title = document.getElementById('build-terminal-title');
-    const status = document.getElementById('build-terminal-status');
-    if (!host) return;
+    const panes = document.getElementById('terminal-panes');
+    if (!panes) return;
 
     closeModal();
-    if (title) title.textContent = options.title;
-    if (status) status.textContent = options.status;
 
-    host.innerHTML = '';
-    buildSessionId = `${options.sessionKey}-${performance.now()}`;
+    // Re-opening the same target focuses the live session rather than starting a
+    // second agent in the same directory.
+    const existing = [...terminalSessions.values()].find((s) => s.key === options.sessionKey && !s.exited);
+    if (existing) {
+        showModal('build-terminal-modal');
+        activateTerminal(existing.id);
+        return;
+    }
 
-    buildTerm = new Terminal({
+    const id = `${options.sessionKey}-${performance.now()}`;
+    const pane = document.createElement('div');
+    pane.className = 'terminal-pane';
+    pane.dataset.sessionId = id;
+    panes.appendChild(pane);
+
+    const term = new Terminal({
         fontSize: 13,
         fontFamily: 'monospace',
         cursorBlink: true,
         theme: { background: '#0f0f23', foreground: '#f8fafc' }
     });
-    buildFitAddon = new FitAddon();
-    buildTerm.loadAddon(buildFitAddon);
-    buildTerm.open(host);
+    const fit = new FitAddon();
+    term.loadAddon(fit);
+    term.open(pane);
+
+    const session: TerminalSession = {
+        id, key: options.sessionKey, label: options.title,
+        term, fit, pane, exited: false, status: options.status
+    };
+    terminalSessions.set(id, session);
+
+    term.onData((data: string) => ipcRenderer.invoke('pty-input', id, data));
+
+    if (!terminalResizeHandler) {
+        terminalResizeHandler = () => {
+            const active = terminalSessions.get(activeTerminalId);
+            if (active) fitTerminal(active);
+        };
+        window.addEventListener('resize', terminalResizeHandler);
+    }
 
     showModal('build-terminal-modal');
+    activateTerminal(id);
 
-    // Fit after the modal is actually visible, or the measurement is wrong.
-    setTimeout(() => {
-        try {
-            buildFitAddon.fit();
-            ipcRenderer.invoke('pty-resize', buildSessionId, buildTerm.cols, buildTerm.rows);
-        } catch (error) {
-            console.log('terminal fit failed:', error);
-        }
-    }, 60);
-
-    buildTerm.onData((data: string) => {
-        ipcRenderer.invoke('pty-input', buildSessionId, data);
-    });
-
-    buildResizeHandler = () => {
-        try {
-            buildFitAddon.fit();
-            ipcRenderer.invoke('pty-resize', buildSessionId, buildTerm.cols, buildTerm.rows);
-        } catch (error) {
-            // terminal torn down mid-resize
-        }
-    };
-    window.addEventListener('resize', buildResizeHandler);
-
-    const started = await ipcRenderer.invoke(
-        'pty-start', buildSessionId, options.cwd, options.command, options.args
-    );
+    const started = await ipcRenderer.invoke('pty-start', id, options.cwd, options.command, options.args);
 
     if (!started.ok) {
-        buildTerm.writeln('\r\n\x1b[31mCould not start an embedded terminal.\x1b[0m');
-        buildTerm.writeln(`\x1b[2m${started.error || ''}\x1b[0m`);
-        buildTerm.writeln('');
-        buildTerm.writeln('Run this yourself instead:');
-        buildTerm.writeln(`\x1b[36m  ${options.fallbackHint || `cd ${options.cwd} && ${options.command} ${options.args.join(' ')}`}\x1b[0m`);
-        if (status) status.textContent = 'Embedded terminal unavailable — run the command above.';
+        term.writeln('\r\n\x1b[31mCould not start an embedded terminal.\x1b[0m');
+        term.writeln(`\x1b[2m${started.error || ''}\x1b[0m`);
+        term.writeln('');
+        term.writeln('Run this yourself instead:');
+        term.writeln(`\x1b[36m  ${options.fallbackHint || `cd ${options.cwd} && ${options.command} ${options.args.join(' ')}`}\x1b[0m`);
+        session.status = 'Embedded terminal unavailable — run the command above.';
+        session.exited = true;
+        activateTerminal(id);
     }
+}
+
+// Continue the AI session on an existing project.
+//
+// `podium resume <project>` starts the project, prints its status and URL, then
+// reopens the agent with its previous conversation (claude --continue,
+// codex resume --last, gemini --resume latest, aider --restore-chat-history).
+async function modifyWithAI(projectName: string): Promise<void> {
+    const { agent } = await ipcRenderer.invoke('get-ai-agent');
+    if (!agent) {
+        showError('No AI agent is configured. Run `podium ai-set` in a terminal first.');
+        return;
+    }
+
+    // resume takes the project name and cds itself, so run it from the projects
+    // directory rather than inside the project.
+    const projectsDir = await ipcRenderer.invoke('get-projects-dir');
+    await openAgentTerminal({
+        title: `✨ ${projectName}`,
+        status: 'Resuming the AI session in this project.',
+        cwd: projectsDir,
+        command: 'podium',
+        args: ['resume', projectName],
+        sessionKey: `resume-${projectName}`,
+        fallbackHint: `cd ${projectsDir} && podium resume ${projectName}`
+    });
 }
 
 // Phase 3 of create: hand the original idea to the agent inside the finished
@@ -1534,7 +1652,7 @@ async function openAgentTerminal(options: AgentTerminalOptions): Promise<void> {
 async function openBuildTerminal(projectName: string, idea: string): Promise<void> {
     const projectsDir = await ipcRenderer.invoke('get-projects-dir');
     await openAgentTerminal({
-        title: `🛠️ Building ${projectName}`,
+        title: `🛠️ ${projectName}`,
         status: 'Session running — type to answer the agent.',
         cwd: `${projectsDir}/${projectName}`,
         command: 'podium',
@@ -1545,41 +1663,26 @@ async function openBuildTerminal(projectName: string, idea: string): Promise<voi
 }
 
 ipcRenderer.on('pty-data', (_event: any, payload: { sessionId: string; data: string }) => {
-    if (buildTerm && payload.sessionId === buildSessionId) {
-        buildTerm.write(payload.data);
-    }
+    terminalSessions.get(payload.sessionId)?.term.write(payload.data);
 });
 
 ipcRenderer.on('pty-exit', (_event: any, payload: { sessionId: string; exitCode: number }) => {
-    if (payload.sessionId !== buildSessionId) return;
+    const session = terminalSessions.get(payload.sessionId);
+    if (!session) return;
 
-    const status = document.getElementById('build-terminal-status');
-    if (status) {
-        status.textContent = payload.exitCode === 0
-            ? 'Session finished. Your project is ready.'
-            : `Session exited with code ${payload.exitCode}.`;
+    session.exited = true;
+    session.status = payload.exitCode === 0
+        ? 'Session finished.'
+        : `Session exited with code ${payload.exitCode}.`;
+    session.term.writeln(`\r\n\x1b[2m[session ended: ${payload.exitCode}]\x1b[0m`);
+
+    if (session.id === activeTerminalId) {
+        const status = document.getElementById('build-terminal-status');
+        if (status) status.textContent = session.status;
     }
-    if (buildTerm) buildTerm.writeln(`\r\n\x1b[2m[session ended: ${payload.exitCode}]\x1b[0m`);
-
+    renderTerminalTabs();
     loadProjects();
 });
-
-function closeBuildTerminal(): void {
-    if (buildSessionId) {
-        ipcRenderer.invoke('pty-kill', buildSessionId);
-    }
-    if (buildResizeHandler) {
-        window.removeEventListener('resize', buildResizeHandler);
-        buildResizeHandler = null;
-    }
-    if (buildTerm) {
-        buildTerm.dispose();
-        buildTerm = null;
-    }
-    buildSessionId = '';
-    closeModal();
-    loadProjects();
-}
 
 // ---------------------------------------------------------------------------
 // Install an app (`podium install <app> [name]`)
@@ -2393,7 +2496,22 @@ async function submitEditProject(): Promise<void> {
 (window as any).handleCreateFromChoice = handleCreateFromChoice;
 (window as any).renderClassification = renderClassification;
 (window as any).setCreateStage = setCreateStage;
-(window as any).closeBuildTerminal = closeBuildTerminal;
+(window as any).hideTerminals = hideTerminals;
+(window as any).showTerminals = showTerminals;
+(window as any).activateTerminal = activateTerminal;
+(window as any).killTerminal = killTerminal;
+(window as any).closeActiveTerminal = closeActiveTerminal;
+(window as any).openAgentTerminal = openAgentTerminal;
+// Small hooks so the e2e suite can inspect and tear down sessions without
+// reaching into module state.
+(window as any).__terminalCount = () => terminalSessions.size;
+(window as any).__killFirstTerminal = () => {
+    const first = [...terminalSessions.keys()][0];
+    if (first) killTerminal(first);
+};
+(window as any).__killAllTerminals = () => {
+    [...terminalSessions.keys()].forEach((id) => killTerminal(id));
+};
 (window as any).modifyWithAI = modifyWithAI;
 (window as any).showInstallApp = showInstallApp;
 (window as any).renderAppCatalog = renderAppCatalog;

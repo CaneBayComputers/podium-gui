@@ -538,6 +538,91 @@ async function run() {
       errorSlots.cleared === '' && errorSlots.survived === errorSlots.before,
       JSON.stringify(errorSlots));
 
+    // --- Terminals ------------------------------------------------------
+    //
+    // Sessions are independent and must survive the window being hidden — the
+    // previous single-session design silently orphaned a running pty whenever a
+    // second terminal opened.
+    console.log('\nterminals');
+    const termState = await win.evaluate(async () => {
+      const mk = (key, title) => window.openAgentTerminal({
+        title, status: 'test', cwd: '/tmp', command: 'sh',
+        args: ['-c', 'echo hello-' + key + '; sleep 120'], sessionKey: key
+      });
+      await mk('t-alpha', 'alpha');
+      await mk('t-beta', 'beta');
+      await new Promise((r) => setTimeout(r, 1200));
+      return {
+        sessions: window.__terminalCount(),
+        tabs: document.querySelectorAll('#terminal-tabs .terminal-tab').length,
+        panes: document.querySelectorAll('#terminal-panes .terminal-pane').length,
+        visiblePanes: [...document.querySelectorAll('#terminal-panes .terminal-pane')]
+          .filter((p) => p.style.display !== 'none').length
+      };
+    });
+    check('two terminals run at once', termState.sessions === 2, JSON.stringify(termState));
+    check('one tab per session', termState.tabs === 2, `${termState.tabs} tabs`);
+    check('exactly one pane visible at a time', termState.visiblePanes === 1,
+      `${termState.visiblePanes} visible`);
+
+    // Re-opening the same target focuses rather than spawning a duplicate agent.
+    const dupe = await win.evaluate(async () => {
+      await window.openAgentTerminal({
+        title: 'alpha', status: 'test', cwd: '/tmp', command: 'sh',
+        args: ['-c', 'sleep 120'], sessionKey: 't-alpha'
+      });
+      await new Promise((r) => setTimeout(r, 400));
+      return window.__terminalCount();
+    });
+    check('reopening the same target does not duplicate the session', dupe === 2, `${dupe}`);
+
+    // Hiding the window keeps sessions alive; that is what the header button
+    // exists to get back to.
+    const afterHide = await win.evaluate(async () => {
+      window.hideTerminals();
+      await new Promise((r) => setTimeout(r, 400));
+      return {
+        count: window.__terminalCount(),
+        modalOpen: document.getElementById('build-terminal-modal').classList.contains('show'),
+        buttonShown: document.getElementById('terminals-button').style.display !== 'none'
+      };
+    });
+    check('hiding the window leaves sessions running', afterHide.count === 2 && !afterHide.modalOpen,
+      JSON.stringify(afterHide));
+    check('header offers a way back to running terminals', afterHide.buttonShown);
+
+    // The terminal must fit inside its panel — a fixed height overflowed it.
+    const fits = await win.evaluate(async () => {
+      window.showTerminals();
+      await new Promise((r) => setTimeout(r, 600));
+      const body = document.querySelector('#build-terminal-modal .modal-body');
+      const panes = document.getElementById('terminal-panes');
+      const content = document.querySelector('#build-terminal-modal .modal-content');
+      return {
+        panesBottom: panes.getBoundingClientRect().bottom,
+        bodyBottom: body.getBoundingClientRect().bottom,
+        contentBottom: content.getBoundingClientRect().bottom,
+        viewport: window.innerHeight
+      };
+    });
+    check('terminal stays inside its panel',
+      fits.panesBottom <= fits.bodyBottom + 1 && fits.contentBottom <= fits.viewport + 1,
+      JSON.stringify(fits));
+
+    // Closing a tab ends only that session.
+    const afterKill = await win.evaluate(async () => {
+      window.__killFirstTerminal();
+      await new Promise((r) => setTimeout(r, 600));
+      return window.__terminalCount();
+    });
+    check('closing one tab ends only that session', afterKill === 1, `${afterKill}`);
+
+    await screenshot(win, '07-terminals');
+    await win.evaluate(async () => {
+      window.__killAllTerminals();
+      await new Promise((r) => setTimeout(r, 400));
+    });
+
     // --- Installers -----------------------------------------------------
     //
     // Shell, not UI, but they belong in the same gate: each behaviour below was
