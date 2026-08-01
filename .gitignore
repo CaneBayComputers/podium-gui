@@ -100,3 +100,6 @@ Desktop.ini
 
 # Playwright screenshots from tests/e2e.js
 debug/
+
+# Local working notes — procedure doc, not part of the product
+MERGE_INSTRUCTIONS.md
