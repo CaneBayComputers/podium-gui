@@ -214,13 +214,15 @@ async function checkPodiumInstallation(): Promise<PodiumStatus> {
     try {
 
         const { ipcRenderer } = require('electron');
-        const result: CommandResult = await ipcRenderer.invoke('execute-command', 'podium', ['help', '--no-coloring']);
+        const result: CommandResult = await ipcRenderer.invoke('execute-command', 'podium', ['help', '--no-colors']);
         if (result.code === 0) {
-            // Check if configured by looking for docker-stack/.env
+            // Configured state lives in /etc/podium-cli/.env — the old
+            // docker-stack/.env path no longer exists, so this check used to
+            // report "not configured" on every machine.
             const configCheck: CommandResult = await ipcRenderer.invoke('execute-command', 'test', [
-                '-f', '/usr/local/share/podium-cli/docker-stack/.env'
+                '-f', '/etc/podium-cli/.env'
             ]);
-            
+
             return configCheck.code === 0 ? 'configured' : 'not-configured';
         }
         return 'not-installed';
@@ -397,7 +399,9 @@ async function startServicesAfterConfig(): Promise<void> {
         }, 2000); // Check every 2 seconds
         
         // Start the service command with JSON output (which will create the log file)
-        ipcRenderer.invoke('execute-command', 'podium', ['start-services', '--json-output']).then((result: any) => {
+        // No flags: the dispatcher runs start_services.sh without forwarding
+        // arguments, so --json-output never reaches it. Judge by exit code.
+        ipcRenderer.invoke('execute-command', 'podium', ['start-services']).then((result: any) => {
             console.log('Start services finished with result:', result);
             serviceStarted = true;
             
@@ -470,25 +474,19 @@ async function runPodiumConfig(): Promise<void> {
             // Step 2: Collect configuration from form
             const gitName = (document.getElementById('git-name') as HTMLInputElement)?.value || '';
             const gitEmail = (document.getElementById('git-email') as HTMLInputElement)?.value || '';
-            const awsAccessKey = (document.getElementById('aws-access-key') as HTMLInputElement)?.value || '';
-            const awsSecretKey = (document.getElementById('aws-secret-key') as HTMLInputElement)?.value || '';
-            const awsRegion = (document.getElementById('aws-region') as HTMLInputElement)?.value || '';
-            const skipAws = (document.getElementById('skip-aws') as HTMLInputElement)?.checked || false;
             const projectsDir = (document.getElementById('projects-dir') as HTMLInputElement)?.value || '';
-            
-            // Step 3: Build config arguments
-            let configArgs: string[] = ['configure', '--json-output'];
+
+            // Step 3: Build config arguments.
+            // `podium configure` no longer asks about AWS or GitHub, and its
+            // parser silently swallows unknown flags — so anything stale here
+            // fails invisibly rather than loudly. Only these three are real.
+            // --non-interactive guarantees it never blocks on a prompt; the VPC
+            // subnet is chosen automatically.
+            const configArgs: string[] = ['configure', '--non-interactive', '--json-output'];
             if (gitName) configArgs.push('--git-name', gitName);
             if (gitEmail) configArgs.push('--git-email', gitEmail);
-            if (!skipAws && awsAccessKey && awsSecretKey) {
-                configArgs.push('--aws-access-key', awsAccessKey);
-                configArgs.push('--aws-secret-key', awsSecretKey);
-                configArgs.push('--aws-region', awsRegion);
-            }
-            if (skipAws) configArgs.push('--skip-aws');
             if (projectsDir) configArgs.push('--projects-dir', projectsDir);
-            configArgs.push('--no-coloring');
-            
+
             // Step 4: Run podium configure (now includes service startup)
             updateProgress(20, 'Configuring Podium environment and starting services...');
             console.log('Running podium configure with args:', configArgs);
@@ -551,7 +549,7 @@ function openDashboard(): void {
 
 async function loadConfiguration(): Promise<void> {
     // Pre-fill Git configuration
-    console.log('🔄 Loading configuration - pre-filling Git and AWS settings...');
+    console.log('🔄 Loading configuration - pre-filling Git settings...');
     console.log('🔍 Current step:', currentStep);
     console.log('🔍 DOM ready state:', document.readyState);
     
@@ -564,12 +562,12 @@ async function loadConfiguration(): Promise<void> {
     
     const gitNameInputCheck = document.getElementById('git-name');
     const gitEmailInputCheck = document.getElementById('git-email');
-    const awsAccessKeyInputCheck = document.getElementById('aws-access-key');
+    
     const projectsDirInputCheck = document.getElementById('projects-dir');
     
     console.log('🔍 Git name input found:', !!gitNameInputCheck, gitNameInputCheck);
     console.log('🔍 Git email input found:', !!gitEmailInputCheck, gitEmailInputCheck);
-    console.log('🔍 AWS access key input found:', !!awsAccessKeyInputCheck, awsAccessKeyInputCheck);
+    
     console.log('🔍 Projects dir input found:', !!projectsDirInputCheck, projectsDirInputCheck);
     
     try {
@@ -606,55 +604,8 @@ async function loadConfiguration(): Promise<void> {
         console.log('Could not pre-fill Git config:', error);
     }
 
-    // Pre-fill AWS configuration
-    try {
-
-        const { ipcRenderer } = require('electron');
-        const awsAccessKey: CommandResult = await ipcRenderer.invoke('execute-command', 'aws', ['configure', 'get', 'aws_access_key_id']);
-        console.log('AWS access key result:', awsAccessKey);
-        if (awsAccessKey.code === 0 && awsAccessKey.stdout.trim()) {
-            const awsAccessKeyInput = document.getElementById('aws-access-key') as HTMLInputElement;
-            console.log('AWS access key input element:', awsAccessKeyInput);
-            if (awsAccessKeyInput) {
-                awsAccessKeyInput.value = awsAccessKey.stdout.trim();
-                console.log('Pre-filled AWS access key:', awsAccessKey.stdout.trim());
-                console.log('AWS access key input value after setting:', awsAccessKeyInput.value);
-            } else {
-                console.log('ERROR: aws-access-key input element not found!');
-            }
-        }
-        
-        const awsSecretKey: CommandResult = await ipcRenderer.invoke('execute-command', 'aws', ['configure', 'get', 'aws_secret_access_key']);
-        if (awsSecretKey.code === 0 && awsSecretKey.stdout.trim()) {
-            const awsSecretKeyInput = document.getElementById('aws-secret-key') as HTMLInputElement;
-            if (awsSecretKeyInput) {
-                awsSecretKeyInput.value = awsSecretKey.stdout.trim();
-                console.log('Pre-filled AWS secret key');
-            }
-        }
-        
-        const awsRegion: CommandResult = await ipcRenderer.invoke('execute-command', 'aws', ['configure', 'get', 'region']);
-        console.log('AWS region result:', awsRegion);
-        if (awsRegion.code === 0 && awsRegion.stdout.trim()) {
-            const awsRegionInput = document.getElementById('aws-region') as HTMLInputElement;
-            if (awsRegionInput) {
-                awsRegionInput.value = awsRegion.stdout.trim();
-                console.log('Pre-filled AWS region:', awsRegion.stdout.trim());
-            }
-        }
-    } catch (error) {
-        console.log('Could not pre-fill AWS config:', error);
-    }
-
-    // Set up AWS checkbox toggle
-    const skipAwsCheckbox = document.getElementById('skip-aws') as HTMLInputElement;
-    const awsFields = document.getElementById('aws-fields') as HTMLElement;
-    
-    if (skipAwsCheckbox && awsFields) {
-        skipAwsCheckbox.addEventListener('change', (): void => {
-            awsFields.style.display = skipAwsCheckbox.checked ? 'none' : 'block';
-        });
-    }
+    // AWS pre-fill removed: `podium configure` no longer accepts AWS
+    // credentials, so there is nothing to pre-fill them into.
 
     // Pre-fill projects directory with default
     console.log('🔄 Setting up default projects directory...');

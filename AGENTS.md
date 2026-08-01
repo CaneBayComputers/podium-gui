@@ -18,7 +18,7 @@ In this order:
    call. The docs describe intent; `--help` is the argument contract, and it is the
    thing that has actually moved.
 
-Full published docs: <https://canebaycomputers.github.io/podium-cli/guide/>
+Full published docs: <https://podiumcli.com/guide/>
 
 ### The podium-cli directory is READ-ONLY to you
 

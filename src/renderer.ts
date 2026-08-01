@@ -70,11 +70,13 @@ document.addEventListener('DOMContentLoaded', (): void => {
     // Show initial loading screen
     showInitialLoading();
     
-    // Initialize app components
-    Promise.all([
+    // Read which optional services are enabled BEFORE the first render, so
+    // minio/meilisearch are never briefly shown as "Stopped" on a machine that
+    // simply never enabled them.
+    loadOptionalServices().then(() => Promise.all([
         loadProjects(),
         loadServices()
-    ]).then(() => {
+    ])).then(() => {
         setupEventListeners();
         
         // Show debug indicator if in debug mode
@@ -142,33 +144,148 @@ function toggleGithubOptions(): void {
     }
 }
 
-function toggleVersionGroups(): void {
-    const projectType: string = (document.querySelector('input[name="project-type"]:checked') as HTMLInputElement).value;
-    const laravelGroup: HTMLElement | null = document.getElementById('laravel-version-group');
-    const wordpressGroup: HTMLElement | null = document.getElementById('wordpress-version-group');
-    
-    // Hide all version groups first
-    if (laravelGroup) laravelGroup.style.display = 'none';
-    if (wordpressGroup) wordpressGroup.style.display = 'none';
-    
-    // Show the appropriate version group and reset to "latest"
-    if (projectType === 'laravel' && laravelGroup) {
-        laravelGroup.style.display = 'block';
-        const versionInput = document.getElementById('laravel-version') as HTMLInputElement;
-        if (versionInput) versionInput.value = 'latest';
-    } else if (projectType === 'wordpress' && wordpressGroup) {
-        wordpressGroup.style.display = 'block';
-        const versionInput = document.getElementById('wordpress-version') as HTMLInputElement;
-        if (versionInput) versionInput.value = 'latest';
+// ---------------------------------------------------------------------------
+// Framework catalogue (New Project)
+//
+// Read from the CLI's src/catalog/frameworks.json rather than hardcoded. The
+// form used to offer 3 of the 13 frameworks and send `--database mysql` for
+// every one of them, which the CLI then silently coerced to whatever that
+// framework actually supports.
+// ---------------------------------------------------------------------------
+
+interface CatalogFramework {
+    slug: string;
+    display: string;
+    runtime: string;
+    databases: string[];
+    note: string;
+}
+
+let frameworkCatalog: CatalogFramework[] = [];
+
+// `--version` only genuinely does something for these two:
+//   laravel   -> sets CUR_LARAVEL_BRANCH, validated against Laravel's git tags
+//   wordpress -> downloads wordpress-<version>.tar.gz
+// The CLI's help also advertises `php: 8 or 7`, but frameworks/php.sh contains
+// no version handling at all and the only PHP image in the tree is nginx-php8 —
+// passing a PHP version silently gets you 8.3 either way. October CMS pins its
+// own version through OCTOBER_VERSION rather than this flag. Reported upstream;
+// offering a control for any of those would be lying to the user.
+const VERSIONED_FRAMEWORKS = ['laravel', 'wordpress'];
+
+async function loadFrameworkCatalog(): Promise<void> {
+    if (frameworkCatalog.length > 0) return;
+
+    const result = await ipcRenderer.invoke('get-framework-catalog');
+    frameworkCatalog = result.frameworks || [];
+
+    const list = document.getElementById('framework-list');
+    if (!list) return;
+
+    if (frameworkCatalog.length === 0) {
+        list.innerHTML = `<p class="app-list-empty">Could not read the framework catalogue.<br><small>${escapeHtml(result.error || '')}</small></p>`;
+        return;
     }
-    // Note: PHP doesn't need version selection
+
+    // Group by runtime, the way the CLI's own listing reads.
+    const runtimes: string[] = [];
+    for (const fw of frameworkCatalog) {
+        if (!runtimes.includes(fw.runtime)) runtimes.push(fw.runtime);
+    }
+
+    list.innerHTML = runtimes.map((runtime) => {
+        const rows = frameworkCatalog
+            .filter((fw) => fw.runtime === runtime)
+            .map((fw) => `
+                <label class="framework-option" data-testid="framework-${escapeHtml(fw.slug)}">
+                    <input type="radio" name="project-type" value="${escapeHtml(fw.slug)}"
+                           onchange="onFrameworkChange()">
+                    <span>${escapeHtml(fw.display)}</span>
+                </label>
+            `).join('');
+
+        return `
+            <div class="framework-runtime">
+                <span class="runtime-label">${escapeHtml(runtime)}</span>
+                <div class="framework-options">${rows}</div>
+            </div>
+        `;
+    }).join('');
+
+    // Laravel stays the default, as before.
+    const preferred = (list.querySelector('input[value="laravel"]')
+        || list.querySelector('input[name="project-type"]')) as HTMLInputElement | null;
+    if (preferred) preferred.checked = true;
+
+    onFrameworkChange();
+}
+
+function selectedFramework(): CatalogFramework | null {
+    const checked = document.querySelector('input[name="project-type"]:checked') as HTMLInputElement | null;
+    if (!checked) return null;
+    return frameworkCatalog.find((fw) => fw.slug === checked.value) || null;
+}
+
+function onFrameworkChange(): void {
+    const framework = selectedFramework();
+    if (!framework) return;
+
+    // Offer only the engines this framework actually works with. "Auto" is the
+    // default and sends no --database at all, letting the CLI apply its own
+    // per-framework rule rather than the GUI second-guessing it.
+    const select = document.getElementById('project-database') as HTMLSelectElement;
+    if (select) {
+        const options = ['<option value="">Auto — chosen by Podium</option>'];
+        for (const db of framework.databases) {
+            options.push(`<option value="${escapeHtml(db)}">${escapeHtml(db)}</option>`);
+        }
+        select.innerHTML = options.join('');
+    }
+
+    const help = document.getElementById('project-database-help');
+    if (help) {
+        help.textContent = framework.databases.length === 1
+            ? `${framework.display} only works with ${framework.databases[0]}.`
+            : 'Only engines this framework supports are offered.';
+    }
+
+    // The catalogue's note carries what the name alone cannot — in-house
+    // frameworks especially, which no one can be expected to recognise.
+    const note = document.getElementById('framework-note');
+    if (note) note.textContent = framework.note || '';
+
+    toggleVersionGroups();
+}
+
+function toggleVersionGroups(): void {
+    const framework = selectedFramework();
+    const slug = framework?.slug || '';
+
+    const versionGroups: Array<[string, string]> = [
+        ['laravel-version-group', 'laravel'],
+        ['wordpress-version-group', 'wordpress']
+    ];
+
+    for (const [id, owner] of versionGroups) {
+        const group = document.getElementById(id);
+        if (!group) continue;
+
+        const show = slug === owner && VERSIONED_FRAMEWORKS.includes(slug);
+        group.style.display = show ? 'block' : 'none';
+
+        if (show && owner !== 'php') {
+            const input = document.getElementById(`${owner}-version`) as HTMLInputElement;
+            if (input) input.value = 'latest';
+        }
+    }
 }
 
 async function loadProjects(): Promise<void> {
     try {
-        // Use podium status command with JSON output for cleaner parsing
-        const result = await ipcRenderer.invoke('execute-podium', 'status', ['--json-output']);
-        
+        // `--all` is required: podium status lists only RUNNING projects by
+        // default, so without it the grid is empty whenever nothing is up.
+        const result = await ipcRenderer.invoke('execute-podium', 'status', ['--all', '--json-output']);
+
         // Check if command succeeded
         if (result.code !== 0) {
             console.log('Podium status command failed, likely no projects or services stopped');
@@ -177,8 +294,9 @@ async function loadProjects(): Promise<void> {
             renderProjects();
             return;
         }
-        
+
         parseProjectStatusJSON(result.stdout);
+        await hydrateProjectMetadata();
         renderProjects();
     } catch (error) {
         console.error('Failed to load projects:', error);
@@ -232,13 +350,23 @@ function parseProjectStatusJSON(statusOutput: string): void {
                     status: 'stopped'
                 };
                 
-                // Determine overall status
-                if (project.dockerRunning && project.portMapped) {
-                    project.status = 'running';
-                } else if (project.dockerRunning) {
+                // Determine overall status.
+                //
+                // `port_mapped` is NOT a liveness signal. Podium routes to a
+                // project by hostname via its VPC IP (http://<project>/), so an
+                // adapted multi-service compose — anything `podium install`
+                // produces with an nginx front — runs perfectly with no host
+                // port published at all. Requiring port_mapped here marked a
+                // verified-healthy install (HTTP 200) as stopped, offered a
+                // "Start" button for an already-running container, and hid its
+                // URL. The container being up is what "running" means.
+                if (!project.dockerRunning) {
+                    project.status = 'stopped';
+                } else if (projectData.ping_status && projectData.ping_status !== 'ok' && projectData.ping_status !== 'skipped') {
+                    // Container is up but not answering on the VPC yet.
                     project.status = 'starting';
                 } else {
-                    project.status = 'stopped';
+                    project.status = 'running';
                 }
                 
                 // Detect project type from name (simplified)
@@ -267,6 +395,42 @@ function parseProjectStatusJSON(statusOutput: string): void {
     }
 }
 
+// `podium status` reports operational state only — it has no display_name,
+// description or emoji, and the CLI no longer writes an x-metadata block. The
+// GUI owns that metadata and reads it back from each project's compose file.
+// Cached by project name and applied at RENDER time, not parse time.
+// parseProjectStatusJSON() rebuilds the shared `projects` array from scratch and
+// is called by both loadProjects() and loadServices() — so anything written onto
+// the project objects gets wiped by whichever call finishes last. Keeping
+// metadata in its own map makes it survive that.
+let projectMetadata: Record<string, { display_name: string; description: string; emoji: string }> = {};
+
+async function hydrateProjectMetadata(): Promise<void> {
+    await Promise.all(projects.map(async (project: Project) => {
+        try {
+            const metadata = await ipcRenderer.invoke('get-project-metadata', project.name);
+            if (metadata) {
+                projectMetadata[project.name] = metadata;
+            }
+        } catch (error) {
+            console.log(`No metadata for ${project.name}:`, error);
+        }
+    }));
+}
+
+/** Merge cached display metadata onto a freshly parsed project. */
+function withMetadata(project: Project): Project {
+    const metadata = projectMetadata[project.name];
+    if (!metadata) return project;
+
+    const merged: Project = { ...project };
+    if (metadata.display_name) merged.display_name = metadata.display_name;
+    if (metadata.description) merged.description = metadata.description;
+    if (metadata.emoji) merged.emoji = metadata.emoji;
+
+    return merged;
+}
+
 // Legacy function - redirects to JSON version
 function parseProjectStatus(statusOutput: string): void {
     console.log('DEBUG: parseProjectStatus called - redirecting to JSON version');
@@ -289,9 +453,13 @@ function renderProjects(): void {
         return;
     }
 
-    grid.innerHTML = projects.map((project: Project) => {
+    grid.innerHTML = projects.map((parsed: Project) => {
+        // Apply cached display metadata here rather than trusting the parsed
+        // object — see projectMetadata for why.
+        const project = withMetadata(parsed);
+
         // Use emoji from metadata or fallback to type-based icon
-        const projectIcon = project.emoji || 
+        const projectIcon = project.emoji ||
                            (project.type === 'laravel' ? '🎯' : 
                             project.type === 'wordpress' ? '📝' : '🐘');
         
@@ -319,16 +487,17 @@ function renderProjects(): void {
                 ${descriptionHtml}
                 <div class="project-details">
                     <div class="project-urls">
-                        ${project.status === 'running' && project.localUrl ? `<a href="#" class="url-link" onclick="event.preventDefault(); openUrl('${project.localUrl}'); return false;">${project.localUrl}</a>` : ''}
-                        ${project.status === 'running' && project.lanUrl ? `<a href="#" class="url-link" onclick="event.preventDefault(); openUrl('${project.lanUrl}'); return false;">${project.lanUrl}</a>` : ''}
+                        ${project.status !== 'stopped' && project.localUrl ? `<a href="#" class="url-link" onclick="event.preventDefault(); openUrl('${project.localUrl}'); return false;">${project.localUrl}</a>` : ''}
+                        ${project.status !== 'stopped' && project.portMapped && project.lanUrl ? `<a href="#" class="url-link" onclick="event.preventDefault(); openUrl('${project.lanUrl}'); return false;">${project.lanUrl}</a>` : ''}
                     </div>
                     <div class="project-actions">
-                        ${project.status === 'running' ? 
+                        ${project.status !== 'stopped' ?
                             `<button class="btn btn-warning btn-sm" onclick="stopProject('${project.name}')">Stop</button>` :
                             `<button class="btn btn-success btn-sm" onclick="startProject('${project.name}')">Start</button>`
                         }
+                        <button class="btn btn-create btn-sm" onclick="modifyWithAI('${project.name}')" title="Continue the AI session in this project">✨ Modify with AI</button>
                         <button class="btn btn-secondary btn-sm" onclick="editProject('${project.name}')">Edit</button>
-                        <button class="btn btn-danger btn-sm" onclick="showRemoveProjectModal('${project.name}')">Remove</button>
+                        <button class="btn btn-danger btn-sm" onclick="showRemoveProjectModal('${project.name}')">Trash</button>
                     </div>
                 </div>
             </div>
@@ -340,7 +509,7 @@ function renderProjects(): void {
 
 async function loadServices(): Promise<void> {
     try {
-        const result = await ipcRenderer.invoke('execute-podium', 'status', ['--json-output']);
+        const result = await ipcRenderer.invoke('execute-podium', 'status', ['--all', '--json-output']);
         
         if (result.code !== 0) {
             console.log('Services status command failed, likely no services running');
@@ -353,6 +522,20 @@ async function loadServices(): Promise<void> {
     } catch (error) {
         console.error('Failed to load services:', error);
         renderServices();
+    }
+}
+
+// Optional shared services, per the CLI's `podium enable-service`. Kept as a
+// list rather than inferred, so a core service is never hidden by accident.
+const OPTIONAL_SERVICE_NAMES = ['minio', 'meilisearch'];
+let enabledOptionalServices: string[] = [];
+
+async function loadOptionalServices(): Promise<void> {
+    try {
+        enabledOptionalServices = await ipcRenderer.invoke('get-optional-services') || [];
+    } catch (error) {
+        console.log('Could not read OPTIONAL_SERVICES:', error);
+        enabledOptionalServices = [];
     }
 }
 
@@ -371,7 +554,27 @@ function renderServices(): void {
         return;
     }
 
-    servicesGrid.innerHTML = Object.entries(sharedServices).map(([serviceName, service]: [string, SharedService]) => {
+    // Hide optional services this machine has not enabled. podium status reports
+    // minio/meilisearch as "stopped" whether or not they were ever turned on,
+    // and a red "Stopped" card reads as a broken service rather than an unused
+    // feature. Anything enabled via `podium enable-service` shows normally.
+    const visibleServices = Object.entries(sharedServices).filter(([serviceName]) => {
+        const key = serviceName.replace(/^podium-/, '').toLowerCase();
+        return !OPTIONAL_SERVICE_NAMES.includes(key) || enabledOptionalServices.includes(key);
+    });
+
+    if (visibleServices.length === 0) {
+        servicesGrid.innerHTML = `
+            <div class="service-card">
+                <div class="service-status">⚪</div>
+                <h4>No Services</h4>
+                <p>Start Podium to see shared services</p>
+            </div>
+        `;
+        return;
+    }
+
+    servicesGrid.innerHTML = visibleServices.map(([serviceName, service]: [string, SharedService]) => {
         const statusIcon = service.status === 'running' ? '🟢' : '🔴';
         const statusText = service.status === 'running' ? 'Running' : 'Stopped';
         
@@ -481,11 +684,13 @@ async function removeProject(projectName: string): Promise<void> {
     try {
         showLoadingOverlay('Removing Project', `Removing project ${projectName}...`);
         
-        const args = [projectName, '--force', '--json-output'];
-        if (preserveDatabase) {
-            args.push('--preserve-database');
-        }
-        
+        // podium remove PRESERVES the database by default; --force-db-delete is
+        // what drops it. (The legacy --force flag is an alias for
+        // --force-db-delete, not "skip prompts" — passing it here used to delete
+        // databases the user asked to keep.)
+        const args = [projectName, '--json-output'];
+        args.push(preserveDatabase ? '--preserve-database' : '--force-db-delete');
+
         const result = await ipcRenderer.invoke('execute-podium', 'remove', args);
         
         hideLoadingOverlay();
@@ -521,8 +726,10 @@ function openUrl(url: string): void {
     shell.openExternal(url);
 }
 
-function showCreateProject(): void {
+async function showCreateProject(): Promise<void> {
     showModal('new-project-modal');
+    // Built from the CLI's catalogue on first open, then cached.
+    await loadFrameworkCatalog();
 }
 
 
@@ -581,19 +788,71 @@ function manualRefresh(): void {
 startAutoRefresh();
 
 // Loading overlay functions
-function showLoadingOverlay(message: string = 'Please wait...', details: string = 'Processing your request'): void {
+// When `streamOutput` is set, the overlay grows a live output pane fed by
+// command-stream-data. Long operations (scaffolding a framework pulls
+// composer/npm/pip) otherwise showed a spinner and nothing else for minutes.
+let overlayStreaming = false;
+
+function showLoadingOverlay(
+    message: string = 'Please wait...',
+    details: string = 'Processing your request',
+    streamOutput: boolean = false
+): void {
     const overlay = document.getElementById('loading-overlay');
     const messageEl = document.getElementById('loading-message');
     const detailsEl = document.getElementById('loading-details');
-    
+    const output = document.getElementById('loading-output');
+
     if (overlay && messageEl && detailsEl) {
         messageEl.textContent = message;
         detailsEl.textContent = details;
         overlay.style.display = 'flex';
     }
+
+    overlayStreaming = streamOutput;
+    if (output) {
+        output.textContent = '';
+        output.style.display = streamOutput ? 'block' : 'none';
+    }
+}
+
+// Fed by execute-command-stream. Kept separate from the install modal's pane so
+// the two can be open independently.
+ipcRenderer.on('command-stream-data', (_event: any, payload: { type: string; data: string }) => {
+    if (!overlayStreaming) return;
+
+    const output = document.getElementById('loading-output');
+    if (!output) return;
+
+    // Strip ANSI colour — this is a plain <pre>, not a terminal.
+    output.textContent += payload.data.replace(/\x1b\[[0-9;]*m/g, '');
+    output.scrollTop = output.scrollHeight;
+});
+
+// Keep the overlay up with its output when something fails, so the user can
+// actually read why. Previously the whole of stdout — curl progress bars and
+// all — was concatenated into a toast, which was unreadable.
+function failLoadingOverlay(message: string, details: string): void {
+    overlayStreaming = false;
+
+    const messageEl = document.getElementById('loading-message');
+    const detailsEl = document.getElementById('loading-details');
+    const spinner = document.querySelector('#loading-overlay .loading-spinner') as HTMLElement;
+    const dismiss = document.getElementById('loading-dismiss');
+
+    if (messageEl) messageEl.textContent = message;
+    if (detailsEl) detailsEl.textContent = details;
+    if (spinner) spinner.style.display = 'none';
+    if (dismiss) dismiss.style.display = 'inline-block';
 }
 
 function hideLoadingOverlay(): void {
+    overlayStreaming = false;
+
+    const spinner = document.querySelector('#loading-overlay .loading-spinner') as HTMLElement;
+    const dismiss = document.getElementById('loading-dismiss');
+    if (spinner) spinner.style.display = '';
+    if (dismiss) dismiss.style.display = 'none';
     const overlay = document.getElementById('loading-overlay');
     if (overlay) {
         overlay.style.display = 'none';
@@ -706,7 +965,7 @@ if (ipcRenderer) {
 async function testStartProject(projectName: string): Promise<void> {
     console.log('🧪 Testing startProject with:', projectName);
     try {
-        const result = await ipcRenderer.invoke('execute-command', 'podium', ['start', projectName]);
+        const result = await ipcRenderer.invoke('execute-podium', 'up', [projectName]);
         console.log('✅ Command result:', result);
     } catch (error) {
         console.error('❌ Command failed:', error);
@@ -717,7 +976,10 @@ async function testStartProject(projectName: string): Promise<void> {
 async function startServices(): Promise<void> {
     try {
         showLoadingOverlay('Starting Services', 'Starting all shared services...');
-        const result = await ipcRenderer.invoke('execute-podium', 'start-services', ['--json-output']);
+        // No flags: the podium dispatcher invokes start_services.sh/stop_services.sh
+        // without forwarding arguments, so --json-output never reaches them.
+        // Success is judged by the exit code.
+        const result = await ipcRenderer.invoke('execute-podium', 'start-services', []);
         
         hideLoadingOverlay();
         
@@ -741,7 +1003,7 @@ async function startServices(): Promise<void> {
 async function stopServices(): Promise<void> {
     try {
         showLoadingOverlay('Stopping Services', 'Stopping all shared services...');
-        const result = await ipcRenderer.invoke('execute-podium', 'stop-services', ['--json-output']);
+        const result = await ipcRenderer.invoke('execute-podium', 'stop-services', []);
         
         hideLoadingOverlay();
         
@@ -897,12 +1159,13 @@ async function stopAllProjects(): Promise<void> {
 }
 
 // Additional GUI functions
-function createNewProject(): void {
+async function createNewProject(): Promise<void> {
     console.log('DEBUG: createNewProject called');
-    console.log('DEBUG: About to call showModal with new-project-modal');
-    
+
     showModal('new-project-modal');
-    console.log('DEBUG: showModal call completed');
+    // The header button and the empty-state button are separate entry points;
+    // both need the catalogue built before the form is usable.
+    await loadFrameworkCatalog();
 }
 
 // Make this function available globally immediately
@@ -917,6 +1180,878 @@ function handleCreateProject(): void {
 }
 
 // Functions made globally available at end of file
+
+// ---------------------------------------------------------------------------
+// AI agent settings (`podium ai-set`)
+//
+// Saving can INSTALL the agent — ai_set.sh's ensure_ai_agent_installed runs
+// `npm install -g` for codex/gemini and curl installers for claude/aider — so
+// this streams rather than spinning silently.
+// ---------------------------------------------------------------------------
+
+// Which fields each agent actually uses, from `podium ai-set --help`.
+const AI_AGENT_RULES: Record<string, { modelRequired: boolean; keyRequired: boolean; apiBase: boolean }> = {
+    claude: { modelRequired: false, keyRequired: false, apiBase: false },
+    codex:  { modelRequired: false, keyRequired: false, apiBase: false },
+    gemini: { modelRequired: false, keyRequired: false, apiBase: false },
+    aider:  { modelRequired: true,  keyRequired: true,  apiBase: true }
+};
+
+async function showAiSettings(): Promise<void> {
+    clearFieldErrors();
+    const output = document.getElementById('ai-settings-output');
+    const wrap = document.getElementById('ai-settings-output-wrap');
+    if (output) output.textContent = '';
+    if (wrap) wrap.style.display = 'none';
+
+    const current = await ipcRenderer.invoke('get-ai-agent-full');
+
+    (document.getElementById('ai-agent') as HTMLSelectElement).value = current.agent || '';
+    (document.getElementById('ai-model') as HTMLInputElement).value = current.model || '';
+    (document.getElementById('ai-api-base') as HTMLInputElement).value = current.api_base || '';
+    (document.getElementById('ai-api-key') as HTMLInputElement).value = '';
+
+    const note = document.getElementById('ai-key-note');
+    if (note) {
+        note.textContent = current.has_api_key
+            ? 'A key is stored. Leave blank to keep it, or clear the field and save to remove it.'
+            : 'No key stored.';
+    }
+
+    onAiAgentChange();
+    showModal('ai-settings-modal');
+}
+
+function onAiAgentChange(): void {
+    // Switching agents invalidates any previous validation message. Without
+    // this, selecting aider, failing validation, then switching to Claude left
+    // "aider requires a model" sitting under a field marked optional.
+    clearFieldErrors();
+
+    const agent = (document.getElementById('ai-agent') as HTMLSelectElement)?.value || '';
+    const rules = AI_AGENT_RULES[agent];
+
+    const status = document.getElementById('ai-agent-status');
+    if (status) {
+        status.textContent = agent
+            ? 'Podium installs this agent if it is not already present.'
+            : 'Create with AI and Modify with AI stay disabled without an agent.';
+    }
+
+    const baseGroup = document.getElementById('ai-api-base-group');
+    if (baseGroup) baseGroup.style.display = rules?.apiBase ? 'block' : 'none';
+
+    const modelReq = document.getElementById('ai-model-req');
+    if (modelReq) modelReq.textContent = rules?.modelRequired ? '(required)' : '(optional)';
+
+    const keyReq = document.getElementById('ai-key-req');
+    if (keyReq) keyReq.textContent = rules?.keyRequired ? '(required)' : '(optional)';
+}
+
+let aiSettingsStreaming = false;
+
+ipcRenderer.on('command-stream-data', (_event: any, payload: { type: string; data: string }) => {
+    if (!aiSettingsStreaming) return;
+    const output = document.getElementById('ai-settings-output');
+    if (!output) return;
+    output.textContent += payload.data.replace(/\x1b\[[0-9;]*m/g, '');
+    output.scrollTop = output.scrollHeight;
+});
+
+async function saveAiSettings(): Promise<void> {
+    clearFieldErrors();
+
+    const agent = (document.getElementById('ai-agent') as HTMLSelectElement)?.value || '';
+    const model = (document.getElementById('ai-model') as HTMLInputElement)?.value?.trim() || '';
+    const apiKey = (document.getElementById('ai-api-key') as HTMLInputElement)?.value?.trim() || '';
+    const apiBase = (document.getElementById('ai-api-base') as HTMLInputElement)?.value?.trim() || '';
+    const rules = AI_AGENT_RULES[agent];
+
+    if (agent && rules?.modelRequired && !model) {
+        showFieldError('ai-model', `${agent} requires a model.`);
+        return;
+    }
+
+    const args = ['ai-set', '--agent', agent];
+    if (model) args.push('--model', model);
+    if (apiKey) args.push('--api-key', apiKey);
+    if (apiBase) args.push('--api-base', apiBase);
+
+    const wrap = document.getElementById('ai-settings-output-wrap');
+    const output = document.getElementById('ai-settings-output');
+    if (wrap) wrap.style.display = 'block';
+    if (output) output.textContent = '';
+    aiSettingsStreaming = true;
+
+    try {
+        // Not --json-output: that suppresses the installer's progress, which is
+        // the whole reason this streams.
+        const result = await ipcRenderer.invoke('execute-command-stream', 'podium', args);
+        aiSettingsStreaming = false;
+
+        if (result.code === 0) {
+            showSuccess(agent ? `AI agent set to ${agent}.` : 'AI agent cleared.');
+            closeModal();
+        } else {
+            showError(`Could not set the AI agent (exit ${result.code}). See the output above.`);
+        }
+    } catch (error) {
+        aiSettingsStreaming = false;
+        showError('Error setting the AI agent: ' + (error as Error).message);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Create with AI (`podium create`, driven phase by phase)
+//
+// Phase 1 classify -> render choices natively -> phase 2 create -> phase 3 build.
+// Shelling out to `podium create` in one call is not an option: it presents
+// interactive terminal menus a GUI cannot answer, and --json-output silently
+// auto-picks the top recommendation instead.
+// ---------------------------------------------------------------------------
+
+interface ClassifyCandidate {
+    kind: 'app' | 'framework';
+    slug: string;
+    display: string;
+    reason: string;
+    database?: string;
+    databases?: string[];
+}
+
+interface Classification {
+    status: 'success' | 'error';
+    message?: string;
+    project_name: string | null;
+    recommended: 'app' | 'framework';
+    customization_requested: boolean;
+    database?: { slug: string; reason: string } | null;
+    candidates: ClassifyCandidate[];
+}
+
+let classification: Classification | null = null;
+let chosenCandidate: ClassifyCandidate | null = null;
+let currentIdea = '';
+
+async function showCreateWithAI(): Promise<void> {
+    classification = null;
+    chosenCandidate = null;
+    currentIdea = '';
+
+    (document.getElementById('create-idea') as HTMLTextAreaElement).value = '';
+    (document.getElementById('create-name') as HTMLInputElement).value = '';
+    (document.getElementById('create-output') as HTMLElement).textContent = '';
+    clearFieldErrors();
+    setCreateStage('idea');
+    showModal('create-ai-modal');
+
+    // Creating is meaningless without an agent; say so up front rather than
+    // failing a minute later inside the classifier.
+    const { agent } = await ipcRenderer.invoke('get-ai-agent');
+    const warning = document.getElementById('create-no-agent');
+    const classifyBtn = document.getElementById('create-classify-btn') as HTMLButtonElement;
+
+    if (warning) warning.style.display = agent ? 'none' : 'block';
+    if (classifyBtn) classifyBtn.disabled = !agent;
+}
+
+function setCreateStage(stage: 'idea' | 'thinking' | 'choose' | 'building'): void {
+    const stages: Record<string, string> = {
+        idea: 'create-stage-idea',
+        thinking: 'create-stage-thinking',
+        choose: 'create-stage-choose',
+        building: 'create-stage-building'
+    };
+
+    for (const [name, id] of Object.entries(stages)) {
+        const el = document.getElementById(id);
+        if (el) el.style.display = name === stage ? 'block' : 'none';
+    }
+
+    const classifyBtn = document.getElementById('create-classify-btn') as HTMLButtonElement;
+    const confirmBtn = document.getElementById('create-confirm-btn') as HTMLButtonElement;
+    const cancelBtn = document.getElementById('create-cancel-btn') as HTMLButtonElement;
+
+    if (classifyBtn) classifyBtn.style.display = stage === 'idea' ? '' : 'none';
+    if (confirmBtn) confirmBtn.style.display = stage === 'choose' ? '' : 'none';
+    if (cancelBtn) cancelBtn.textContent = stage === 'building' ? 'Close' : 'Cancel';
+}
+
+async function handleClassifyIdea(): Promise<void> {
+    const idea = (document.getElementById('create-idea') as HTMLTextAreaElement)?.value?.trim() || '';
+
+    clearFieldErrors();
+    if (!idea) {
+        showFieldError('create-idea', 'Describe what you want to build.');
+        return;
+    }
+
+    currentIdea = idea;
+    setCreateStage('thinking');
+
+    const result: Classification = await ipcRenderer.invoke('classify-idea', idea);
+
+    if (result.status !== 'success' || result.candidates.length === 0) {
+        setCreateStage('idea');
+        showFieldError('create-idea', result.message || 'Could not work out a stack for that.');
+        return;
+    }
+
+    renderClassification(result);
+    setCreateStage('choose');
+}
+
+// Split out so the rendering can be tested with a fixture rather than a live
+// AI round-trip, which is slow and non-deterministic.
+function renderClassification(result: Classification): void {
+    const list = document.getElementById('create-candidates');
+    if (!list) return;
+
+    // Rendering a classification makes it the current one. selectCandidate and
+    // handleCreateFromChoice both read this, so setting it here keeps the two
+    // in step and makes the function usable on its own.
+    classification = result;
+
+    // The CLI orders these apps-first, framework-last, and marks whichever kind
+    // it actually recommends — not simply the first row.
+    const recommendedIndex = result.candidates.findIndex((c) => c.kind === result.recommended);
+
+    list.innerHTML = result.candidates.map((candidate, index) => {
+        const tag = candidate.kind === 'app'
+            ? 'ready to run — live in about 2 minutes'
+            : 'custom build — exactly what you asked for, more time and tokens';
+        const badge = index === recommendedIndex
+            ? '<span class="rec-badge">Recommended</span>'
+            : '';
+
+        return `
+            <div class="candidate" onclick="selectCandidate(${index})" data-testid="candidate-${escapeHtml(candidate.slug)}">
+                <div class="candidate-header">
+                    <strong>${escapeHtml(candidate.display)}</strong>
+                    <code class="app-slug">${escapeHtml(candidate.slug)}</code>
+                    ${badge}
+                </div>
+                <p class="candidate-tag">${tag}</p>
+                <p class="app-note">${escapeHtml(candidate.reason)}</p>
+            </div>
+        `;
+    }).join('');
+
+    // Prefill the name only when the idea implied a real subject; the CLI
+    // returns null rather than inventing "flask-app", and that means ask.
+    const nameInput = document.getElementById('create-name') as HTMLInputElement;
+    const nameHelp = document.getElementById('create-name-help');
+    if (nameInput) nameInput.value = result.project_name || '';
+    if (nameHelp) {
+        nameHelp.textContent = result.project_name
+            ? 'Becomes the project directory and the hostname.'
+            : 'Your description does not suggest a name — pick one.';
+    }
+
+    selectCandidate(recommendedIndex >= 0 ? recommendedIndex : 0);
+}
+
+function selectCandidate(index: number): void {
+    if (!classification) return;
+
+    const candidate = classification.candidates[index];
+    if (!candidate) return;
+
+    chosenCandidate = candidate;
+
+    document.querySelectorAll('#create-candidates .candidate').forEach((el, i) => {
+        el.classList.toggle('selected', i === index);
+    });
+
+    const dbGroup = document.getElementById('create-database-group');
+    const dbSelect = document.getElementById('create-database') as HTMLSelectElement;
+    const dbWhy = document.getElementById('create-database-why');
+    const fixed = document.getElementById('create-fixed-db');
+    const fixedText = document.getElementById('create-fixed-db-text');
+
+    if (candidate.kind === 'app') {
+        // The installer's compose fixes the engine — never offer a choice here.
+        if (dbGroup) dbGroup.style.display = 'none';
+        if (fixed) fixed.style.display = 'block';
+        if (fixedText) {
+            fixedText.textContent = candidate.database
+                ? `Database: ${candidate.database} — set by the ${candidate.display} installer.`
+                : `Database: managed internally by ${candidate.display}.`;
+        }
+    } else {
+        if (fixed) fixed.style.display = 'none';
+        if (dbGroup) dbGroup.style.display = 'block';
+
+        // Offer only engines this framework actually supports, recommended first.
+        const allowed = candidate.databases || [];
+        const recommended = classification.database?.slug || '';
+        const ordered = allowed.includes(recommended)
+            ? [recommended, ...allowed.filter((d) => d !== recommended)]
+            : allowed;
+
+        if (dbSelect) {
+            dbSelect.innerHTML = ordered.map((db, i) =>
+                `<option value="${escapeHtml(db)}">${escapeHtml(db)}${i === 0 && db === recommended ? ' (recommended)' : ''}</option>`
+            ).join('');
+        }
+        if (dbWhy) {
+            dbWhy.textContent = allowed.includes(recommended)
+                ? (classification.database?.reason || '')
+                : `Only engines ${candidate.display} supports are offered.`;
+        }
+    }
+
+    const confirmBtn = document.getElementById('create-confirm-btn') as HTMLButtonElement;
+    if (confirmBtn) {
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = candidate.kind === 'app'
+            ? `Install ${candidate.display}`
+            : `Create ${candidate.display} project`;
+    }
+}
+
+async function handleCreateFromChoice(): Promise<void> {
+    if (!classification || !chosenCandidate) return;
+
+    clearFieldErrors();
+
+    const name = (document.getElementById('create-name') as HTMLInputElement)?.value?.trim() || '';
+    const validation = validateProjectName(name);
+    if (!validation.valid) {
+        showFieldError('create-name', validation.error!);
+        return;
+    }
+
+    const sanitized = sanitizeContainerName(name);
+    if (!sanitized) {
+        showFieldError('create-name', 'Project name must contain at least one valid character.');
+        return;
+    }
+
+    const sudoOk = await ipcRenderer.invoke('ensure-sudo');
+    if (!sudoOk) {
+        showError('Could not authenticate for the hosts file change. Run it from a terminal instead.');
+        return;
+    }
+
+    const candidate = chosenCandidate;
+    installInProgress = true;
+    setCreateStage('building');
+
+    const title = document.getElementById('create-build-title');
+    if (title) {
+        title.textContent = candidate.kind === 'app'
+            ? `Installing ${candidate.display} as "${sanitized}"…`
+            : `Creating ${candidate.display} project "${sanitized}"…`;
+    }
+
+    // Phase 2 is deterministic and identical to the existing flows — no AI.
+    const args = candidate.kind === 'app'
+        ? ['install', candidate.slug, sanitized, '--one-off']
+        : ['new', candidate.slug, sanitized,
+           ...((document.getElementById('create-database') as HTMLSelectElement)?.value
+               ? ['--database', (document.getElementById('create-database') as HTMLSelectElement).value]
+               : []),
+           '--one-off'];
+
+    try {
+        const result = await ipcRenderer.invoke('execute-command-stream', 'podium', args);
+        installInProgress = false;
+
+        if (result.code !== 0) {
+            showError(`Create failed (exit ${result.code}). See the output above.`);
+            if (title) title.textContent = `Creating "${sanitized}" failed (exit ${result.code}).`;
+            return;
+        }
+
+        loadProjects();
+        loadServices();
+
+        // Phase 3. The build is skipped only for a ready-to-run app that the
+        // idea asked nothing extra of — a framework scaffold is empty, so it
+        // always needs building regardless of customization_requested.
+        const needsBuild = !(candidate.kind === 'app' && classification!.customization_requested === false);
+
+        if (needsBuild) {
+            if (title) title.textContent = `"${sanitized}" is ready — now building your idea.`;
+            openBuildTerminal(sanitized, currentIdea);
+        } else {
+            if (title) title.textContent = `${candidate.display} is installed — http://${sanitized}/`;
+            showSuccess(`${candidate.display} installed at http://${sanitized}/`);
+        }
+    } catch (error) {
+        installInProgress = false;
+        showError('Error creating project: ' + (error as Error).message);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3: the AI build session, in a real embedded terminal
+// ---------------------------------------------------------------------------
+
+interface TerminalSession {
+    id: string;
+    key: string;          // stable per target, so re-opening focuses rather than duplicates
+    label: string;
+    term: any;
+    fit: any;
+    pane: HTMLElement;
+    exited: boolean;
+    status: string;
+}
+
+// Sessions outlive the window: hiding the terminal modal leaves them running,
+// and the header's Terminals button brings them back. Only the tab's × (or
+// "End session") kills a pty. The main process already keys ptys by id, so
+// nothing there needed changing.
+const terminalSessions = new Map<string, TerminalSession>();
+let activeTerminalId = '';
+let terminalResizeHandler: (() => void) | null = null;
+
+function updateTerminalsButton(): void {
+    const button = document.getElementById('terminals-button');
+    if (!button) return;
+
+    const live = terminalSessions.size;
+    button.style.display = live > 0 ? '' : 'none';
+    button.textContent = live > 1 ? `🖥️ Terminals (${live})` : '🖥️ Terminals';
+}
+
+function renderTerminalTabs(): void {
+    const bar = document.getElementById('terminal-tabs');
+    if (!bar) return;
+
+    bar.innerHTML = [...terminalSessions.values()].map((session) => `
+        <div class="terminal-tab${session.id === activeTerminalId ? ' active' : ''}${session.exited ? ' exited' : ''}"
+             onclick="activateTerminal('${session.id}')"
+             data-testid="terminal-tab-${escapeHtml(session.key)}">
+            <span>${escapeHtml(session.label)}</span>
+            <button class="tab-close" title="End this session"
+                    onclick="event.stopPropagation(); killTerminal('${session.id}')">&times;</button>
+        </div>
+    `).join('');
+
+    bar.style.display = terminalSessions.size > 1 ? 'flex' : 'none';
+    updateTerminalsButton();
+}
+
+function fitTerminal(session: TerminalSession): void {
+    try {
+        session.fit.fit();
+        ipcRenderer.invoke('pty-resize', session.id, session.term.cols, session.term.rows);
+    } catch (error) {
+        // A fit racing teardown is not worth surfacing.
+    }
+}
+
+function activateTerminal(id: string): void {
+    const session = terminalSessions.get(id);
+    if (!session) return;
+
+    activeTerminalId = id;
+    terminalSessions.forEach((s) => {
+        s.pane.style.display = s.id === id ? 'block' : 'none';
+    });
+
+    const status = document.getElementById('build-terminal-status');
+    if (status) status.textContent = session.status;
+
+    const title = document.getElementById('build-terminal-title');
+    if (title) title.textContent = terminalSessions.size > 1 ? '🖥️ Terminals' : session.label;
+
+    renderTerminalTabs();
+
+    // Fit only once visible — measuring a hidden pane gives the wrong rows.
+    setTimeout(() => {
+        fitTerminal(session);
+        session.term.focus();
+    }, 30);
+}
+
+function showTerminals(): void {
+    if (terminalSessions.size === 0) return;
+    showModal('build-terminal-modal');
+    activateTerminal(activeTerminalId && terminalSessions.has(activeTerminalId)
+        ? activeTerminalId
+        : [...terminalSessions.keys()][0]!);
+}
+
+// Closing the window does NOT end the sessions — that is what the tab × is for.
+function hideTerminals(): void {
+    closeModal();
+    updateTerminalsButton();
+    loadProjects();
+}
+
+function killTerminal(id: string): void {
+    const session = terminalSessions.get(id);
+    if (!session) return;
+
+    ipcRenderer.invoke('pty-kill', id);
+    try { session.term.dispose(); } catch (error) { /* already gone */ }
+    session.pane.remove();
+    terminalSessions.delete(id);
+
+    if (terminalSessions.size === 0) {
+        activeTerminalId = '';
+        if (terminalResizeHandler) {
+            window.removeEventListener('resize', terminalResizeHandler);
+            terminalResizeHandler = null;
+        }
+        closeModal();
+    } else if (activeTerminalId === id) {
+        activateTerminal([...terminalSessions.keys()][0]!);
+    } else {
+        renderTerminalTabs();
+    }
+
+    updateTerminalsButton();
+    loadProjects();
+}
+
+function closeActiveTerminal(): void {
+    if (activeTerminalId) killTerminal(activeTerminalId);
+}
+
+interface AgentTerminalOptions {
+    title: string;
+    status: string;
+    cwd: string;
+    command: string;
+    args: string[];
+    sessionKey: string;
+    /** Shown if the pty cannot start, so the user can run it themselves. */
+    fallbackHint?: string;
+}
+
+// One embedded-terminal implementation for both agent entry points: the build
+// hand-off after `create`, and "Modify with AI" on an existing project.
+async function openAgentTerminal(options: AgentTerminalOptions): Promise<void> {
+    const { Terminal } = require('@xterm/xterm');
+    const { FitAddon } = require('@xterm/addon-fit');
+
+    const panes = document.getElementById('terminal-panes');
+    if (!panes) return;
+
+    closeModal();
+
+    // Re-opening the same target focuses the live session rather than starting a
+    // second agent in the same directory.
+    const existing = [...terminalSessions.values()].find((s) => s.key === options.sessionKey && !s.exited);
+    if (existing) {
+        showModal('build-terminal-modal');
+        activateTerminal(existing.id);
+        return;
+    }
+
+    const id = `${options.sessionKey}-${performance.now()}`;
+    const pane = document.createElement('div');
+    pane.className = 'terminal-pane';
+    pane.dataset.sessionId = id;
+    panes.appendChild(pane);
+
+    const term = new Terminal({
+        fontSize: 13,
+        fontFamily: 'monospace',
+        cursorBlink: true,
+        theme: { background: '#0f0f23', foreground: '#f8fafc' }
+    });
+    const fit = new FitAddon();
+    term.loadAddon(fit);
+    term.open(pane);
+
+    const session: TerminalSession = {
+        id, key: options.sessionKey, label: options.title,
+        term, fit, pane, exited: false, status: options.status
+    };
+    terminalSessions.set(id, session);
+
+    term.onData((data: string) => ipcRenderer.invoke('pty-input', id, data));
+
+    if (!terminalResizeHandler) {
+        terminalResizeHandler = () => {
+            const active = terminalSessions.get(activeTerminalId);
+            if (active) fitTerminal(active);
+        };
+        window.addEventListener('resize', terminalResizeHandler);
+    }
+
+    showModal('build-terminal-modal');
+    activateTerminal(id);
+
+    const started = await ipcRenderer.invoke('pty-start', id, options.cwd, options.command, options.args);
+
+    if (!started.ok) {
+        term.writeln('\r\n\x1b[31mCould not start an embedded terminal.\x1b[0m');
+        term.writeln(`\x1b[2m${started.error || ''}\x1b[0m`);
+        term.writeln('');
+        term.writeln('Run this yourself instead:');
+        term.writeln(`\x1b[36m  ${options.fallbackHint || `cd ${options.cwd} && ${options.command} ${options.args.join(' ')}`}\x1b[0m`);
+        session.status = 'Embedded terminal unavailable — run the command above.';
+        session.exited = true;
+        activateTerminal(id);
+    }
+}
+
+// Continue the AI session on an existing project.
+//
+// `podium resume <project>` starts the project, prints its status and URL, then
+// reopens the agent with its previous conversation (claude --continue,
+// codex resume --last, gemini --resume latest, aider --restore-chat-history).
+async function modifyWithAI(projectName: string): Promise<void> {
+    const { agent } = await ipcRenderer.invoke('get-ai-agent');
+    if (!agent) {
+        showError('No AI agent is configured. Run `podium ai-set` in a terminal first.');
+        return;
+    }
+
+    // resume takes the project name and cds itself, so run it from the projects
+    // directory rather than inside the project.
+    const projectsDir = await ipcRenderer.invoke('get-projects-dir');
+    await openAgentTerminal({
+        title: `✨ ${projectName}`,
+        status: 'Resuming the AI session in this project.',
+        cwd: projectsDir,
+        command: 'podium',
+        args: ['resume', projectName],
+        sessionKey: `resume-${projectName}`,
+        fallbackHint: `cd ${projectsDir} && podium resume ${projectName}`
+    });
+}
+
+// Phase 3 of create: hand the original idea to the agent inside the finished
+// project, which picks up the AGENTS.md handoff file written there.
+async function openBuildTerminal(projectName: string, idea: string): Promise<void> {
+    const projectsDir = await ipcRenderer.invoke('get-projects-dir');
+    await openAgentTerminal({
+        title: `🛠️ ${projectName}`,
+        status: 'Session running — type to answer the agent.',
+        cwd: `${projectsDir}/${projectName}`,
+        command: 'podium',
+        args: ['ai', idea],
+        sessionKey: `build-${projectName}`,
+        fallbackHint: `cd ${projectsDir}/${projectName} && podium ai`
+    });
+}
+
+ipcRenderer.on('pty-data', (_event: any, payload: { sessionId: string; data: string }) => {
+    terminalSessions.get(payload.sessionId)?.term.write(payload.data);
+});
+
+ipcRenderer.on('pty-exit', (_event: any, payload: { sessionId: string; exitCode: number }) => {
+    const session = terminalSessions.get(payload.sessionId);
+    if (!session) return;
+
+    session.exited = true;
+    session.status = payload.exitCode === 0
+        ? 'Session finished.'
+        : `Session exited with code ${payload.exitCode}.`;
+    session.term.writeln(`\r\n\x1b[2m[session ended: ${payload.exitCode}]\x1b[0m`);
+
+    if (session.id === activeTerminalId) {
+        const status = document.getElementById('build-terminal-status');
+        if (status) status.textContent = session.status;
+    }
+    renderTerminalTabs();
+    loadProjects();
+});
+
+// ---------------------------------------------------------------------------
+// Install an app (`podium install <app> [name]`)
+//
+// Distinct from New Project on purpose: `new` scaffolds a framework you write,
+// `install` deploys finished software. The database is fixed by each installer,
+// so it is shown as information and never offered as a choice.
+// ---------------------------------------------------------------------------
+
+interface CatalogApp {
+    slug: string;
+    display: string;
+    database: string;
+    note: string;
+}
+
+let appCatalog: CatalogApp[] = [];
+let selectedApp: CatalogApp | null = null;
+let installInProgress = false;
+
+async function showInstallApp(): Promise<void> {
+    selectedApp = null;
+    installInProgress = false;
+
+    // Reset the modal from any previous run
+    const search = document.getElementById('install-search') as HTMLInputElement;
+    const nameInput = document.getElementById('install-project-name') as HTMLInputElement;
+    const output = document.getElementById('install-output');
+    if (search) search.value = '';
+    if (nameInput) nameInput.value = '';
+    if (output) output.textContent = '';
+
+    setInstallView('picker');
+    showModal('install-app-modal');
+
+    if (appCatalog.length === 0) {
+        const result = await ipcRenderer.invoke('get-app-catalog');
+        appCatalog = result.apps || [];
+
+        if (result.error) {
+            console.error('Failed to load app catalogue:', result.error);
+            const list = document.getElementById('install-app-list');
+            if (list) {
+                list.innerHTML = `<p class="app-list-empty">Could not read the app catalogue.<br><small>${escapeHtml(result.error)}</small></p>`;
+            }
+            return;
+        }
+    }
+
+    renderAppCatalog();
+}
+
+function setInstallView(view: 'picker' | 'progress'): void {
+    const picker = document.getElementById('install-picker');
+    const progress = document.getElementById('install-progress');
+    const submit = document.getElementById('install-submit-btn') as HTMLButtonElement;
+    const cancel = document.getElementById('install-cancel-btn') as HTMLButtonElement;
+
+    if (picker) picker.style.display = view === 'picker' ? 'block' : 'none';
+    if (progress) progress.style.display = view === 'progress' ? 'block' : 'none';
+    if (submit) submit.style.display = view === 'picker' ? '' : 'none';
+    if (cancel) cancel.textContent = view === 'picker' ? 'Cancel' : 'Close';
+}
+
+function escapeHtml(value: string): string {
+    const div = document.createElement('div');
+    div.textContent = value;
+    return div.innerHTML;
+}
+
+function renderAppCatalog(): void {
+    const list = document.getElementById('install-app-list');
+    const countLabel = document.getElementById('install-app-count');
+    if (!list) return;
+
+    const query = ((document.getElementById('install-search') as HTMLInputElement)?.value || '')
+        .trim()
+        .toLowerCase();
+
+    const matches = query === ''
+        ? appCatalog
+        : appCatalog.filter((app: CatalogApp) =>
+            app.slug.toLowerCase().includes(query) ||
+            app.display.toLowerCase().includes(query) ||
+            app.note.toLowerCase().includes(query));
+
+    if (countLabel) {
+        countLabel.textContent = query === ''
+            ? `(${appCatalog.length} apps)`
+            : `(${matches.length} of ${appCatalog.length})`;
+    }
+
+    if (matches.length === 0) {
+        list.innerHTML = '<p class="app-list-empty">No apps match that search.</p>';
+        return;
+    }
+
+    list.innerHTML = matches.map((app: CatalogApp) => {
+        const selected = selectedApp?.slug === app.slug ? ' selected' : '';
+        // Empty database means the app manages its own storage internally.
+        const database = app.database
+            ? `<span class="app-db">${escapeHtml(app.database)}</span>`
+            : '<span class="app-db app-db-none">self-contained</span>';
+        const note = app.note ? `<p class="app-note">${escapeHtml(app.note)}</p>` : '';
+
+        return `
+            <div class="app-entry${selected}" onclick="selectApp('${escapeHtml(app.slug)}')" data-testid="app-${escapeHtml(app.slug)}">
+                <div class="app-entry-header">
+                    <strong>${escapeHtml(app.display)}</strong>
+                    <code class="app-slug">${escapeHtml(app.slug)}</code>
+                    ${database}
+                </div>
+                ${note}
+            </div>
+        `;
+    }).join('');
+}
+
+function selectApp(slug: string): void {
+    selectedApp = appCatalog.find((app: CatalogApp) => app.slug === slug) || null;
+
+    const submit = document.getElementById('install-submit-btn') as HTMLButtonElement;
+    if (submit) {
+        submit.disabled = selectedApp === null;
+        submit.textContent = selectedApp ? `Install ${selectedApp.display}` : 'Install';
+    }
+
+    renderAppCatalog();
+}
+
+async function handleInstallApp(): Promise<void> {
+    if (!selectedApp || installInProgress) return;
+
+    clearFieldErrors();
+
+    const projectName = (document.getElementById('install-project-name') as HTMLInputElement)?.value?.trim() || '';
+    if (projectName) {
+        const validation = validateProjectName(projectName);
+        if (!validation.valid) {
+            showFieldError('install-project-name', validation.error!);
+            return;
+        }
+    }
+
+    // Installing writes /etc/hosts through setup + up.
+    const sudoOk = await ipcRenderer.invoke('ensure-sudo');
+    if (!sudoOk) {
+        showError('Could not authenticate for the hosts file change. Run the install from a terminal instead.');
+        return;
+    }
+
+    const app = selectedApp;
+    const target = projectName || app.slug;
+
+    installInProgress = true;
+    setInstallView('progress');
+
+    const title = document.getElementById('install-progress-title');
+    if (title) title.textContent = `Installing ${app.display} as "${target}"… this can take several minutes.`;
+
+    // Deliberately NOT --json-output: it suppresses all human-readable output,
+    // including the URL, credentials and notes printed at the end, and would
+    // leave a failure with an empty stdout. --one-off skips the AI handoff,
+    // which has nothing to attach to in a GUI.
+    const args = ['install', app.slug];
+    if (projectName) args.push(projectName);
+    args.push('--one-off');
+
+    try {
+        const result = await ipcRenderer.invoke('execute-command-stream', 'podium', args);
+
+        installInProgress = false;
+
+        if (result.code === 0) {
+            showSuccess(`${app.display} installed at http://${target}/`);
+            if (title) title.textContent = `${app.display} is installed — http://${target}/`;
+        } else {
+            showError(`Install failed (exit ${result.code}). See the output above.`);
+            if (title) title.textContent = `Install of ${app.display} failed (exit ${result.code}).`;
+        }
+
+        loadProjects();
+        loadServices();
+    } catch (error) {
+        installInProgress = false;
+        showError('Error installing app: ' + (error as Error).message);
+    }
+}
+
+// Live output from the streamed install
+ipcRenderer.on('command-stream-data', (_event: any, payload: { type: string; data: string }) => {
+    const output = document.getElementById('install-output');
+    if (!output || !installInProgress) return;
+
+    output.textContent += payload.data;
+    output.scrollTop = output.scrollHeight;
+});
 
 function cloneProject(): void {
     showModal('clone-project-modal');
@@ -961,12 +2096,16 @@ async function submitCloneProject(): Promise<void> {
         closeModal();
         showLoadingOverlay('Cloning Project', `Cloning ${repoUrl}...`);
         
-        const args = [repoUrl];
+        // Signature is `podium clone <mode> <repo> [name]` — the mode positional
+        // is required and the command hard-errors without it.
+        const cloneMode = (document.getElementById('clone-mode') as HTMLSelectElement)?.value || 'work-directly';
+
+        const args = [cloneMode, repoUrl];
         if (projectName && projectName.trim()) {
             args.push(projectName.trim());
         }
         args.push('--json-output');
-        
+
         const result = await ipcRenderer.invoke('execute-podium', 'clone', args);
         
         hideLoadingOverlay();
@@ -1073,35 +2212,49 @@ function sanitizeMetadata(text: string): string {
 // Function to show form validation errors
 function showFieldError(fieldId: string, message: string): void {
     const field = document.getElementById(fieldId) as HTMLInputElement;
-    if (field) {
-        field.style.borderColor = '#e74c3c';
-        
-        // Remove any existing error message
-        const existingError = field.parentNode?.querySelector('.field-error');
-        if (existingError) {
-            existingError.remove();
-        }
-        
-        // Add new error message
-        const errorDiv = document.createElement('div');
-        errorDiv.className = 'field-error';
-        errorDiv.textContent = message;
-        field.parentNode?.appendChild(errorDiv);
+    if (!field) return;
+
+    field.style.borderColor = '#e74c3c';
+
+    // Reuse the markup's own <div id="<field>-error"> when it exists. The
+    // previous version removed it and appended a replacement with no id, which
+    // made every id in the HTML dead weight and the errors unaddressable.
+    const named = document.getElementById(`${fieldId}-error`);
+    if (named) {
+        named.textContent = message;
+        named.classList.add('field-error');
+        return;
     }
+
+    const existingError = field.parentNode?.querySelector('.field-error');
+    if (existingError) {
+        existingError.remove();
+    }
+
+    const errorDiv = document.createElement('div');
+    errorDiv.className = 'field-error';
+    errorDiv.textContent = message;
+    field.parentNode?.appendChild(errorDiv);
 }
 
 // Function to clear field errors
 function clearFieldErrors(): void {
-    const fields = ['project-name', 'project-description'];
-    fields.forEach(fieldId => {
-        const field = document.getElementById(fieldId) as HTMLInputElement;
-        if (field) {
-            field.style.borderColor = '';
-            const errorDiv = field.parentNode?.querySelector('.field-error');
-            if (errorDiv) {
-                errorDiv.remove();
-            }
+    // Clear every error slot rather than a hardcoded pair of fields — the forms
+    // have grown well past project-name/description, and errors on the others
+    // used to persist across reopening a modal.
+    //
+    // Empty the markup's own <div id="…-error"> instead of removing it; those
+    // elements are addressable and must survive.
+    document.querySelectorAll('.field-error').forEach((el) => {
+        if (el.id.endsWith('-error')) {
+            el.textContent = '';
+        } else {
+            el.remove();
         }
+    });
+
+    document.querySelectorAll<HTMLElement>('input, select, textarea').forEach((field) => {
+        field.style.borderColor = '';
     });
 }
 
@@ -1168,49 +2321,73 @@ async function submitNewProject(): Promise<void> {
     
     try {
         closeModal();
-        showLoadingOverlay('Creating Project', `Creating ${projectType} project: ${projectName}...`);
+        showLoadingOverlay('Creating Project', `Creating ${projectType} project: ${projectName}...`, true);
         
-        // Use the sanitized container name for the actual project creation
-        const args = [sanitizedContainerName, '--framework', projectType, '--database', 'mysql', '--no-github', '--json-output'];
-        
-        // Add metadata parameters (use original projectName as display name)
-        args.push('--display-name', sanitizeMetadata(projectName));
-        if (projectDescription) {
-            args.push('--description', sanitizeMetadata(projectDescription));
+        // Signature is `podium new <framework> <name>` — framework is the FIRST
+        // positional, not a flag. There is no --framework option, and the
+        // display-name/description/emoji flags no longer exist; the GUI stores
+        // that metadata itself after creation (see updateMetadataAfterCreate).
+        const args = [projectType, sanitizedContainerName, '--json-output'];
+
+        // Only send --database when the user picked a specific engine. Left on
+        // "Auto" the CLI applies its own per-framework default, which is better
+        // than the GUI guessing: it used to hardcode mysql for every framework,
+        // and the CLI silently coerced it to something the framework supports.
+        const database = (document.getElementById('project-database') as HTMLSelectElement)?.value || '';
+        if (database) {
+            args.push('--database', database);
         }
-        args.push('--emoji', projectEmoji);
-        
-        // Add version if specified
-        if (projectType === 'laravel') {
-            const versionInput = document.getElementById('laravel-version') as HTMLInputElement;
+
+        // --version only means something for these three.
+        if (projectType === 'laravel' || projectType === 'wordpress') {
+            const versionInput = document.getElementById(`${projectType}-version`) as HTMLInputElement;
             const version = versionInput?.value?.trim();
-            if (version && version !== '') {
+            if (version) {
                 args.push('--version', version);
             }
-        } else if (projectType === 'wordpress') {
-            const versionInput = document.getElementById('wordpress-version') as HTMLInputElement;
-            const version = versionInput?.value?.trim();
-            if (version && version !== '') {
-                args.push('--version', version);
-            }
         }
-        
-        // Add GitHub options if specified
+
+        // GitHub: exactly one of these, never both. The org flag is
+        // --github-org (not --org, which the CLI rejects as unknown).
         const createGithub = (document.getElementById('create-github-repo') as HTMLInputElement)?.checked;
         if (createGithub) {
-            args.push('--github');
-            const org = (document.getElementById('organization') as HTMLInputElement)?.value;
-            if (org) args.push('--org', org);
-        }
-        
-        const result = await ipcRenderer.invoke('execute-podium', 'new', args);
-        
-        hideLoadingOverlay();
-        
-        if (result.code === 0) {
-            showSuccess(`Project "${projectName}" created successfully!`);
+            const org = (document.getElementById('organization') as HTMLInputElement)?.value?.trim();
+            if (org) {
+                args.push('--github-org', org);
+            } else {
+                args.push('--github');
+            }
         } else {
-            showError(`Failed to create project: ${result.stderr || result.stdout}`);
+            args.push('--no-github');
+        }
+
+        // Streamed rather than buffered, so the overlay can show progress.
+        // --json-output is dropped here: it suppresses exactly the human-readable
+        // output we now want to display, and success is judged by exit code.
+        const result = await ipcRenderer.invoke('execute-command-stream', 'podium',
+            ['new', ...args.filter((a) => a !== '--json-output')]);
+
+        if (result.code !== 0) {
+            // Leave the overlay up: the output pane above already holds the real
+            // reason, and it is far more use than a toast full of progress bars.
+            failLoadingOverlay(
+                'Could not create the project',
+                `podium new exited with code ${result.code}. The output above shows why.`
+            );
+            return;
+        }
+
+        hideLoadingOverlay();
+
+        if (result.code === 0) {
+            // The CLI no longer stores display metadata, so persist it here.
+            await ipcRenderer.invoke('update-project-metadata', sanitizedContainerName, {
+                display_name: sanitizeMetadata(projectName),
+                description: projectDescription ? sanitizeMetadata(projectDescription) : '',
+                emoji: projectEmoji
+            });
+
+            showSuccess(`Project "${projectName}" created successfully!`);
         }
         
         // Refresh project list
@@ -1415,12 +2592,16 @@ function editProject(projectName: string): void {
     currentProjectName = projectName;
     
     // Find the project data
-    const project = projects.find(p => p.name === projectName);
-    if (!project) {
+    const parsed = projects.find(p => p.name === projectName);
+    if (!parsed) {
         showError('Project not found');
         return;
     }
-    
+
+    // Same reason as renderProjects: read display metadata from the cache, not
+    // from the parsed status object, which does not carry it.
+    const project = withMetadata(parsed);
+
     // Populate the form
     const displayNameField = document.getElementById('edit-display-name') as HTMLInputElement;
     const descriptionField = document.getElementById('edit-description') as HTMLInputElement;
@@ -1468,7 +2649,17 @@ async function submitEditProject(): Promise<void> {
         hideLoadingOverlay();
         
         if (result.success) {
+            // Keep the cache in step with what was just written to disk, so the
+            // grid reflects the edit immediately rather than after a refresh.
+            projectMetadata[currentProjectName] = {
+                display_name: displayName,
+                description: description,
+                emoji: emoji
+            };
+
             showSuccess(`Project "${displayName}" updated successfully!`);
+            renderProjects();
+
             // Refresh project list
             setTimeout(() => {
                 loadProjects();
@@ -1483,11 +2674,51 @@ async function submitEditProject(): Promise<void> {
 }
 
 // Export functions for global access
+(window as any).showLoadingOverlay = showLoadingOverlay;
+(window as any).failLoadingOverlay = failLoadingOverlay;
+(window as any).hideLoadingOverlay = hideLoadingOverlay;
+// Test hook: feed the overlay as if execute-command-stream had emitted.
+(window as any).__feedOverlay = (data: string) => {
+    const output = document.getElementById('loading-output');
+    if (overlayStreaming && output) output.textContent += data;
+};
+(window as any).showAiSettings = showAiSettings;
+(window as any).onAiAgentChange = onAiAgentChange;
+(window as any).saveAiSettings = saveAiSettings;
+(window as any).showCreateWithAI = showCreateWithAI;
+(window as any).handleClassifyIdea = handleClassifyIdea;
+(window as any).selectCandidate = selectCandidate;
+(window as any).handleCreateFromChoice = handleCreateFromChoice;
+(window as any).renderClassification = renderClassification;
+(window as any).setCreateStage = setCreateStage;
+(window as any).hideTerminals = hideTerminals;
+(window as any).showTerminals = showTerminals;
+(window as any).activateTerminal = activateTerminal;
+(window as any).killTerminal = killTerminal;
+(window as any).closeActiveTerminal = closeActiveTerminal;
+(window as any).openAgentTerminal = openAgentTerminal;
+// Small hooks so the e2e suite can inspect and tear down sessions without
+// reaching into module state.
+(window as any).__terminalCount = () => terminalSessions.size;
+(window as any).__killFirstTerminal = () => {
+    const first = [...terminalSessions.keys()][0];
+    if (first) killTerminal(first);
+};
+(window as any).__killAllTerminals = () => {
+    [...terminalSessions.keys()].forEach((id) => killTerminal(id));
+};
+(window as any).modifyWithAI = modifyWithAI;
+(window as any).showInstallApp = showInstallApp;
+(window as any).renderAppCatalog = renderAppCatalog;
+(window as any).selectApp = selectApp;
+(window as any).handleInstallApp = handleInstallApp;
 (window as any).refreshProjects = refreshProjects;
 (window as any).manualRefresh = manualRefresh;
 (window as any).startAutoRefresh = startAutoRefresh;
 (window as any).stopAutoRefresh = stopAutoRefresh;
 (window as any).showCreateProject = showCreateProject;
+(window as any).onFrameworkChange = onFrameworkChange;
+(window as any).loadFrameworkCatalog = loadFrameworkCatalog;
 (window as any).startProject = startProject;
 (window as any).stopProject = stopProject;
 (window as any).removeProject = removeProject;
@@ -1628,6 +2859,8 @@ async function showCliHelp(): Promise<void> {
 (window as any).createNewProject = createNewProject;
 (window as any).cloneProject = cloneProject;
 (window as any).closeModal = closeModal;
+(window as any).showFieldError = showFieldError;
+(window as any).clearFieldErrors = clearFieldErrors;
 (window as any).submitNewProject = submitNewProject;
 (window as any).submitCloneProject = submitCloneProject;
 (window as any).handleCreateProject = handleCreateProject;

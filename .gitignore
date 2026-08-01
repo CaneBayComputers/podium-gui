@@ -96,3 +96,7 @@ jspm_packages/
 Thumbs.db
 ehthumbs.db
 Desktop.ini
+.kickoff-prompt.txt
+
+# Playwright screenshots from tests/e2e.js
+debug/

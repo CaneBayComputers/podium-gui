@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Podium - PHP Development Platform</title>
     <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css">
 </head>
 <body>
     <div class="app">
@@ -12,20 +13,23 @@
         <header class="header">
             <div class="header-content">
                 <div class="logo">
-                    <h1>Podium</h1>
-                    <span class="tagline">Professional PHP Development Platform</span>
+                    <h1>Podium CLI</h1>
+                    <span class="tagline">Podium, without the terminal</span>
                     <span id="debug-indicator" class="debug-indicator" style="display: none;">DEBUG MODE - F5 to refresh</span>
                 </div>
+                <!-- Actions only. Help/Patreon/Donate live in the footer so the
+                     header carries just the things you actually do. -->
                 <div class="header-actions">
-                    <button class="btn btn-success" onclick="startAllProjects()">Start All</button>
-                    <button class="btn btn-warning" onclick="stopAllProjects()">Stop All</button>
-                    <button class="btn btn-primary" onclick="createNewProject()">+ New Project</button>
-                    <button class="btn btn-primary" onclick="cloneProject()">📥 Clone</button>
-
-                    <button class="btn btn-secondary btn-small" onclick="showHelpModal()" title="Help & CLI Commands">❓ Help</button>
-                    <button class="btn btn-secondary btn-small" onclick="openUrl('https://patreon.com/canebaycomputers')" title="Support on Patreon">❤️ Patreon</button>
-                    <button class="btn btn-secondary btn-small" onclick="openUrl('https://securelink-prod.valorpaytech.com:4430/?redirect=1&uid=6e840752-8751-11f0-a74f-12a0879a85b1')" title="Donate">💳 Donate</button>
-
+                    <button class="btn btn-create" onclick="showCreateWithAI()" data-testid="create-ai">✨ Create with AI</button>
+                    <button class="btn btn-success" onclick="startAllProjects()" data-testid="start-all">Start All</button>
+                    <button class="btn btn-warning" onclick="stopAllProjects()" data-testid="stop-all">Stop All</button>
+                    <button class="btn btn-primary" onclick="createNewProject()" data-testid="new-project">+ New Project</button>
+                    <button class="btn btn-primary" onclick="cloneProject()" data-testid="clone-project">📥 Clone</button>
+                    <button class="btn btn-primary" onclick="showInstallApp()" data-testid="install-app">📦 Install App</button>
+                    <!-- Only appears while sessions are alive, so they can be
+                         reopened after the window is hidden. -->
+                    <button class="btn btn-secondary" onclick="showTerminals()" id="terminals-button"
+                            data-testid="terminals-button" style="display: none;">🖥️ Terminals</button>
                 </div>
             </div>
         </header>
@@ -36,7 +40,7 @@
             <section class="dashboard">
 
                 <!-- Projects Grid -->
-                <div id="projects-grid" class="projects-grid">
+                <div id="projects-grid" data-testid="projects-grid" class="projects-grid">
                     <!-- Projects will be loaded here -->
                     <div class="project-card placeholder">
                         <div class="project-icon">🚀</div>
@@ -53,16 +57,32 @@
                 <div class="services-header">
                     <h3>Shared Services</h3>
                     <div class="services-controls">
-                        <button class="btn btn-success btn-small" onclick="startServices()">▶ Start Services</button>
-                        <button class="btn btn-warning btn-small" onclick="stopServices()">⏹ Stop Services</button>
+                        <button class="btn btn-success btn-small" onclick="startServices()" data-testid="start-services">▶ Start Services</button>
+                        <button class="btn btn-warning btn-small" onclick="stopServices()" data-testid="stop-services">⏹ Stop Services</button>
                         <button class="btn btn-primary btn-small" onclick="openUrl('http://phpmyadmin')">🗄️ phpMyAdmin</button>
                         <button class="btn btn-primary btn-small" onclick="openUrl('http://localhost:8025')">📧 MailHog</button>
                     </div>
                 </div>
-                <div id="services-grid" class="services-grid">
+                <div id="services-grid" data-testid="services-grid" class="services-grid">
                     <!-- Services will be loaded dynamically -->
                 </div>
             </section>
+
+            <!-- Secondary links, moved out of the header -->
+            <footer class="app-footer">
+                <div class="footer-links">
+                    <button class="btn btn-secondary btn-small" onclick="showAiSettings()" data-testid="ai-settings-open" title="Choose and install the AI agent">🤖 AI Agent</button>
+                    <button class="btn btn-secondary btn-small" onclick="showHelpModal()" data-testid="help-modal-open" title="Help & CLI Commands">❓ Help</button>
+                    <button class="btn btn-secondary btn-small" onclick="openUrl('https://github.com/CaneBayComputers/podium-cli')" data-testid="github-cli" title="Podium CLI on GitHub">🐙 Podium CLI on GitHub</button>
+                    <button class="btn btn-secondary btn-small" onclick="openUrl('https://patreon.com/canebaycomputers')" data-testid="patreon" title="Support on Patreon">❤️ Patreon</button>
+                    <button class="btn btn-secondary btn-small" onclick="openUrl('https://securelink-prod.valorpaytech.com:4430/?redirect=1&uid=6e840752-8751-11f0-a74f-12a0879a85b1')" data-testid="donate" title="Donate">💳 Donate</button>
+                </div>
+                <p class="footer-note">
+                    A desktop front end for
+                    <a href="#" onclick="event.preventDefault(); openUrl('https://github.com/CaneBayComputers/podium-cli')">Podium CLI</a>.
+                    The CLI does the work; this makes it visible and clickable.
+                </p>
+            </footer>
         </main>
 
         <!-- Modals -->
@@ -76,19 +96,21 @@
                     <form id="new-project-form">
                         <div class="form-group">
                             <label>Project Name</label>
-                            <input type="text" id="project-name" placeholder="My Awesome Project" required>
+                            <input type="text" id="project-name" data-testid="project-name" placeholder="My Awesome Project" required>
                             <small class="form-help">Will be sanitized for container name (spaces→dashes, lowercase)</small>
+                            <div class="field-error" id="project-name-error"></div>
                         </div>
 
                         <div class="form-group">
                             <label>Description</label>
-                            <input type="text" id="project-description" placeholder="A brief description of your project">
+                            <input type="text" id="project-description" data-testid="project-description" placeholder="A brief description of your project">
                             <small class="form-help">Optional description shown on the project tile</small>
+                            <div class="field-error" id="project-description-error"></div>
                         </div>
 
                         <div class="form-group">
                             <label>Project Emoji</label>
-                            <select id="project-emoji">
+                            <select id="project-emoji" data-testid="project-emoji">
                                 <option value="🚀">🚀 Rocket</option>
                                 <option value="💻">💻 Computer</option>
                                 <option value="🌟">🌟 Star</option>
@@ -109,42 +131,55 @@
                         
                         <div class="form-group">
                             <label>Project Type</label>
-                            <div class="radio-group">
-                                <label><input type="radio" name="project-type" value="laravel" checked> Laravel</label>
-                                <label><input type="radio" name="project-type" value="wordpress"> WordPress</label>
-                                <label><input type="radio" name="project-type" value="php"> PHP</label>
+                            <!--
+                                Built from the CLI's src/catalog/frameworks.json
+                                at runtime. Hardcoding the list meant the GUI
+                                offered 3 of 13 and could not know which engines
+                                each one actually supports.
+                            -->
+                            <div class="radio-group framework-group" id="framework-list" data-testid="framework-list">
+                                <p class="app-list-empty">Loading frameworks…</p>
                             </div>
+                            <span class="form-help" id="framework-note"></span>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="project-database">Database</label>
+                            <select id="project-database" data-testid="project-database"></select>
+                            <small class="form-help" id="project-database-help">
+                                Only engines this framework supports are offered.
+                            </small>
                         </div>
 
                         <div class="form-group" id="laravel-version-group">
                             <label>Laravel Version</label>
-                            <input type="text" id="laravel-version" placeholder="latest" value="latest">
+                            <input type="text" id="laravel-version" data-testid="laravel-version" placeholder="latest" value="latest">
                             <small class="form-help">Enter version (e.g., 11.2.1) or "latest" for newest release</small>
                         </div>
 
                         <div class="form-group" id="wordpress-version-group" style="display: none;">
                             <label>WordPress Version</label>
-                            <input type="text" id="wordpress-version" placeholder="latest" value="latest">
+                            <input type="text" id="wordpress-version" data-testid="wordpress-version" placeholder="latest" value="latest">
                             <small class="form-help">Enter version (e.g., 6.4.2) or "latest" for newest release</small>
                         </div>
 
                         <div class="form-group">
                             <label>
-                                <input type="checkbox" id="create-github-repo" />
+                                <input type="checkbox" id="create-github-repo" data-testid="create-github-repo" />
                                 Create GitHub repository
                             </label>
                         </div>
 
                         <div class="form-group" id="github-options" style="display: none;">
                             <label>GitHub Organization (Optional)</label>
-                            <input type="text" id="organization" placeholder="mycompany">
+                            <input type="text" id="organization" data-testid="github-organization" placeholder="mycompany">
                             <small class="form-help">Leave blank to create in your personal account</small>
                         </div>
                     </form>
                 </div>
                 <div class="modal-footer">
                     <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-                    <button class="btn btn-primary" onclick="handleCreateProject()">Create Project</button>
+                    <button class="btn btn-primary" onclick="handleCreateProject()" data-testid="create-project-submit">Create Project</button>
                 </div>
             </div>
         </div>
@@ -160,14 +195,14 @@
                     <p>Are you sure you want to remove the project <strong id="remove-project-name"></strong>?</p>
                     <div class="form-group" style="margin-top: 1.5rem;">
                         <label>
-                            <input type="checkbox" id="preserve-database" />
+                            <input type="checkbox" id="preserve-database" data-testid="preserve-database" />
                             Preserve database (keep project data)
                         </label>
                     </div>
                 </div>
                 <div class="modal-footer">
                     <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-                    <button class="btn btn-danger" onclick="confirmRemoveProject()">Remove Project</button>
+                    <button class="btn btn-danger" onclick="confirmRemoveProject()" data-testid="remove-project-confirm">Remove Project</button>
                 </div>
             </div>
         </div>
@@ -183,17 +218,17 @@
                     <form id="edit-project-form">
                         <div class="form-group">
                             <label>Display Name</label>
-                            <input type="text" id="edit-display-name" required>
+                            <input type="text" id="edit-display-name" data-testid="edit-display-name" required>
                         </div>
 
                         <div class="form-group">
                             <label>Description</label>
-                            <input type="text" id="edit-description" placeholder="Optional description">
+                            <input type="text" id="edit-description" data-testid="edit-description" placeholder="Optional description">
                         </div>
 
                         <div class="form-group">
                             <label>Project Emoji</label>
-                            <select id="edit-emoji">
+                            <select id="edit-emoji" data-testid="edit-emoji">
                                 <option value="🚀">🚀 Rocket</option>
                                 <option value="💻">💻 Computer</option>
                                 <option value="🌟">🌟 Star</option>
@@ -215,7 +250,7 @@
                 </div>
                 <div class="modal-footer">
                     <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-                    <button class="btn btn-primary" onclick="submitEditProject()">Save Changes</button>
+                    <button class="btn btn-primary" onclick="submitEditProject()" data-testid="edit-project-submit">Save Changes</button>
                 </div>
             </div>
         </div>
@@ -235,14 +270,14 @@
                     <div class="flush-section">
                         <h4>⚠️ Danger Zone</h4>
                         <p>Flushing will permanently delete all data in this service.</p>
-                        <button class="btn btn-danger" onclick="flushServiceData()" id="flush-button">
+                        <button class="btn btn-danger" onclick="flushServiceData()" id="flush-button" data-testid="flush-service">
                             🗑️ Flush All Data
                         </button>
                     </div>
                 </div>
                 <div class="modal-footer">
                     <button class="btn btn-secondary" onclick="closeModal()">Close</button>
-                    <button class="btn btn-primary" onclick="refreshServiceStats()" id="refresh-stats-button">
+                    <button class="btn btn-primary" onclick="refreshServiceStats()" id="refresh-stats-button" data-testid="refresh-service-stats">
                         🔄 Refresh Stats
                     </button>
                 </div>
@@ -250,6 +285,221 @@
         </div>
 
         <!-- Clone Project Modal -->
+        <!--
+            Phase 3 of create: the AI build session. A real pty, not a streamed
+            one-off, because the agent asks clarifying questions and expects
+            answers — which a non-interactive run cannot provide.
+        -->
+        <!--
+            AI agent settings — `podium ai-set`.
+            The CLI installs the chosen agent if it is missing
+            (ensure_ai_agent_installed: npm -g for codex/gemini, curl installers
+            for claude/aider), so saving here can take a while and streams.
+        -->
+        <div id="ai-settings-modal" class="modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>🤖 AI Agent</h3>
+                    <button class="modal-close" onclick="closeModal()">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <p class="stage-intro">
+                        Used by Create with AI and Modify with AI. Podium installs the agent for you
+                        if it is not already on this machine.
+                    </p>
+
+                    <div class="form-group">
+                        <label for="ai-agent">Agent</label>
+                        <select id="ai-agent" data-testid="ai-agent" onchange="onAiAgentChange()">
+                            <option value="">None — disable AI features</option>
+                            <option value="claude">Claude Code</option>
+                            <option value="codex">Codex</option>
+                            <option value="gemini">Gemini</option>
+                            <option value="aider">Aider</option>
+                        </select>
+                        <span class="form-help" id="ai-agent-status"></span>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="ai-model">Model <span class="form-help" id="ai-model-req"></span></label>
+                        <input type="text" id="ai-model" data-testid="ai-model" placeholder="Leave blank for the agent's default">
+                        <div class="field-error" id="ai-model-error"></div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="ai-api-key">API Key <span class="form-help" id="ai-key-req"></span></label>
+                        <input type="password" id="ai-api-key" data-testid="ai-api-key" placeholder="Leave blank to use the agent's own sign-in">
+                        <span class="form-help" id="ai-key-note"></span>
+                        <div class="field-error" id="ai-api-key-error"></div>
+                    </div>
+
+                    <div class="form-group" id="ai-api-base-group" style="display: none;">
+                        <label for="ai-api-base">API Endpoint</label>
+                        <input type="text" id="ai-api-base" data-testid="ai-api-base" placeholder="https://api.example.com/v1">
+                        <span class="form-help">OpenAI-compatible endpoint (aider only).</span>
+                    </div>
+
+                    <div id="ai-settings-output-wrap" style="display: none;">
+                        <p class="form-help">Installing the agent — this can take a couple of minutes.</p>
+                        <pre id="ai-settings-output" class="install-output" data-testid="ai-settings-output"></pre>
+                    </div>
+                </div>
+                <div class="form-actions">
+                    <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+                    <button class="btn btn-primary" onclick="saveAiSettings()" data-testid="ai-settings-save">Save</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="build-terminal-modal" class="modal terminal-modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3 id="build-terminal-title">🖥️ Terminals</h3>
+                    <button class="modal-close" onclick="hideTerminals()">&times;</button>
+                </div>
+                <!-- One tab per live session. Sessions keep running when the
+                     window is closed; they are only killed by their own × . -->
+                <div id="terminal-tabs" class="terminal-tabs" data-testid="terminal-tabs"></div>
+                <div class="modal-body">
+                    <div id="terminal-panes" class="terminal-panes" data-testid="terminal-panes"></div>
+                    <p class="form-help" id="build-terminal-status">Session running — type to answer the agent.</p>
+                </div>
+                <div class="form-actions">
+                    <button class="btn btn-secondary" onclick="hideTerminals()" data-testid="build-terminal-close">Hide</button>
+                    <button class="btn btn-danger" onclick="closeActiveTerminal()" data-testid="terminal-end-session">End session</button>
+                </div>
+            </div>
+        </div>
+
+        <!--
+            Create with AI — the flagship path. The user describes what they
+            want; Podium works out the stack. This drives `podium create`'s
+            three phases natively rather than shelling out to it in one call:
+            the CLI presents interactive terminal menus between classify and
+            create, which a GUI cannot answer, and its non-interactive mode
+            silently takes the top recommendation — discarding the choice that
+            is the entire point.
+
+            Phase 1 is `podium create --classify-only --json-output`.
+            Phase 2 is `podium install` / `podium new`, same as the other flows.
+            Phase 3 hands off to the AI agent in an embedded terminal.
+        -->
+        <div id="create-ai-modal" class="modal create-modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>✨ Create with AI</h3>
+                    <button class="modal-close" onclick="closeModal()">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <!-- Stage 1: describe -->
+                    <div id="create-stage-idea">
+                        <div class="form-group">
+                            <label for="create-idea">What do you want to build?</label>
+                            <textarea id="create-idea" rows="3" data-testid="create-idea"
+                                      placeholder="e.g. track which guitar pedals I have lent out to friends"></textarea>
+                            <span class="form-help">Plain English. Podium works out the stack and builds it.</span>
+                            <div class="field-error" id="create-idea-error"></div>
+                        </div>
+                        <div id="create-no-agent" class="agent-warning" style="display: none;">
+                            No AI agent is configured. Run <code>podium ai-set</code> in a terminal first.
+                        </div>
+                    </div>
+
+                    <!-- Stage 2: thinking -->
+                    <div id="create-stage-thinking" style="display: none;">
+                        <div class="thinking-block">
+                            <div class="loading-spinner"></div>
+                            <p>Working out which stack fits…</p>
+                            <p class="form-help">This asks the AI agent and usually takes under a minute.</p>
+                        </div>
+                    </div>
+
+                    <!-- Stage 3: choose -->
+                    <div id="create-stage-choose" style="display: none;">
+                        <p class="stage-intro">How would you like to build this?</p>
+                        <div id="create-candidates" class="candidate-list" data-testid="create-candidates"></div>
+
+                        <div class="form-group" id="create-database-group" style="display: none;">
+                            <label for="create-database">Database</label>
+                            <select id="create-database" data-testid="create-database"></select>
+                            <span class="form-help" id="create-database-why"></span>
+                        </div>
+
+                        <div class="form-group" id="create-fixed-db" style="display: none;">
+                            <span class="form-help" id="create-fixed-db-text"></span>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="create-name">Project name</label>
+                            <input type="text" id="create-name" maxlength="50" data-testid="create-name">
+                            <span class="form-help" id="create-name-help">Becomes the project directory and the hostname.</span>
+                            <div class="field-error" id="create-name-error"></div>
+                        </div>
+                    </div>
+
+                    <!-- Stage 4: building -->
+                    <div id="create-stage-building" style="display: none;">
+                        <p id="create-build-title">Creating…</p>
+                        <pre id="create-output" class="install-output" data-testid="create-output"></pre>
+                    </div>
+                </div>
+                <div class="form-actions">
+                    <button class="btn btn-secondary" onclick="closeModal()" id="create-cancel-btn">Cancel</button>
+                    <button class="btn btn-primary" onclick="handleClassifyIdea()" id="create-classify-btn"
+                            data-testid="create-classify">Work out the stack</button>
+                    <button class="btn btn-primary" onclick="handleCreateFromChoice()" id="create-confirm-btn"
+                            data-testid="create-confirm" style="display: none;" disabled>Create it</button>
+                </div>
+            </div>
+        </div>
+
+        <!--
+            Install an app (`podium install <app> [name]`) is deliberately a
+            SEPARATE flow from New Project (`podium new <framework> <name>`).
+            New Project scaffolds something you write; Install deploys finished
+            software someone else wrote, with its database fixed by the
+            installer — so this modal never asks the user to choose one.
+        -->
+        <div id="install-app-modal" class="modal install-modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>📦 Install an App</h3>
+                    <button class="modal-close" onclick="closeModal()">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div id="install-picker">
+                        <div class="form-group">
+                            <label for="install-search">Search <span id="install-app-count" class="app-count"></span></label>
+                            <input type="text" id="install-search" placeholder="Filter by name or slug…"
+                                   oninput="renderAppCatalog()" autocomplete="off" data-testid="install-search">
+                        </div>
+
+                        <div id="install-app-list" class="app-list" data-testid="install-app-list">
+                            <p class="app-list-empty">Loading catalogue…</p>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="install-project-name">Project Name (optional):</label>
+                            <input type="text" id="install-project-name" maxlength="50"
+                                   placeholder="Defaults to the app's slug" data-testid="install-project-name">
+                            <span class="form-help">Becomes the project directory and the hostname you browse to.</span>
+                            <div class="field-error" id="install-project-name-error"></div>
+                        </div>
+                    </div>
+
+                    <div id="install-progress" style="display: none;">
+                        <p id="install-progress-title">Installing…</p>
+                        <pre id="install-output" class="install-output" data-testid="install-output"></pre>
+                    </div>
+                </div>
+                <div class="form-actions">
+                    <button class="btn btn-secondary" onclick="closeModal()" id="install-cancel-btn" data-testid="install-cancel">Cancel</button>
+                    <button class="btn btn-primary" onclick="handleInstallApp()" id="install-submit-btn"
+                            data-testid="install-submit" disabled>Install</button>
+                </div>
+            </div>
+        </div>
+
         <div id="clone-project-modal" class="modal">
             <div class="modal-content">
                 <div class="modal-header">
@@ -260,19 +510,29 @@
                     <form id="clone-project-form">
                         <div class="form-group">
                             <label for="clone-repo-url">Git Repository URL:</label>
-                            <input type="url" id="clone-repo-url" name="repoUrl" required placeholder="https://github.com/user/repo.git">
+                            <input type="url" id="clone-repo-url" data-testid="clone-repo-url" name="repoUrl" required placeholder="https://github.com/user/repo.git">
                             <span class="form-help">Enter the full Git repository URL to clone</span>
                             <div class="field-error" id="clone-repo-url-error"></div>
                         </div>
                         <div class="form-group">
+                            <label for="clone-mode">How should this repo be handled?</label>
+                            <select id="clone-mode" name="cloneMode" data-testid="clone-mode">
+                                <option value="work-directly" selected>Work directly &mdash; keep the original as upstream</option>
+                                <option value="fork">Fork &mdash; fork to your GitHub account and work from the fork</option>
+                                <option value="new-repo">New repo &mdash; create a fresh GitHub repo for this project</option>
+                            </select>
+                            <span class="form-help">Required by <code>podium clone</code>. Fork and new-repo need the GitHub CLI to be authenticated.</span>
+                            <div class="field-error" id="clone-mode-error"></div>
+                        </div>
+                        <div class="form-group">
                             <label for="clone-project-name">Local Project Name (optional):</label>
-                            <input type="text" id="clone-project-name" name="projectName" maxlength="50" placeholder="Leave empty to use repository name">
+                            <input type="text" id="clone-project-name" name="projectName" maxlength="50" placeholder="Leave empty to use repository name" data-testid="clone-project-name">
                             <span class="form-help">If empty, will use the repository name</span>
                             <div class="field-error" id="clone-project-name-error"></div>
                         </div>
                         <div class="form-actions">
                             <button type="button" onclick="closeModal()">Cancel</button>
-                            <button type="submit">📥 Clone Project</button>
+                            <button type="submit" data-testid="clone-submit">📥 Clone Project</button>
                         </div>
                     </form>
                 </div>
@@ -285,6 +545,13 @@
                 <div class="loading-spinner"></div>
                 <h3 id="loading-message">Please wait...</h3>
                 <p id="loading-details">Processing your request</p>
+                <!-- Live CLI output for long operations. Hidden unless the
+                     caller streams something, so short actions stay clean. -->
+                <pre id="loading-output" class="loading-output" data-testid="loading-output" style="display: none;"></pre>
+                <!-- Only shown when an operation fails, so the output stays
+                     readable instead of being dumped into a toast. -->
+                <button class="btn btn-secondary" id="loading-dismiss" data-testid="loading-dismiss"
+                        onclick="hideLoadingOverlay()" style="display: none; margin-top: 1rem;">Close</button>
             </div>
         </div>
 
@@ -343,6 +610,8 @@
                 </div>
             </div>
         </div>
+
+    </div>
 
         <!-- Help Modal -->
         <div id="help-modal" class="modal">
@@ -443,7 +712,6 @@
                 </div>
             </div>
         </div>
-    </div>
 
     <script src="../dist/renderer.js"></script>
 

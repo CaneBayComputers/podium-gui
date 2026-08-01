@@ -74,7 +74,7 @@
             <div id="step-configuration" class="installer-step">
                 <div class="step-content">
                     <h2>Configuration</h2>
-                    <p class="step-description">Configure Git and AWS settings for your development environment</p>
+                    <p class="step-description">Configure Git and your projects directory</p>
                     
                     <div class="config-sections">
 
@@ -91,32 +91,14 @@
                             </div>
                         </div>
 
-                        <div class="config-section">
-                            <h3>☁️ AWS Configuration</h3>
-                            <div class="form-group">
-                                <input type="checkbox" id="skip-aws" />
-                                <label for="skip-aws">Skip AWS configuration (can be set up later)</label>
-                            </div>
-                            <div id="aws-fields">
-                                <div class="form-group">
-                                    <label for="aws-access-key">Access Key ID:</label>
-                                    <input type="text" id="aws-access-key" placeholder="AKIA..." />
-                                </div>
-                                <div class="form-group">
-                                    <label for="aws-secret-key">Secret Access Key:</label>
-                                    <input type="password" id="aws-secret-key" placeholder="Secret key..." />
-                                </div>
-                                <div class="form-group">
-                                    <label for="aws-region">Default Region:</label>
-                                    <select id="aws-region">
-                                        <option value="us-east-1">US East (N. Virginia)</option>
-                                        <option value="us-west-2">US West (Oregon)</option>
-                                        <option value="eu-west-1">Europe (Ireland)</option>
-                                        <option value="ap-southeast-1">Asia Pacific (Singapore)</option>
-                                    </select>
-                                </div>
-                            </div>
-                        </div>
+                        <!--
+                            AWS and GitHub configuration were removed from
+                            `podium configure` as first-run friction. The CLI no
+                            longer accepts --aws-* or --skip-aws (its parser
+                            silently discards unknown flags, so these fields were
+                            being collected and thrown away). Configure AWS with
+                            the `aws` CLI directly if a project needs it.
+                        -->
 
                         <div class="config-section">
                             <h3>📁 Projects Directory</h3>
