@@ -286,6 +286,26 @@ async function run() {
     await win.waitForSelector('#create-ai-modal.show', { timeout: 5000 });
     check('create modal opens', await win.isVisible('#create-ai-modal'));
 
+    // Input validation, before any AI round-trip is paid for.
+    await win.fill(t('create-idea'), '');
+    await win.click(t('create-classify'));
+    await win.waitForTimeout(500);
+    check('an empty idea is rejected without calling the AI',
+      ((await win.textContent('#create-idea-error')) || '').length > 0,
+      await win.textContent('#create-idea-error'));
+
+    // A leading dash is parsed as a command-line flag. `podium create` honours
+    // `--`, so classification alone could be made to work — but the same text is
+    // later handed to `podium ai`, where the AGENT's own CLI parses the dash and
+    // `--` only stops Podium rejecting it. Half-working is worse than declining.
+    await win.fill(t('create-idea'), '-a tracker for guitar pedals');
+    await win.click(t('create-classify'));
+    await win.waitForTimeout(500);
+    const dashErr = await win.textContent('#create-idea-error');
+    check('an idea starting with a dash is declined with a reason',
+      /dash|flag/i.test(dashErr || ''), dashErr || '<none>');
+    await win.fill(t('create-idea'), '');
+
     const FIXTURE = {
       status: 'success',
       project_name: 'team-process-wiki',

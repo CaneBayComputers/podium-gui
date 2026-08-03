@@ -1549,6 +1549,17 @@ async function handleClassifyIdea(): Promise<void> {
         return;
     }
 
+    // A leading dash is read as a command-line flag. `podium create` honours
+    // `--` so classification could be made to work, but the same text is later
+    // handed to `podium ai`, where the AGENT's own CLI parses the dash — `--`
+    // only stops Podium rejecting it, it does not make the agent accept it.
+    // Half-working is worse than declining, so decline with a reason.
+    if (idea.startsWith('-')) {
+        showFieldError('create-idea',
+            'Start your description with a word — a leading dash is read as a command-line flag.');
+        return;
+    }
+
     currentIdea = idea;
     setCreateStage('thinking');
 
