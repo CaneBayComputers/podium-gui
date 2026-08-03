@@ -354,6 +354,7 @@ changed and why it is safe — the commit list is already on the PR page.
 - **`gh api .../branches/master/protection` returns 404 here.** That endpoint is
   for *classic* protection; this repo uses a **ruleset**. A 404 there does not
   mean unprotected.
-- **This repo is private and proprietary.** `LICENSE` is the commercial licence,
-  `package.json` says `UNLICENSED` with `private: true`. Do not relicense it and
-  do not publish the package.
+- **This repo is MIT licensed** (relicensed 2026-08-03, matching podium-cli).
+  `LICENSE` is MIT and `package.json` says `MIT`. `private: true` stays in
+  package.json — that blocks an accidental `npm publish` of a desktop app and
+  has nothing to do with the licence.

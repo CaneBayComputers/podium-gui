@@ -1,34 +1,21 @@
-PODIUM GUI COMMERCIAL LICENSE
+MIT License
 
 Copyright (c) 2024 Cane Bay Computers
 
-This software and associated documentation files (the "Software") are proprietary 
-and confidential to Cane Bay Computers.
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
 
-COMMERCIAL USE LICENSE
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
 
-This Software is licensed, not sold. Subject to the terms of this license, 
-Cane Bay Computers grants you a limited, non-exclusive, non-transferable license 
-to use the Software solely for your internal business purposes.
-
-RESTRICTIONS
-
-You may not:
-- Copy, modify, or distribute the Software
-- Reverse engineer, disassemble, or decompile the Software
-- Remove or alter any proprietary notices or labels
-- Use the Software for any unlawful purpose
-- Transfer, rent, lease, or sublicense the Software
-
-TERMINATION
-
-This license is effective until terminated. Your license will terminate 
-automatically without notice if you fail to comply with any provision of this license.
-
-DISCLAIMER
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR 
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, 
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
-
-For licensing inquiries, contact: canebaycomputers@gmail.com
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
