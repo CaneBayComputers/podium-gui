@@ -91,16 +91,44 @@ podium ai-set --help                 # documents all five agents
 Then drive it: set a preset in the GUI, confirm `ai-set --json-output` matches,
 run a small `podium ai` prompt, and switch back to Default.
 
-## One caveat, stated plainly
+## Update — qwen is now installed and tested
 
-**The `qwen` arms in the CLI are untested.** Qwen Code was not installed on the
-machine where this was written, so the invocation is modelled on the `gemini` arm
-it was forked from. The flags (`--yolo`, `--model`, `--prompt`, `-i`,
-`--resume latest`) are believed right but not verified. **If you install
-`@qwen-code/qwen-code` and drive it through the GUI, you will be the first to
-actually exercise that path** — report anything wrong via `CLI_GUI_ISSUES.md` as
-usual.
+The earlier "untested" caveat is withdrawn. `@qwen-code/qwen-code` 0.21.4 was
+installed and driven against a local Ollama end to end through Podium. Two of the
+three guessed flags were wrong and are now fixed in the CLI:
 
-Everything else here was verified: the base URL exports only when set and reaches
-child processes, `--api-base` round trips both ways, and the existing agents are
-unaffected.
+- **`--auth-type openai` is required.** Without it qwen refuses every
+  non-interactive run with "No auth type is selected", even with key and endpoint
+  set.
+- **`--resume latest` was wrong** — qwen's `--resume` takes a session ID or
+  title, so it looked up "latest" literally. `--continue` is correct.
+- **`--yolo` is real but undocumented**, and prints a warning about
+  auto-executing tools on every headless run. Suppressed, because it would have
+  landed inside `podium create`'s JSON and broken the classifier.
+
+Verified: `podium ai --one-off` returns exactly the requested string via Ollama,
+and `--classify-only` produces valid, correctly shaped JSON.
+
+## What the testing means for your UI copy
+
+**The VRAM warning in section 5 is now measured, not guessed — and it is worse
+than "smaller models struggle".** On `qwen2.5-coder:1.5b` the classifier returned
+*perfectly well-formed JSON* that recommended a **budgeting app for a guitar
+pedal tracker**, reasoning "Laravel is great for building budgeting apps".
+
+That is the failure mode to design the UI around: small models do not error, they
+succeed mechanically and are wrong on the substance. A user will see a plausible
+result and blame Podium. Suggested wording:
+
+> Local models need roughly 24GB of VRAM for a 32B coder model. Smaller models
+> return confident, well-formed answers that are simply wrong — they will not
+> look like errors.
+
+Also worth surfacing: **Qwen Code wants Node 22+.** It installs and runs on Node
+20 with an `EBADENGINE` npm warning, but that is unsupported, and your installers
+currently enforce Node 20 as the minimum. If the GUI offers to install qwen, it
+should check for 22.
+
+Everything else was verified too: the base URL exports only when set and reaches
+child processes, `--api-base none` and `--api-key ""` both clear, and the existing
+agents are unaffected.
