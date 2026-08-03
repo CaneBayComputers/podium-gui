@@ -538,7 +538,7 @@ ipcMain.handle('get-framework-catalog', async (): Promise<{ frameworks: CatalogF
 
 // What the INSTALLED CLI actually supports, probed once.
 //
-// The cheap-models work lives on podium-cli `beta` and is not on its `master`,
+// The cheap-models work lives on podium-cli `dev` and is not on its `master`,
 // so a current install has no qwen and stores `--api-base none` as a literal
 // string. Offering qwen there produces an agent the CLI rejects. Rather than
 // couple the GUI's release to the CLI's, ask the CLI what it can do.

@@ -117,7 +117,7 @@ Two traps, both of which produced convincing false results here:
 
 ## License
 
-Proprietary — see [LICENSE](LICENSE). The Podium CLI it builds on is separate and MIT licensed.
+MIT — see [LICENSE](LICENSE). Same as [Podium CLI](https://github.com/CaneBayComputers/podium-cli). Free to use, modify and distribute.
 
 ## Support
 
@@ -127,4 +127,4 @@ Proprietary — see [LICENSE](LICENSE). The Podium CLI it builds on is separate 
 
 ---
 
-© 2024 Cane Bay Computers. All rights reserved.
+© 2024 Cane Bay Computers. Released under the MIT License.

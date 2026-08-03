@@ -1257,7 +1257,7 @@ async function showAiSettings(): Promise<void> {
     clearFieldErrors();
 
     // Hide agents this CLI cannot actually run. The cheap-models support is on
-    // podium-cli `beta` and not its `master`, so a current install has no qwen —
+    // podium-cli `dev` and not its `master`, so a current install has no qwen —
     // offering it would produce "Unsupported AI agent" at the point of use.
     cliCaps = await ipcRenderer.invoke('get-cli-capabilities');
     const qwenOption = document.querySelector('#ai-agent option[value="qwen"]') as HTMLOptionElement;
