@@ -308,6 +308,21 @@
                         if it is not already on this machine.
                     </p>
 
+                    <!-- Presets first: a known-good configuration beats a blank
+                         URL field, and running against a cheap or local model is
+                         the whole point of this panel. -->
+                    <div class="form-group">
+                        <label for="ai-preset">Preset</label>
+                        <select id="ai-preset" data-testid="ai-preset" onchange="applyAiPreset()">
+                            <option value="">Custom — set the fields yourself</option>
+                            <option value="hosted">Default (hosted) — Claude, no endpoint</option>
+                            <option value="ollama">Ollama (local, free)</option>
+                            <option value="openrouter">OpenRouter (~30x cheaper than Sonnet)</option>
+                            <option value="lmstudio">LM Studio (local)</option>
+                        </select>
+                        <span class="form-help" id="ai-preset-help">Fills the fields below; you can still edit them.</span>
+                    </div>
+
                     <div class="form-group">
                         <label for="ai-agent">Agent</label>
                         <select id="ai-agent" data-testid="ai-agent" onchange="onAiAgentChange()">
@@ -315,14 +330,21 @@
                             <option value="claude">Claude Code</option>
                             <option value="codex">Codex</option>
                             <option value="gemini">Gemini</option>
+                            <option value="qwen">Qwen Code</option>
                             <option value="aider">Aider</option>
                         </select>
                         <span class="form-help" id="ai-agent-status"></span>
+                        <div class="agent-warning" id="ai-node-warning" style="display: none;"></div>
                     </div>
 
                     <div class="form-group">
                         <label for="ai-model">Model <span class="form-help" id="ai-model-req"></span></label>
-                        <input type="text" id="ai-model" data-testid="ai-model" placeholder="Leave blank for the agent's default">
+                        <input type="text" id="ai-model" data-testid="ai-model" list="ai-model-options"
+                               placeholder="Leave blank for the agent's default">
+                        <!-- Populated from Ollama's /api/tags when reachable, so the
+                             user picks a model they have actually pulled. -->
+                        <datalist id="ai-model-options"></datalist>
+                        <span class="form-help" id="ai-model-hint"></span>
                         <div class="field-error" id="ai-model-error"></div>
                     </div>
 
@@ -336,7 +358,24 @@
                     <div class="form-group" id="ai-api-base-group" style="display: none;">
                         <label for="ai-api-base">API Endpoint</label>
                         <input type="text" id="ai-api-base" data-testid="ai-api-base" placeholder="https://api.example.com/v1">
-                        <span class="form-help">OpenAI-compatible endpoint (aider only).</span>
+                        <span class="form-help" id="ai-api-base-help"></span>
+                    </div>
+
+                    <div class="form-group" id="ai-clear-key-group" style="display: none;">
+                        <label>
+                            <input type="checkbox" id="ai-clear-key" data-testid="ai-clear-key" />
+                            Clear the stored API key
+                        </label>
+                        <span class="form-help">Leaving the field blank keeps the existing key.</span>
+                    </div>
+
+                    <!-- Measured, not guessed: a 1.5b model returned well-formed JSON
+                         recommending a budgeting app for a guitar-pedal tracker. The
+                         failure mode is confident and wrong, not an error. -->
+                    <div class="agent-warning" id="ai-local-warning" style="display: none;">
+                        Local models need roughly <strong>24GB of VRAM</strong> for a 32B coder model.
+                        Smaller models return confident, well-formed answers that are simply wrong —
+                        they will not look like errors.
                     </div>
 
                     <div id="ai-settings-output-wrap" style="display: none;">

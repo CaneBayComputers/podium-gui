@@ -1189,13 +1189,66 @@ function handleCreateProject(): void {
 // this streams rather than spinning silently.
 // ---------------------------------------------------------------------------
 
-// Which fields each agent actually uses, from `podium ai-set --help`.
-const AI_AGENT_RULES: Record<string, { modelRequired: boolean; keyRequired: boolean; apiBase: boolean }> = {
-    claude: { modelRequired: false, keyRequired: false, apiBase: false },
-    codex:  { modelRequired: false, keyRequired: false, apiBase: false },
-    gemini: { modelRequired: false, keyRequired: false, apiBase: false },
-    aider:  { modelRequired: true,  keyRequired: true,  apiBase: true }
+// Which fields each agent actually uses, from `podium ai-set --help` and the
+// CLI's endpoint table. `--api-base` is no longer aider-only: Podium passes it
+// to whichever env var each agent CLI reads. gemini has no endpoint at all
+// (Google account auth), and claude needs an ANTHROPIC-compatible proxy rather
+// than a raw Ollama URL — worth saying, or people point it at :11434 and it fails.
+const AI_AGENT_RULES: Record<string, {
+    modelRequired: boolean;
+    keyRequired: boolean;
+    apiBase: boolean;
+    apiBaseNote: string;
+    minNode?: number;
+}> = {
+    claude: { modelRequired: false, keyRequired: false, apiBase: true,
+              apiBaseNote: 'Must be Anthropic-compatible — a LiteLLM proxy for local models, not a raw Ollama URL.' },
+    codex:  { modelRequired: false, keyRequired: false, apiBase: true,
+              apiBaseNote: 'OpenAI-compatible endpoint.' },
+    gemini: { modelRequired: false, keyRequired: false, apiBase: false,
+              apiBaseNote: '' },
+    qwen:   { modelRequired: true,  keyRequired: false, apiBase: true,
+              apiBaseNote: 'OpenAI-compatible endpoint.', minNode: 22 },
+    aider:  { modelRequired: true,  keyRequired: true,  apiBase: true,
+              apiBaseNote: 'OpenAI-compatible endpoint.' }
 };
+
+// Known-good configurations. A dropdown of these beats a blank URL field —
+// running against a cheap or local model is most of the point of this panel.
+const AI_PRESETS: Record<string, {
+    agent: string; apiBase: string; apiKey: string; model: string; clearKey: boolean;
+}> = {
+    hosted:     { agent: 'claude', apiBase: '', apiKey: '', model: '', clearKey: true },
+    ollama:     { agent: 'qwen',   apiBase: 'http://localhost:11434/v1', apiKey: 'ollama', model: '', clearKey: false },
+    openrouter: { agent: 'qwen',   apiBase: 'https://openrouter.ai/api/v1', apiKey: '', model: 'qwen/qwen3-coder-next', clearKey: false },
+    lmstudio:   { agent: 'codex',  apiBase: 'http://localhost:1234/v1', apiKey: 'local', model: '', clearKey: false }
+};
+
+function isLocalEndpoint(url: string): boolean {
+    return /localhost|127\.0\.0\.1|0\.0\.0\.0/.test(url || '');
+}
+
+async function applyAiPreset(): Promise<void> {
+    const key = (document.getElementById('ai-preset') as HTMLSelectElement)?.value || '';
+    const preset = AI_PRESETS[key];
+    if (!preset) return;
+
+    (document.getElementById('ai-agent') as HTMLSelectElement).value = preset.agent;
+    (document.getElementById('ai-api-base') as HTMLInputElement).value = preset.apiBase;
+    (document.getElementById('ai-api-key') as HTMLInputElement).value = preset.apiKey;
+    (document.getElementById('ai-model') as HTMLInputElement).value = preset.model;
+
+    // "Default (hosted)" has to actively CLEAR the stored key and endpoint —
+    // omitting the flags would leave the previous local settings in place.
+    const clear = document.getElementById('ai-clear-key') as HTMLInputElement;
+    if (clear) clear.checked = preset.clearKey;
+
+    await onAiAgentChange();
+}
+
+function debugAiState(state: any): void {
+    console.log('ai-set now reports:', JSON.stringify(state));
+}
 
 async function showAiSettings(): Promise<void> {
     clearFieldErrors();
@@ -1214,15 +1267,23 @@ async function showAiSettings(): Promise<void> {
     const note = document.getElementById('ai-key-note');
     if (note) {
         note.textContent = current.has_api_key
-            ? 'A key is stored. Leave blank to keep it, or clear the field and save to remove it.'
+            ? 'A key is stored. Leave blank to keep it.'
             : 'No key stored.';
     }
 
-    onAiAgentChange();
+    // Only offer "clear the key" when there is one to clear.
+    const clearGroup = document.getElementById('ai-clear-key-group');
+    const clearBox = document.getElementById('ai-clear-key') as HTMLInputElement;
+    if (clearGroup) clearGroup.style.display = current.has_api_key ? 'block' : 'none';
+    if (clearBox) clearBox.checked = false;
+
+    (document.getElementById('ai-preset') as HTMLSelectElement).value = '';
+
+    await onAiAgentChange();
     showModal('ai-settings-modal');
 }
 
-function onAiAgentChange(): void {
+async function onAiAgentChange(): Promise<void> {
     // Switching agents invalidates any previous validation message. Without
     // this, selecting aider, failing validation, then switching to Claude left
     // "aider requires a model" sitting under a field marked optional.
@@ -1241,11 +1302,59 @@ function onAiAgentChange(): void {
     const baseGroup = document.getElementById('ai-api-base-group');
     if (baseGroup) baseGroup.style.display = rules?.apiBase ? 'block' : 'none';
 
+    const baseHelp = document.getElementById('ai-api-base-help');
+    if (baseHelp) baseHelp.textContent = rules?.apiBaseNote || '';
+
     const modelReq = document.getElementById('ai-model-req');
     if (modelReq) modelReq.textContent = rules?.modelRequired ? '(required)' : '(optional)';
 
     const keyReq = document.getElementById('ai-key-req');
     if (keyReq) keyReq.textContent = rules?.keyRequired ? '(required)' : '(optional)';
+
+    // Qwen Code wants Node 22+. It runs on 20 with an EBADENGINE warning, which
+    // is unsupported — and our own installers pin 20, so say so rather than
+    // offering to install something this machine cannot properly run.
+    const nodeWarning = document.getElementById('ai-node-warning');
+    if (nodeWarning) {
+        nodeWarning.style.display = 'none';
+        if (rules?.minNode) {
+            const major = await ipcRenderer.invoke('get-node-major');
+            if (major > 0 && major < rules.minNode) {
+                nodeWarning.textContent =
+                    `${agent} needs Node ${rules.minNode}+. This machine has Node ${major}, `
+                    + `where it installs with an EBADENGINE warning and is unsupported.`;
+                nodeWarning.style.display = 'block';
+            }
+        }
+    }
+
+    const apiBase = (document.getElementById('ai-api-base') as HTMLInputElement)?.value || '';
+    const localWarning = document.getElementById('ai-local-warning');
+    if (localWarning) localWarning.style.display = isLocalEndpoint(apiBase) ? 'block' : 'none';
+
+    await refreshOllamaModels(apiBase);
+}
+
+// Offer the models the user has actually pulled. Turns the hardest step of a
+// local setup into a click; falls back silently to free text when Ollama is
+// not reachable.
+async function refreshOllamaModels(apiBase: string): Promise<void> {
+    const list = document.getElementById('ai-model-options');
+    const hint = document.getElementById('ai-model-hint');
+    if (!list) return;
+
+    list.innerHTML = '';
+    if (hint) hint.textContent = '';
+    if (!isLocalEndpoint(apiBase)) return;
+
+    const models: string[] = await ipcRenderer.invoke('list-ollama-models', apiBase);
+    if (models.length === 0) {
+        if (hint) hint.textContent = 'Ollama is not reachable — type the model name.';
+        return;
+    }
+
+    list.innerHTML = models.map((m) => `<option value="${escapeHtml(m)}"></option>`).join('');
+    if (hint) hint.textContent = `${models.length} model(s) available locally — start typing to pick one.`;
 }
 
 let aiSettingsStreaming = false;
@@ -1274,8 +1383,24 @@ async function saveAiSettings(): Promise<void> {
 
     const args = ['ai-set', '--agent', agent];
     if (model) args.push('--model', model);
-    if (apiKey) args.push('--api-key', apiKey);
-    if (apiBase) args.push('--api-base', apiBase);
+
+    // Endpoint is sent EVERY time, as a value or as `none`. Omitting it leaves
+    // whatever the previous agent stored, so switching from a local preset back
+    // to hosted would silently keep pointing at localhost.
+    if (rules?.apiBase) {
+        args.push('--api-base', apiBase || 'none');
+    } else {
+        args.push('--api-base', 'none');
+    }
+
+    // The key is write-only — blank means "keep what is stored", because the
+    // field never shows it. Clearing therefore has to be explicit.
+    const clearKey = (document.getElementById('ai-clear-key') as HTMLInputElement)?.checked;
+    if (apiKey) {
+        args.push('--api-key', apiKey);
+    } else if (clearKey) {
+        args.push('--api-key', '');
+    }
 
     const wrap = document.getElementById('ai-settings-output-wrap');
     const output = document.getElementById('ai-settings-output');
@@ -1290,7 +1415,13 @@ async function saveAiSettings(): Promise<void> {
         aiSettingsStreaming = false;
 
         if (result.code === 0) {
-            showSuccess(agent ? `AI agent set to ${agent}.` : 'AI agent cleared.');
+            // Confirm what actually landed rather than trusting the exit code —
+            // the clearing semantics are the fiddly part of this panel.
+            const now = await ipcRenderer.invoke('get-ai-agent-full');
+            debugAiState(now);
+            showSuccess(agent
+                ? `AI agent set to ${agent}${now.api_base ? ` via ${now.api_base}` : ''}.`
+                : 'AI agent cleared.');
             closeModal();
         } else {
             showError(`Could not set the AI agent (exit ${result.code}). See the output above.`);
@@ -2684,6 +2815,7 @@ async function submitEditProject(): Promise<void> {
 };
 (window as any).showAiSettings = showAiSettings;
 (window as any).onAiAgentChange = onAiAgentChange;
+(window as any).applyAiPreset = applyAiPreset;
 (window as any).saveAiSettings = saveAiSettings;
 (window as any).showCreateWithAI = showCreateWithAI;
 (window as any).handleClassifyIdea = handleClassifyIdea;

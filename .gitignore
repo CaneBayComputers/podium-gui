@@ -100,3 +100,6 @@ Desktop.ini
 
 # Playwright screenshots from tests/e2e.js
 debug/
+
+# Shared CLI/GUI scratchpad — working chatter, not product
+CLI_GUI_COMMS.md

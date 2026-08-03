@@ -564,10 +564,53 @@ async function run() {
       ((await win.textContent('#ai-model-error')) || '').length > 0,
       await win.textContent('#ai-model-error'));
 
+
+    // qwen is the fifth agent; it and aider are the two that require a model.
+    check('offers qwen', agentOptions.includes('qwen'));
+
+    // --api-base is no longer aider-only: the CLI passes it to whichever env var
+    // each agent reads. gemini is the only one with no endpoint at all.
+    for (const [agent, shouldShow] of [['codex', true], ['qwen', true], ['claude', true], ['gemini', false]]) {
+      await win.selectOption('#ai-agent', agent);
+      await win.waitForTimeout(250);
+      check(`${agent} endpoint field ${shouldShow ? 'shown' : 'hidden'}`,
+        (await win.isVisible('#ai-api-base-group')) === shouldShow);
+    }
+
+    // claude needs an Anthropic-compatible proxy — pointing it at a raw Ollama
+    // URL is the obvious mistake, so the note has to say so.
     await win.selectOption('#ai-agent', 'claude');
-    await win.waitForTimeout(250);
-    check('non-aider agents hide the endpoint field',
-      !(await win.isVisible('#ai-api-base-group')));
+    await win.waitForTimeout(200);
+    check('claude endpoint note warns it must be Anthropic-compatible',
+      /anthropic/i.test((await win.textContent('#ai-api-base-help')) || ''),
+      await win.textContent('#ai-api-base-help'));
+
+    // Presets are the part users actually use.
+    const presets = await win.locator('#ai-preset option').evaluateAll((o) => o.map((x) => x.value));
+    check('offers the local/cheap presets',
+      ['hosted', 'ollama', 'openrouter', 'lmstudio'].every((p) => presets.includes(p)),
+      presets.join(','));
+
+    await win.selectOption('#ai-preset', 'ollama');
+    await win.waitForTimeout(600);
+    const ollama = await win.evaluate(() => ({
+      agent: document.getElementById('ai-agent').value,
+      base: document.getElementById('ai-api-base').value,
+      warning: document.getElementById('ai-local-warning').style.display
+    }));
+    check('Ollama preset fills agent and endpoint',
+      ollama.agent === 'qwen' && /11434/.test(ollama.base), JSON.stringify(ollama));
+    check('a local endpoint surfaces the VRAM warning', ollama.warning === 'block',
+      'small models return confident wrong answers — this must be visible');
+
+    await win.selectOption('#ai-preset', 'openrouter');
+    await win.waitForTimeout(400);
+    const remote = await win.evaluate(() => ({
+      model: document.getElementById('ai-model').value,
+      warning: document.getElementById('ai-local-warning').style.display
+    }));
+    check('OpenRouter preset fills a model', remote.model.length > 0, remote.model);
+    check('a remote endpoint hides the VRAM warning', remote.warning === 'none');
 
     // Switching agents must clear the previous agent's validation message —
     // "aider requires a model" sitting under a field marked (optional) was
