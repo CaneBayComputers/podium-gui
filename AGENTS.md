@@ -2,7 +2,8 @@
 
 Brief for an AI agent working on this repo. Written 2026-07-31 from a session that
 had just spent a long day inside the Podium CLI, so the CLI facts here are current
-as of `podium-cli` commit `f2e3ea3` (branch `beta`).
+as of `podium-cli` commit `f2e3ea3`. (That was on `beta`, which no longer
+exists — podium-cli is `master` + `dev`, the same shape as this repo.)
 
 ---
 

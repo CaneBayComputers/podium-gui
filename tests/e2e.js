@@ -586,7 +586,7 @@ async function run() {
 
 
     // qwen is the fifth agent, but only offered when the INSTALLED CLI has it.
-    // The cheap-models support is on podium-cli `beta`, not its `master`, so a
+    // The cheap-models support is on podium-cli `dev`, not its `master`, so a
     // current install has no qwen — offering it would produce "Unsupported AI
     // agent" at the point of use. The GUI adapts rather than assuming.
     const caps = await app.evaluate(async ({ ipcMain }) =>
