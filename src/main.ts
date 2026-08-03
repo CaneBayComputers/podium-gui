@@ -3,6 +3,7 @@ import * as path from 'path';
 import { spawn, ChildProcess, execSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
+import * as http from 'http';
 
 // Debug log file path
 const debugLogPath: string = path.join(os.tmpdir(), 'podium-gui-debug.log');
@@ -532,6 +533,71 @@ ipcMain.handle('get-framework-catalog', async (): Promise<{ frameworks: CatalogF
   } catch (error) {
     debugLog('Failed to read framework catalogue', { error: (error as Error).message });
     return { frameworks: [], error: (error as Error).message };
+  }
+});
+
+// What the INSTALLED CLI actually supports, probed once.
+//
+// The cheap-models work lives on podium-cli `beta` and is not on its `master`,
+// so a current install has no qwen and stores `--api-base none` as a literal
+// string. Offering qwen there produces an agent the CLI rejects. Rather than
+// couple the GUI's release to the CLI's, ask the CLI what it can do.
+let cliCapabilities: { qwen: boolean; clearableEndpoint: boolean } | null = null;
+
+ipcMain.handle('get-cli-capabilities', async (): Promise<{ qwen: boolean; clearableEndpoint: boolean }> => {
+  if (cliCapabilities) return cliCapabilities;
+
+  const help = await runPodium(['ai-set', '--help']);
+  const text = help.stdout + help.stderr;
+
+  cliCapabilities = {
+    qwen: /\bqwen\b/.test(text),
+    // Same commit added both, so qwen is a reliable proxy for "endpoint clearing
+    // works" — on older CLIs `none` is stored verbatim.
+    clearableEndpoint: /\bqwen\b/.test(text)
+  };
+
+  debugLog('CLI capabilities', cliCapabilities);
+  return cliCapabilities;
+});
+
+// Ollama exposes what the user has actually pulled. Turning the hardest step of
+// a local setup — "type the exact model tag" — into a picker is most of the value
+// of the local presets. Fails quietly to free text when Ollama is not running.
+ipcMain.handle('list-ollama-models', async (event: IpcMainInvokeEvent, baseUrl: string): Promise<string[]> => {
+  // The agent endpoint is .../v1; the tags API sits at the host root.
+  const root = (baseUrl || 'http://localhost:11434').replace(/\/v1\/?$/, '');
+
+  return new Promise((resolve) => {
+    const request = http.get(`${root}/api/tags`, { timeout: 1500 }, (res) => {
+      let body = '';
+      res.on('data', (chunk) => { body += chunk; });
+      res.on('end', () => {
+        try {
+          const models = (JSON.parse(body).models || [])
+            .map((m: any) => m.name)
+            .filter((n: string) => typeof n === 'string' && n !== '');
+          resolve(models);
+        } catch (error) {
+          resolve([]);
+        }
+      });
+    });
+
+    request.on('error', () => resolve([]));
+    request.on('timeout', () => { request.destroy(); resolve([]); });
+  });
+});
+
+// Qwen Code wants Node 22+. It installs on 20 with an EBADENGINE warning, which
+// is unsupported — and the GUI's own installers pin 20 as the floor, so the app
+// can end up offering an agent this machine cannot properly run.
+ipcMain.handle('get-node-major', async (): Promise<number> => {
+  try {
+    const out = execSync('node -v', { encoding: 'utf8' }).trim();
+    return parseInt(out.replace(/^v/, '').split('.')[0] || '0', 10);
+  } catch (error) {
+    return 0;
   }
 });
 

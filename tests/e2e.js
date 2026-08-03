@@ -286,6 +286,26 @@ async function run() {
     await win.waitForSelector('#create-ai-modal.show', { timeout: 5000 });
     check('create modal opens', await win.isVisible('#create-ai-modal'));
 
+    // Input validation, before any AI round-trip is paid for.
+    await win.fill(t('create-idea'), '');
+    await win.click(t('create-classify'));
+    await win.waitForTimeout(500);
+    check('an empty idea is rejected without calling the AI',
+      ((await win.textContent('#create-idea-error')) || '').length > 0,
+      await win.textContent('#create-idea-error'));
+
+    // A leading dash is parsed as a command-line flag. `podium create` honours
+    // `--`, so classification alone could be made to work — but the same text is
+    // later handed to `podium ai`, where the AGENT's own CLI parses the dash and
+    // `--` only stops Podium rejecting it. Half-working is worse than declining.
+    await win.fill(t('create-idea'), '-a tracker for guitar pedals');
+    await win.click(t('create-classify'));
+    await win.waitForTimeout(500);
+    const dashErr = await win.textContent('#create-idea-error');
+    check('an idea starting with a dash is declined with a reason',
+      /dash|flag/i.test(dashErr || ''), dashErr || '<none>');
+    await win.fill(t('create-idea'), '');
+
     const FIXTURE = {
       status: 'success',
       project_name: 'team-process-wiki',
@@ -564,10 +584,70 @@ async function run() {
       ((await win.textContent('#ai-model-error')) || '').length > 0,
       await win.textContent('#ai-model-error'));
 
+
+    // qwen is the fifth agent, but only offered when the INSTALLED CLI has it.
+    // The cheap-models support is on podium-cli `beta`, not its `master`, so a
+    // current install has no qwen — offering it would produce "Unsupported AI
+    // agent" at the point of use. The GUI adapts rather than assuming.
+    const caps = await app.evaluate(async ({ ipcMain }) =>
+      ipcMain._invokeHandlers.get('get-cli-capabilities')({}));
+    const qwenUsable = await win.evaluate(() => {
+      const o = document.querySelector('#ai-agent option[value="qwen"]');
+      return !!o && !o.hidden && !o.disabled;
+    });
+    check('qwen offered exactly when the installed CLI supports it',
+      qwenUsable === caps.qwen, `cli.qwen=${caps.qwen} offered=${qwenUsable}`);
+
+    const localPresetsUsable = await win.evaluate(() => {
+      const o = document.querySelector('#ai-preset option[value="ollama"]');
+      return !!o && !o.hidden && !o.disabled;
+    });
+    check('local presets follow the same capability',
+      localPresetsUsable === caps.qwen, `cli.qwen=${caps.qwen} presets=${localPresetsUsable}`);
+
+    // --api-base is no longer aider-only: the CLI passes it to whichever env var
+    // each agent reads. gemini is the only one with no endpoint at all.
+    for (const [agent, shouldShow] of [['codex', true], ['qwen', true], ['claude', true], ['gemini', false]]) {
+      await win.selectOption('#ai-agent', agent);
+      await win.waitForTimeout(250);
+      check(`${agent} endpoint field ${shouldShow ? 'shown' : 'hidden'}`,
+        (await win.isVisible('#ai-api-base-group')) === shouldShow);
+    }
+
+    // claude needs an Anthropic-compatible proxy — pointing it at a raw Ollama
+    // URL is the obvious mistake, so the note has to say so.
     await win.selectOption('#ai-agent', 'claude');
-    await win.waitForTimeout(250);
-    check('non-aider agents hide the endpoint field',
-      !(await win.isVisible('#ai-api-base-group')));
+    await win.waitForTimeout(200);
+    check('claude endpoint note warns it must be Anthropic-compatible',
+      /anthropic/i.test((await win.textContent('#ai-api-base-help')) || ''),
+      await win.textContent('#ai-api-base-help'));
+
+    // Presets are the part users actually use.
+    const presets = await win.locator('#ai-preset option').evaluateAll((o) => o.map((x) => x.value));
+    check('offers the local/cheap presets',
+      ['hosted', 'ollama', 'openrouter', 'lmstudio'].every((p) => presets.includes(p)),
+      presets.join(','));
+
+    await win.selectOption('#ai-preset', 'ollama');
+    await win.waitForTimeout(600);
+    const ollama = await win.evaluate(() => ({
+      agent: document.getElementById('ai-agent').value,
+      base: document.getElementById('ai-api-base').value,
+      warning: document.getElementById('ai-local-warning').style.display
+    }));
+    check('Ollama preset fills agent and endpoint',
+      ollama.agent === 'qwen' && /11434/.test(ollama.base), JSON.stringify(ollama));
+    check('a local endpoint surfaces the VRAM warning', ollama.warning === 'block',
+      'small models return confident wrong answers — this must be visible');
+
+    await win.selectOption('#ai-preset', 'openrouter');
+    await win.waitForTimeout(400);
+    const remote = await win.evaluate(() => ({
+      model: document.getElementById('ai-model').value,
+      warning: document.getElementById('ai-local-warning').style.display
+    }));
+    check('OpenRouter preset fills a model', remote.model.length > 0, remote.model);
+    check('a remote endpoint hides the VRAM warning', remote.warning === 'none');
 
     // Switching agents must clear the previous agent's validation message —
     // "aider requires a model" sitting under a field marked (optional) was
