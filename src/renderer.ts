@@ -1250,8 +1250,35 @@ function debugAiState(state: any): void {
     console.log('ai-set now reports:', JSON.stringify(state));
 }
 
+// Cached per session; the installed CLI does not change underneath us.
+let cliCaps: { qwen: boolean; clearableEndpoint: boolean } = { qwen: true, clearableEndpoint: true };
+
 async function showAiSettings(): Promise<void> {
     clearFieldErrors();
+
+    // Hide agents this CLI cannot actually run. The cheap-models support is on
+    // podium-cli `beta` and not its `master`, so a current install has no qwen —
+    // offering it would produce "Unsupported AI agent" at the point of use.
+    cliCaps = await ipcRenderer.invoke('get-cli-capabilities');
+    const qwenOption = document.querySelector('#ai-agent option[value="qwen"]') as HTMLOptionElement;
+    if (qwenOption) {
+        qwenOption.hidden = !cliCaps.qwen;
+        qwenOption.disabled = !cliCaps.qwen;
+    }
+    // The presets that depend on qwen go with it.
+    for (const preset of ['ollama', 'openrouter']) {
+        const option = document.querySelector(`#ai-preset option[value="${preset}"]`) as HTMLOptionElement;
+        if (option) {
+            option.hidden = !cliCaps.qwen;
+            option.disabled = !cliCaps.qwen;
+        }
+    }
+    const presetHelp = document.getElementById('ai-preset-help');
+    if (presetHelp) {
+        presetHelp.textContent = cliCaps.qwen
+            ? 'Fills the fields below; you can still edit them.'
+            : 'Local-model presets need a newer Podium CLI — run `podium update`.';
+    }
     const output = document.getElementById('ai-settings-output');
     const wrap = document.getElementById('ai-settings-output-wrap');
     if (output) output.textContent = '';
@@ -1387,9 +1414,14 @@ async function saveAiSettings(): Promise<void> {
     // Endpoint is sent EVERY time, as a value or as `none`. Omitting it leaves
     // whatever the previous agent stored, so switching from a local preset back
     // to hosted would silently keep pointing at localhost.
-    if (rules?.apiBase) {
-        args.push('--api-base', apiBase || 'none');
-    } else {
+    //
+    // Older CLIs store `none` VERBATIM rather than clearing, which would leave a
+    // nonsense endpoint behind — worse than the stale one. There, only send a
+    // real value.
+    const endpoint = rules?.apiBase ? apiBase : '';
+    if (endpoint) {
+        args.push('--api-base', endpoint);
+    } else if (cliCaps.clearableEndpoint) {
         args.push('--api-base', 'none');
     }
 

@@ -536,6 +536,31 @@ ipcMain.handle('get-framework-catalog', async (): Promise<{ frameworks: CatalogF
   }
 });
 
+// What the INSTALLED CLI actually supports, probed once.
+//
+// The cheap-models work lives on podium-cli `beta` and is not on its `master`,
+// so a current install has no qwen and stores `--api-base none` as a literal
+// string. Offering qwen there produces an agent the CLI rejects. Rather than
+// couple the GUI's release to the CLI's, ask the CLI what it can do.
+let cliCapabilities: { qwen: boolean; clearableEndpoint: boolean } | null = null;
+
+ipcMain.handle('get-cli-capabilities', async (): Promise<{ qwen: boolean; clearableEndpoint: boolean }> => {
+  if (cliCapabilities) return cliCapabilities;
+
+  const help = await runPodium(['ai-set', '--help']);
+  const text = help.stdout + help.stderr;
+
+  cliCapabilities = {
+    qwen: /\bqwen\b/.test(text),
+    // Same commit added both, so qwen is a reliable proxy for "endpoint clearing
+    // works" — on older CLIs `none` is stored verbatim.
+    clearableEndpoint: /\bqwen\b/.test(text)
+  };
+
+  debugLog('CLI capabilities', cliCapabilities);
+  return cliCapabilities;
+});
+
 // Ollama exposes what the user has actually pulled. Turning the hardest step of
 // a local setup — "type the exact model tag" — into a picker is most of the value
 // of the local presets. Fails quietly to free text when Ollama is not running.

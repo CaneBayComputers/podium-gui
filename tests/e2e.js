@@ -565,8 +565,25 @@ async function run() {
       await win.textContent('#ai-model-error'));
 
 
-    // qwen is the fifth agent; it and aider are the two that require a model.
-    check('offers qwen', agentOptions.includes('qwen'));
+    // qwen is the fifth agent, but only offered when the INSTALLED CLI has it.
+    // The cheap-models support is on podium-cli `beta`, not its `master`, so a
+    // current install has no qwen — offering it would produce "Unsupported AI
+    // agent" at the point of use. The GUI adapts rather than assuming.
+    const caps = await app.evaluate(async ({ ipcMain }) =>
+      ipcMain._invokeHandlers.get('get-cli-capabilities')({}));
+    const qwenUsable = await win.evaluate(() => {
+      const o = document.querySelector('#ai-agent option[value="qwen"]');
+      return !!o && !o.hidden && !o.disabled;
+    });
+    check('qwen offered exactly when the installed CLI supports it',
+      qwenUsable === caps.qwen, `cli.qwen=${caps.qwen} offered=${qwenUsable}`);
+
+    const localPresetsUsable = await win.evaluate(() => {
+      const o = document.querySelector('#ai-preset option[value="ollama"]');
+      return !!o && !o.hidden && !o.disabled;
+    });
+    check('local presets follow the same capability',
+      localPresetsUsable === caps.qwen, `cli.qwen=${caps.qwen} presets=${localPresetsUsable}`);
 
     // --api-base is no longer aider-only: the CLI passes it to whichever env var
     // each agent reads. gemini is the only one with no endpoint at all.
