@@ -30,39 +30,36 @@ already caused a near-miss in this codebase.
 
 ---
 
-## 1. Every CLI call in this repo is out of date
+## 1. The CLI contract — re-synced 2026-07-31, keep it that way
 
-The GUI was last pushed **September 2025**. The CLI has changed substantially since —
-including a complete rework of `podium create`. **Assume nothing here still works
-until you have re-verified it against `--help`.**
+The GUI was last pushed September 2025 and every call had drifted. That re-sync is
+**done**: all of the below is what the code now does. It is recorded because the
+failure mode is silent — a wrong flag or a changed positional fails at runtime,
+often looking like a GUI bug.
 
-Audited on 2026-07-31. What this repo currently calls:
+The signatures the GUI depends on:
 
-`projects-dir`, `configure`, `up`, `down`, `status`, `start-services`, `stop-services`,
-`new`, `clone`, `setup`, `remove`
-
-Confirmed breakages, not hypothetical:
-
-| Where | Problem |
+| Command | Contract |
 |---|---|
-| `src/renderer.ts` ~1181 | Passes `--emoji`. **`podium new` does not accept it.** |
-| `src/renderer.ts` ~1203 | Passes `--org`. The flag is **`--github-org`**. |
-| `podium new` | Signature is now `podium new <framework> <name>` — framework is the **first positional**, not a flag. |
-| `podium clone` | Now requires a **mode as the first argument**: `work-directly`, `fork`, or `new-repo`. |
-| `podium remove` | **Preserves the database by default.** Pass `--force-db-delete` to drop it. |
-| `podium configure` | No longer asks for AWS or GitHub at all. Gained `--non-interactive`. |
-| `podium status` | Only lists **running** projects by default; `--all` includes stopped. |
+| `podium new <framework> <name>` | framework is the **first positional**. There is no `--framework` flag. Org is `--github-org`, not `--org`. |
+| `podium install <app> [name]` | database is fixed by the installer; never offer a choice. |
+| `podium clone <mode> <repo> [name]` | mode is **required**: `work-directly`, `fork`, `new-repo`. |
+| `podium remove <name>` | database is **preserved** unless `--force-db-delete`. `--force` is a destructive alias, NOT "skip prompts". |
+| `podium status [name]` | lists only **running** projects; needs `--all` for the rest. |
+| `podium create --classify-only --json-output "<idea>"` | phase 1 on its own — see §2A. |
+| `podium ai-set --json-output` | reports the configured agent; installs one when `--agent` is set. |
+| `podium resume <project>` | reopens the AI session in that project. |
+| `start-services` / `stop-services` | take no arguments the GUI needs; judge by exit code. |
 
-What this repo does not know exists at all:
+**Do not hardcode anything the CLI publishes.** The app list, each framework's
+supported databases, the projects directory and the shared-service container
+names are all read at runtime from `src/catalog/*.json` and
+`/etc/podium-cli/.env`. Every one of those was previously a hardcoded copy in
+this repo, and every one had drifted.
 
-- **`podium create`** — the flagship path (see §2)
-- **`podium install`** — the entire 100+ app library
-- `up-all` / `down-all`
-- `enable-service` / `disable-service` — optional shared services (MinIO, Meilisearch)
-- `resume`, `ai`, `ai-set`
-- The full dev-tool surface: `exec`, `shell`, `composer`, `art`, `npm`, `django`, `supervisor`, …
-
-Run `podium help` and diff it against what the GUI offers. That gap is the roadmap.
+Re-verify with `podium <command> --help` before changing a call. When something
+looks wrong in the CLI, write it up in `CLI_GUI_ISSUES.md` — that loop produced
+eight fixes during the re-sync — and never edit `podium-cli` directly.
 
 ### `--json-output` — read this before relying on it
 
@@ -110,9 +107,10 @@ The right design is almost certainly: **do not shell out to `podium create` as o
 call.** Instead drive the phases yourself — run the classifier, render the choices as
 native GUI components, then call `podium install` or `podium new` directly with the
 user's picks. Read `src/scripts/classify.sh` and `src/scripts/create.sh` to see the
-contract. Confirm this approach before building it; it may want a CLI-side flag to
-emit the classification as JSON and stop, which would be a **CLI change to request,
-not to make yourself**.
+contract. **This is built.** The CLI-side flag it needed was requested rather than
+worked around, and shipped as `podium create --classify-only [--json-output]`,
+which runs phase 1, prints the classification and creates nothing. The GUI renders
+those candidates natively and then drives phase 2 with `install`/`new` directly.
 
 ### B. `podium new <framework> <name>` — scaffold a project you write
 
@@ -143,12 +141,15 @@ not create the confusion.
 
 ## 3. Installers for the GUI — piggyback the CLI's
 
-Ship four installers matching the CLI's, same platforms, same shape:
+Four installers matching the CLI's, same platforms, same shape — **these exist**
+(`install-ubuntu.sh` is the reference and the only one run end to end on real
+hardware; the other three are syntax- and guard-checked by the suite):
 
 `install-ubuntu.sh`, `install-fedora.sh`, `install-arch.sh`, `install-mac.sh`
 
-Do not reinvent them. Read the CLI's four as the template — they encode a lot of hard-won
-behaviour, all of it found by running them on clean machines:
+They are not reinvented — the CLI's four are the template. These behaviours are
+lint-asserted by the e2e suite so they cannot be dropped silently, and each was
+found by running installers on clean machines:
 
 - Probe `sudo -n true` **before** `sudo -v`. Cloud images and CI runners grant NOPASSWD
   alongside a password-requiring rule, and plain `sudo -v` prompts anyway — it aborted
@@ -212,7 +213,8 @@ That gives an agent: launch, full DOM query/click/type in the renderer, `evaluat
 the main process (so IPC handlers can be exercised directly), screenshots, and video.
 It is strictly more capable than an MCP wrapper and needs no protocol of your own.
 
-What to build on top of it:
+**This is built** — `npm run test:e2e` runs `tests/e2e.js` against the real app.
+What it consists of:
 
 - A `test:e2e` script and a `tests/` directory, so driving the GUI is a normal,
   documented action rather than something bespoke.
@@ -244,31 +246,113 @@ never during. Otherwise every bug is ambiguous: contract drift, or migration sli
 
 ---
 
-## 6. Suggested order of work
+## 6. Where this stands
 
-1. Re-establish the CLI contract. Audit every call against `--help`, fix `--emoji` and
-   `--org` first — those are certain breakage. Get the existing GUI working again
-   before adding anything.
-2. Add `podium install` — the largest missing capability, and the easiest to get right
-   because the catalogue is a JSON file and there are no interactive menus.
-3. Add Playwright + `data-testid` attributes. Do this **before** the big `create` work,
-   so the hardest feature is the first one you can actually watch the AI test.
-4. Design the `podium create` flow, phases driven natively (see §2A). Confirm the
-   approach before building.
-5. Installers and first-run configure.
+All five steps of the original plan are done and verified on real hardware:
+
+1. **CLI contract re-synced** — the GUI could not previously start at all (it
+   probed a config path that no longer exists and always opened the installer).
+2. **`podium install`** — all 102 apps, catalogue read at runtime.
+3. **Playwright + `data-testid`** — `npm run test:e2e`, see §4.
+4. **Create with AI** — driven phase by phase against `create --classify-only`,
+   which was requested from the CLI rather than worked around.
+5. **Installers and first-run configure** — four platform installers; the CLI is
+   installed first when missing.
+
+Since then: tabbed embedded terminals, an AI agent panel, Modify with AI,
+streamed output for long operations, and the framework picker driven from
+`frameworks.json`.
+
+**Verified**: 13/13 frameworks and 102/102 apps created through the GUI's own
+buttons, checked over HTTP, then removed — zero failures. That run found eight
+CLI bugs, two of which were only ever reproducible through the GUI.
 
 ---
 
 ## 7. Things that will bite you
 
-- **`podium status` output changed.** Running-only by default. If the GUI shows an empty
-  project list, that is probably why.
-- **`podium remove` keeps the database now.** A GUI "delete project" button that assumes
-  the old behaviour will leave databases behind. Decide deliberately and label the UI
-  to match.
-- **Optional shared services exist.** MinIO and Meilisearch are off unless enabled per
-  machine; check `OPTIONAL_SERVICES` in `/etc/podium-cli/.env` before showing them.
-- **Never pass `--json-output` when you need to know *why* something failed.** See §1.
-- **`podium create` and `podium configure` are the only interactive commands.**
-  Everything else fails with a clear "required argument" error rather than prompting,
-  which is exactly what a GUI wants.
+- **Never pass `--json-output` when you need to know *why* something failed.** It
+  suppresses the human-readable output, including the error. Judge success by the
+  **exit code**, always. The GUI streams plain output for anything long-running.
+- **A CLI older than the GUI is dangerous, not merely limited.** A CLI predating
+  `--classify-only` does not reject the flag — it falls through to a full
+  `podium create` and builds a project. The GUI probes `create --help` before
+  using it. Assume the same shape for any future flag.
+- **`podium status` is running-only** without `--all`, and `port_mapped` is **not**
+  a liveness signal — projects reachable by hostname alone (everything
+  `podium install` produces) have no published port. Key "running" on
+  `docker_running`.
+- **Display metadata is GUI-owned.** The CLI no longer writes `x-metadata` and
+  `status` does not return name/description/emoji. The GUI keeps them in the
+  project's compose file and applies them at render time — never onto the parsed
+  status object, which gets rebuilt underneath you.
+- **Optional shared services** (MinIO, Meilisearch) are reported as `stopped`
+  whether or not they were ever enabled. Filter on `OPTIONAL_SERVICES` in
+  `/etc/podium-cli/.env` or they read as broken.
+- **`--version` only means something for laravel and wordpress.** The CLI's help
+  once advertised PHP `8 or 7`; nothing read it.
+- **Modals must be top-level.** One was nested inside another, and since `.modal`
+  is `display:none`, it could never be shown — that button had never worked. The
+  suite asserts no modal is nested inside another.
+- **Screenshots catch what assertions miss.** A submit button pushed below the
+  fold and a stale validation error under a field labelled optional both passed
+  every assertion. Look at `debug/*.png`.
+- **The e2e suite needs a live desktop.** Electron exits with "Missing X server"
+  over a bare SSH session.
+
+---
+
+## 8. Getting work onto `master`
+
+`master` is protected by repository ruleset `protect-default` (id `20205352`),
+enforcement **active**, covering `refs/heads/master` and `refs/heads/main`:
+
+| Rule | Effect |
+|---|---|
+| `pull_request` | changes must arrive via a PR — **0 approvals required** |
+| `deletion` | the branch cannot be deleted |
+| `non_fast_forward` | no force-pushing, no history rewrites |
+
+**`bypass_actors` is empty** — the API reports `current_user_can_bypass: never`
+for everyone, including the owner. There is no override. A direct push fails with
+`protected branch hook declined` / `GH013`.
+
+### The procedure
+
+All work happens on **`dev`**. Do not create a branch per feature, fix or update —
+commit them all to `dev` and promote in batches.
+
+```bash
+# 1. open the PR (once per batch, not per fix)
+gh pr create --base master --head dev --title "..." --body "..."
+
+# 2. merge it yourself — 0 approvals are required
+gh pr merge <number> --merge --delete-branch=false
+
+# 3. confirm
+git fetch origin
+git log --oneline origin/master..origin/dev | wc -l   # want 0
+```
+
+`dev` is permanent: keep it after merging and carry on committing to it.
+
+**Batch, do not drip.** A promotion PR with fifteen commits is fine and normal;
+fifteen PRs with one commit each is noise. Write the PR body as a summary of what
+changed and why it is safe — the commit list is already on the PR page.
+
+### Traps
+
+- **Never `git push --force` at `master`.** `non_fast_forward` rejects it, and
+  rewriting a shared branch strands other sessions' work. Revert instead.
+- **`git push --dry-run` does not test protection.** Its output is client-side and
+  never reaches the server hook, so it will happily report a direct push to
+  `master` as succeeding. Check what is actually enforced with:
+  ```bash
+  gh api repos/CaneBayComputers/podium-gui/rules/branches/master
+  ```
+- **`gh api .../branches/master/protection` returns 404 here.** That endpoint is
+  for *classic* protection; this repo uses a **ruleset**. A 404 there does not
+  mean unprotected.
+- **This repo is private and proprietary.** `LICENSE` is the commercial licence,
+  `package.json` says `UNLICENSED` with `private: true`. Do not relicense it and
+  do not publish the package.
