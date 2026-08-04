@@ -84,7 +84,6 @@
     },
     "deb": {
       "depends": [
-        "docker.io | docker-ce",
         "git",
         "curl",
         "ca-certificates"
@@ -93,7 +92,6 @@
     },
     "rpm": {
       "depends": [
-        "docker",
         "git",
         "curl"
       ],
