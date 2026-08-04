@@ -103,3 +103,7 @@ debug/
 
 # Shared CLI/GUI scratchpad — working chatter, not product
 CLI_GUI_COMMS.md
+
+# Built installer packages (deb/rpm/pkg.tar.zst) — attached to GitHub releases,
+# never committed. ~200 MB each; electron-builder output dir.
+release/
