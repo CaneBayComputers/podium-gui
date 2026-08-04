@@ -83,7 +83,6 @@ document.addEventListener('DOMContentLoaded', (): void => {
     loadOptionalServices().then(() => Promise.all([
         loadProjects(),
         loadServices(),
-        checkVersionLockStep(),
         showAboutVersions()
     ])).then(() => {
         setupEventListeners();
@@ -1193,12 +1192,14 @@ function handleCreateProject(): void {
 // ---------------------------------------------------------------------------
 // Version lock step
 //
-// WARN, never block. The GUI degrades gracefully against an older CLI through
-// per-feature capability probes, which are finer-grained than a version number
-// and already caught the missing qwen support. A hard version gate would turn a
-// partial upgrade into software that refuses to start — strictly worse than
-// software that works with a caveat. The version is a hint for the user, not a
-// gate for the program.
+// Reported, never acted on. The GUI and CLI are separate products on separate
+// release cycles and their versions are not expected to match, so a difference
+// is neither a warning nor a gate — it is just something worth knowing when
+// someone files a bug.
+//
+// Compatibility is handled by per-feature capability probes, which are
+// finer-grained than any version comparison and already caught the missing qwen
+// support. They answer "can I do this" rather than "are these numbers equal".
 // ---------------------------------------------------------------------------
 
 async function showAboutVersions(): Promise<void> {
@@ -1211,27 +1212,20 @@ async function showAboutVersions(): Promise<void> {
     el.textContent = `GUI ${gui} · CLI ${cli}`;
 }
 
-async function checkVersionLockStep(): Promise<void> {
-    const [guiVersion, cliVersion] = await Promise.all([
-        ipcRenderer.invoke('get-gui-version'),
-        ipcRenderer.invoke('get-cli-version')
-    ]);
-
-    const banner = document.getElementById('version-mismatch');
-    const text = document.getElementById('version-mismatch-text');
-    if (!banner || !text) return;
-
-    if (cliVersion === guiVersion) {
-        banner.style.display = 'none';
-        return;
-    }
-
-    // 'unknown' means a CLI predating the version command entirely.
-    text.textContent = cliVersion === 'unknown'
-        ? `This Podium CLI is older than the GUI (${guiVersion}) — it cannot report its version. Run \`podium update\`; some features stay hidden until you do.`
-        : `Podium CLI is ${cliVersion}, GUI is ${guiVersion}. Run \`podium update\` to match them.`;
-    banner.style.display = 'block';
-}
+// The GUI and the CLI are separate products on separate release cycles, and
+// their version numbers are NOT expected to match. They both read 1.0.0-beta.1
+// today because that is where they started, not because anything holds them
+// together.
+//
+// So there is deliberately no mismatch warning. A banner that fires during
+// ordinary operation is worse than no banner — it trains people to dismiss the
+// one that matters. The capability probes (see `get-cli-capabilities`) are the
+// real mechanism and always were: asking `ai-set --help` whether qwen exists
+// answers "can I do this" rather than "are these numbers equal", and degrades
+// one feature at a time instead of all at once.
+//
+// Both versions are still shown in About, as fact rather than as a problem —
+// it is the first thing worth knowing in a bug report.
 
 // ---------------------------------------------------------------------------
 // AI agent settings (`podium ai-set`)
