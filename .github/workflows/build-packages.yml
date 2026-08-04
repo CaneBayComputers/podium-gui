@@ -120,3 +120,49 @@ jobs:
             artifacts/SHA256SUMS.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish-repo:
+    # Push the released .deb into the APT repo at packages.podiumcli.com so
+    # `apt upgrade` picks it up. Runs only after the release actually has its
+    # assets attached — publishing metadata that points at files which are not
+    # there yet gives every user a 404 mid-upgrade.
+    needs: [attach]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release' || inputs.attach_to_tag != ''
+    steps:
+      - name: Publish to packages.podiumcli.com
+        env:
+          TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.attach_to_tag }}
+          # Pre-releases go to the `beta` suite so they are not pushed to
+          # everyone tracking `stable` by default.
+          SUITE: ${{ (github.event_name == 'release' && github.event.release.prerelease == false) && 'stable' || 'beta' }}
+          # Passed as env rather than interpolated into the script body:
+          # ${{ }} substitutes into the shell text, so a key with awkward
+          # characters can break the script or leak into a trace.
+          SSH_KEY: ${{ secrets.REPO_PUBLISH_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.REPO_PUBLISH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 ~/.ssh
+          # The key is pinned server-side to a single forced command and cannot
+          # open a shell, but the host key is still pinned here so a hijacked
+          # DNS answer cannot collect the secret.
+          # OpenSSH rejects a private key with no trailing newline, which is
+          # what printf '%s' would produce.
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
+          echo "publishing $TAG to suite $SUITE"
+          ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes \
+            podiumpub@canebaycomputers.com \
+            "CaneBayComputers/podium-gui $TAG $SUITE"
+
+      - name: Verify apt can see it
+        run: |
+          set -euo pipefail
+          SUITE="${{ (github.event_name == 'release' && github.event.release.prerelease == false) && 'stable' || 'beta' }}"
+          # Assert the repo actually serves what we just published, rather than
+          # trusting the publish step's exit code.
+          curl -fsSL "https://packages.podiumcli.com/dists/$SUITE/InRelease" | head -3
+          curl -fsSL "https://packages.podiumcli.com/dists/$SUITE/main/binary-amd64/Packages" \
+            | grep -E '^(Package|Version):' | head -4
