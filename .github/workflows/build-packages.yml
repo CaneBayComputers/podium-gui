@@ -1,0 +1,122 @@
+name: Build packages
+
+# Replaces the old build-deb.yml / build-mac.yml, which called
+# packaging/build-*.sh — hand-rolled scripts that predate electron-builder and
+# broke when the revamp moved the sources under src/ ("cp: *.html: No such file
+# or directory"). electron-builder is what produces the shipped packages now,
+# so CI runs the same command a maintainer runs locally rather than a parallel
+# implementation that can rot without anyone noticing.
+
+on:
+  # Deliberately NOT on every push. macOS runners bill at 10x Linux, and the
+  # old workflows burned a run on every commit to produce artifacts nobody
+  # collected.
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      attach_to_tag:
+        description: 'Existing release tag to attach artifacts to (blank = artifacts only)'
+        required: false
+        default: ''
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # 20 minimum. Ubuntu still ships 18, which is too old for the build
+          # tooling — the old workflow pinned 18 and would fail here anyway.
+          node-version: '20'
+          cache: 'npm'
+
+      # electron-builder shells out to these for the rpm and pacman targets and
+      # neither is on the runner by default: rpmbuild for rpm, bsdtar for pacman.
+      - name: Install packaging tools
+        run: sudo apt-get update && sudo apt-get install -y rpm libarchive-tools zstd
+
+      - run: npm ci
+      - run: npm run build-ts
+
+      - name: Build deb, rpm and pacman
+        run: npx electron-builder --linux deb rpm pacman --publish never
+
+      # electron-builder emits an XZ-compressed .pacman. Current Arch expects
+      # zstd, so repack it — only the outer compression changes, .PKGINFO,
+      # .MTREE and .INSTALL are preserved exactly, which is what pacman reads.
+      - name: Repack pacman as .pkg.tar.zst
+        run: |
+          set -euo pipefail
+          src=$(ls release/*.pacman)
+          base=$(basename "$src" .pacman)
+          work=$(mktemp -d)
+          bsdtar -xf "$src" -C "$work"
+          ( cd "$work" && bsdtar -cf - --format=gnutar \
+              $(ls -a | grep -vE '^\.\.?$') \
+            | zstd -q -19 -T0 -o "$GITHUB_WORKSPACE/release/${base}-x86_64.pkg.tar.zst" )
+          ls -la release/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-packages
+          path: |
+            release/*.deb
+            release/*.rpm
+            release/*.pkg.tar.zst
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - run: npm ci
+      - run: npm run build-ts
+
+      # Both architectures rather than a universal binary: node-pty is a native
+      # module, and universal builds of native modules are the fiddly case.
+      # Two dmgs is less clever and less likely to ship broken.
+      - name: Build dmg (arm64 + x64)
+        run: npx electron-builder --mac dmg --arm64 --x64 --publish never
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-packages
+          path: release/*.dmg
+
+  attach:
+    # Publishing the artifacts onto a release is a separate job so a failed
+    # build never half-populates a release's download list.
+    needs: [linux, macos]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release' || inputs.attach_to_tag != ''
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Checksums
+        run: |
+          cd artifacts
+          find . -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.pkg.tar.zst' -o -name '*.dmg' \) \
+            -exec sha256sum {} + | sed 's|\./[a-z-]*/||' > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.attach_to_tag }}
+          files: |
+            artifacts/**/*.deb
+            artifacts/**/*.rpm
+            artifacts/**/*.pkg.tar.zst
+            artifacts/**/*.dmg
+            artifacts/SHA256SUMS.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
