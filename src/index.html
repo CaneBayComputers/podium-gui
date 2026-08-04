@@ -34,6 +34,11 @@
             </div>
         </header>
 
+        <!-- Version lock step: a warning, never a block. -->
+        <div id="version-mismatch" class="version-banner" data-testid="version-mismatch" style="display: none;">
+            <span id="version-mismatch-text"></span>
+        </div>
+
         <!-- Main Content -->
         <main class="main-content">
             <!-- Project Dashboard -->
@@ -614,7 +619,7 @@
             <div class="modal-body">
                 <div class="about-logo">
                     <h1>Podium</h1>
-                    <span class="version">Version 1.0 Beta 4</span>
+                    <span class="version" id="about-version" data-testid="about-version">Version —</span>
                 </div>
                 <p><strong>Professional PHP Development Platform</strong></p>
                 <p>Podium is a comprehensive Docker-based development environment for PHP projects, featuring both a powerful Command Line Interface (CLI) and an intuitive Graphical User Interface (GUI).</p>

@@ -75,7 +75,9 @@ document.addEventListener('DOMContentLoaded', (): void => {
     // simply never enabled them.
     loadOptionalServices().then(() => Promise.all([
         loadProjects(),
-        loadServices()
+        loadServices(),
+        checkVersionLockStep(),
+        showAboutVersions()
     ])).then(() => {
         setupEventListeners();
         
@@ -1180,6 +1182,49 @@ function handleCreateProject(): void {
 }
 
 // Functions made globally available at end of file
+
+// ---------------------------------------------------------------------------
+// Version lock step
+//
+// WARN, never block. The GUI degrades gracefully against an older CLI through
+// per-feature capability probes, which are finer-grained than a version number
+// and already caught the missing qwen support. A hard version gate would turn a
+// partial upgrade into software that refuses to start — strictly worse than
+// software that works with a caveat. The version is a hint for the user, not a
+// gate for the program.
+// ---------------------------------------------------------------------------
+
+async function showAboutVersions(): Promise<void> {
+    const el = document.getElementById('about-version');
+    if (!el) return;
+    const [gui, cli] = await Promise.all([
+        ipcRenderer.invoke('get-gui-version'),
+        ipcRenderer.invoke('get-cli-version')
+    ]);
+    el.textContent = `GUI ${gui} · CLI ${cli}`;
+}
+
+async function checkVersionLockStep(): Promise<void> {
+    const [guiVersion, cliVersion] = await Promise.all([
+        ipcRenderer.invoke('get-gui-version'),
+        ipcRenderer.invoke('get-cli-version')
+    ]);
+
+    const banner = document.getElementById('version-mismatch');
+    const text = document.getElementById('version-mismatch-text');
+    if (!banner || !text) return;
+
+    if (cliVersion === guiVersion) {
+        banner.style.display = 'none';
+        return;
+    }
+
+    // 'unknown' means a CLI predating the version command entirely.
+    text.textContent = cliVersion === 'unknown'
+        ? `This Podium CLI is older than the GUI (${guiVersion}) — it cannot report its version. Run \`podium update\`; some features stay hidden until you do.`
+        : `Podium CLI is ${cliVersion}, GUI is ${guiVersion}. Run \`podium update\` to match them.`;
+    banner.style.display = 'block';
+}
 
 // ---------------------------------------------------------------------------
 // AI agent settings (`podium ai-set`)

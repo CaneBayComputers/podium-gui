@@ -601,6 +601,23 @@ ipcMain.handle('get-node-major', async (): Promise<number> => {
   }
 });
 
+// CLI version, for the lock-step check. A dedicated command rather than reading
+// it off `status`, which touches Docker and can be slow — this is just a string.
+// Returns 'unknown' on an older CLI that has no version command at all, which is
+// distinguishable from a real version and means "too old to say".
+ipcMain.handle('get-cli-version', async (): Promise<string> => {
+  const result = await runPodium(['version', '--json-output']);
+  if (result.code !== 0) return 'unknown';
+
+  try {
+    return JSON.parse(result.stdout).version || 'unknown';
+  } catch (error) {
+    return 'unknown';
+  }
+});
+
+ipcMain.handle('get-gui-version', async (): Promise<string> => app.getVersion());
+
 ipcMain.handle('get-projects-dir', async (): Promise<string> => getProjectsDir());
 
 ipcMain.handle('get-optional-services', async (): Promise<string[]> => {
