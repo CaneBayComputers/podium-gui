@@ -6,6 +6,10 @@
 
 A desktop front end for [Podium CLI](https://github.com/CaneBayComputers/podium-cli). The CLI does the work; the GUI makes it visible and clickable. Same projects, same shared services, same URLs — you can switch between the two freely.
 
+![Podium GUI in the Podium theme](docs/screenshot-podium-theme.png)
+
+<sub>Shown in the **Podium** theme, one of five. Project names are samples.</sub>
+
 ---
 
 ## What it does
@@ -19,6 +23,7 @@ A desktop front end for [Podium CLI](https://github.com/CaneBayComputers/podium-
 - **Embedded terminals, tabbed** — AI sessions run in real terminals inside the window. Several at once, each in its own tab; hiding the window leaves them running.
 - **AI agent setup** — choose between Claude, Codex, Gemini and Aider from the app. Podium installs the one you pick if it is not already on the machine.
 - **Live output** — creates and installs stream their CLI output as they run, and a failure keeps that output on screen instead of hiding it.
+- **Five themes** — Retro, Dark, Light, Matrix and Podium, under **Settings → Appearance**, applied immediately including to open terminals.
 
 Projects get PHP 8.3, Python 3 or Node 22 containers with nginx, supervisor and the database drivers already compiled in, and a real hostname instead of a port number.
 
@@ -112,6 +117,34 @@ Two traps, both of which produced convincing false results here:
 
 - **Screenshot animations.** Modals animate in (`fadeIn` + `scaleIn`, 0.3s). Capturing immediately yields a half-transparent overlay that looks like a serious CSS bug. `helpers.screenshot()` passes `animations: 'disabled'` to fast-forward them; use it rather than `win.screenshot()` directly.
 - **`offsetParent` on fixed elements.** The loading splash is `position: fixed`, and fixed elements always report `offsetParent === null` — so using that to detect "hidden" passes instantly and every subsequent assertion races the initial render. Check `display`/`visibility` instead.
+
+---
+
+## Themes
+
+Five, in **Settings → Appearance**. The choice is remembered and applied before
+first paint, so there is no flash of the previous theme on launch.
+
+| Theme | |
+|---|---|
+| **Retro** | The original synthwave look. The default. |
+| **Dark** | Neutral slate, no neon. |
+| **Light** | For bright rooms. |
+| **Matrix** | Green on black. |
+| **Podium** | Matches [podiumcli.com](https://podiumcli.com). |
+
+Each theme carries its own **16-colour ANSI palette** for the embedded
+terminals, not just a background and foreground. This is the part that is easy
+to get wrong: xterm paints ANSI colours from its own palette rather than from
+CSS, so a theme that only restyles the page leaves terminal output in the
+previous scheme. It matters most in Light, where the standard ANSI brights
+assume a dark terminal — bright yellow on white measures 2.9:1 and is what npm
+and composer print their warnings in.
+
+The e2e suite asserts this numerically rather than by eye: body text must clear
+4.5:1 against its background, muted text 3:1, and every ANSI colour 3:1 against
+its own terminal background. A theme that looks fine in a thumbnail and is
+miserable to actually read fails the suite.
 
 ---
 

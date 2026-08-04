@@ -560,9 +560,18 @@ async function run() {
 
     // --- AI agent settings ----------------------------------------------
     console.log('\nai agent settings');
-    await win.click(t('ai-settings-open'));
-    await win.waitForSelector('#ai-settings-modal.show', { timeout: 8000 });
-    check('AI settings panel opens', await win.isVisible('#ai-settings-modal'));
+    await win.click(t('settings-open'));
+    await win.waitForSelector('#settings-modal.show', { timeout: 8000 });
+    check('Settings panel opens', await win.isVisible('#settings-modal'));
+
+    // Settings opens on Appearance; the AI form lives behind the second tab.
+    check('Settings opens on the Appearance tab',
+      await win.isVisible('[data-settings-panel="appearance"]')
+      && !(await win.isVisible('[data-settings-panel="ai"]')));
+
+    await win.click(t('settings-tab-ai'));
+    await win.waitForTimeout(150);
+    check('AI tab reveals the agent form', await win.isVisible('#ai-agent'));
 
     const agentOptions = await win.locator('#ai-agent option').evaluateAll((o) => o.map((x) => x.value));
     check('offers every agent the CLI supports plus none',
@@ -657,7 +666,104 @@ async function run() {
       await win.textContent('#ai-model-error'));
 
     await screenshot(win, '08-ai-settings');
-    await win.click('#ai-settings-modal .modal-close');
+
+    // --- Themes ----------------------------------------------------------
+    // The risk here is not "does the attribute change" but "does the theme
+    // leave anything unreadable". Contrast is asserted numerically rather than
+    // eyeballed from the screenshots, because a low-contrast theme looks fine
+    // in a thumbnail and is miserable to actually use.
+    console.log('\nthemes');
+    await win.click(t('settings-tab-appearance'));
+    await win.waitForTimeout(150);
+
+    const swatches = await win.locator('[data-theme-option]').evaluateAll((els) =>
+      els.map((e) => e.dataset.themeOption));
+    check('offers all five themes',
+      ['retro', 'dark', 'light', 'matrix', 'podium'].every((x) => swatches.includes(x)),
+      swatches.join(','));
+
+    // Relative luminance per WCAG, so the ratio below is the real thing rather
+    // than a rough proxy.
+    const contrast = (hex1, hex2) => {
+      const lum = (hex) => {
+        const c = hex.replace('#', '');
+        const v = [0, 2, 4].map((i) => {
+          const s = parseInt(c.slice(i, i + 2), 16) / 255;
+          return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+        });
+        return 0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2];
+      };
+      const [a, b] = [lum(hex1), lum(hex2)].sort((x, y) => y - x);
+      return (a + 0.05) / (b + 0.05);
+    };
+
+    for (const theme of ['retro', 'dark', 'light', 'matrix', 'podium']) {
+      await win.click(t(`theme-${theme}`));
+      await win.waitForTimeout(200);
+
+      const applied = await win.evaluate(() =>
+        document.documentElement.getAttribute('data-theme'));
+      check(`${theme}: applies to the document`, applied === theme, applied);
+
+      const readable = await win.evaluate(() => {
+        const cs = getComputedStyle(document.documentElement);
+        return {
+          bg: cs.getPropertyValue('--bg-primary').trim(),
+          fg: cs.getPropertyValue('--text-primary').trim(),
+          muted: cs.getPropertyValue('--text-muted').trim(),
+          termBg: cs.getPropertyValue('--term-bg').trim(),
+          termFg: cs.getPropertyValue('--term-fg').trim()
+        };
+      });
+
+      // 4.5:1 is the WCAG AA threshold for body text.
+      const bodyRatio = contrast(readable.bg, readable.fg);
+      check(`${theme}: body text clears 4.5:1 (${bodyRatio.toFixed(1)}:1)`, bodyRatio >= 4.5);
+
+      // Muted text is secondary, so 3:1 (AA large / UI) is the bar.
+      const mutedRatio = contrast(readable.bg, readable.muted);
+      check(`${theme}: muted text clears 3:1 (${mutedRatio.toFixed(1)}:1)`, mutedRatio >= 3);
+
+      // The one the user explicitly called out: a theme that turns terminal
+      // output into mush is worse than not having the theme.
+      const termRatio = contrast(readable.termBg, readable.termFg);
+      check(`${theme}: terminal text clears 4.5:1 (${termRatio.toFixed(1)}:1)`, termRatio >= 4.5);
+
+      await screenshot(win, `08-theme-${theme}`);
+    }
+
+    // Every ANSI colour must be legible on its own theme's terminal background.
+    // Light is the one that breaks if the palette is copied from a dark theme:
+    // bright yellow and bright white on white are invisible. A build printing
+    // npm warnings is the first place a user would notice, so assert it here.
+    const palettes = await win.evaluate(() => window.__terminalThemes || null);
+    check('terminal palettes exposed for assertion', !!palettes);
+
+    if (palettes) {
+      const ansiNames = ['red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white',
+        'brightRed', 'brightGreen', 'brightYellow', 'brightBlue', 'brightMagenta',
+        'brightCyan', 'brightWhite'];
+      for (const [theme, pal] of Object.entries(palettes)) {
+        // 3:1 is the bar for coloured terminal output: it is decoration on top
+        // of text that is already legible in the default foreground, and
+        // holding ANSI green to 4.5:1 would force it grey-dark on every theme.
+        const weak = ansiNames
+          .map((n) => [n, contrast(pal.background, pal[n])])
+          .filter(([, r]) => r < 3)
+          .map(([n, r]) => `${n} ${r.toFixed(1)}:1`);
+        check(`${theme}: every ANSI colour clears 3:1 on its terminal background`,
+          weak.length === 0, weak.join(', '));
+      }
+    }
+
+    // Back to the default so the rest of the run and the screenshots are
+    // consistent with every previous baseline.
+    await win.click(t('theme-retro'));
+    await win.waitForTimeout(200);
+
+    await win.click(t('settings-tab-ai'));
+    await win.waitForTimeout(150);
+    await win.click('#settings-modal .modal-close');
     await win.waitForTimeout(300);
 
     // --- Loading overlay output -----------------------------------------

@@ -616,7 +616,21 @@ ipcMain.handle('get-cli-version', async (): Promise<string> => {
   }
 });
 
-ipcMain.handle('get-gui-version', async (): Promise<string> => app.getVersion());
+// `app.getVersion()` only returns the app's own version when the app is
+// packaged. Run unpackaged — which is every `npm run dev` and every e2e run —
+// Electron returns *its* version instead, so the lock-step check compared
+// "1.0.0-beta.1" against "28.3.3" and showed a mismatch banner permanently.
+// package.json is the single source of truth for the version, so read it.
+ipcMain.handle('get-gui-version', async (): Promise<string> => {
+  try {
+    const pkgPath = path.join(__dirname, '..', 'package.json');
+    const version = JSON.parse(fs.readFileSync(pkgPath, 'utf8')).version;
+    if (version) return version;
+  } catch {
+    // Packaged builds resolve it fine through Electron.
+  }
+  return app.getVersion();
+});
 
 ipcMain.handle('get-projects-dir', async (): Promise<string> => getProjectsDir());
 

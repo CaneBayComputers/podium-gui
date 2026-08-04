@@ -66,7 +66,14 @@ function getEmojiClass(emoji: string): string {
 // Initialize app
 document.addEventListener('DOMContentLoaded', (): void => {
     console.log('DEBUG: DOMContentLoaded event fired');
-    
+
+    // Sync the theme module state with the attribute the inline <head> script
+    // already set. That script runs before first paint so the splash is not
+    // drawn in the wrong theme; this just brings `currentTheme` in line and
+    // renders the picker.
+    loadTheme();
+    renderThemePicker();
+
     // Show initial loading screen
     showInitialLoading();
     
@@ -1234,6 +1241,150 @@ async function checkVersionLockStep(): Promise<void> {
 // this streams rather than spinning silently.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// THEMES
+//
+// The page itself themes through CSS custom properties, so all this has to do
+// is set an attribute. The terminals are the part that needs real work: xterm
+// paints ANSI colours from its own palette, not from CSS, so a theme that only
+// sets the page leaves terminal output in the previous scheme.
+//
+// Each theme therefore carries a full 16-colour palette rather than just a
+// background and foreground. It matters most in Light: the standard ANSI
+// brights assume a dark terminal — bright yellow (#ffff00) and bright white on
+// white are invisible — so Light uses darkened variants that stay legible on a
+// white background. Everything a build prints (npm warnings in yellow, docker
+// progress in cyan, test failures in bright red) goes through these.
+// ---------------------------------------------------------------------------
+type ThemeName = 'retro' | 'dark' | 'light' | 'matrix' | 'podium';
+
+const THEMES: { id: ThemeName; label: string; hint: string }[] = [
+    { id: 'retro',  label: 'Retro',  hint: 'The original synthwave look' },
+    { id: 'dark',   label: 'Dark',   hint: 'Neutral slate, no neon' },
+    { id: 'light',  label: 'Light',  hint: 'For bright rooms' },
+    { id: 'matrix', label: 'Matrix', hint: 'Green on black' },
+    { id: 'podium', label: 'Podium', hint: 'Matches podiumcli.com' }
+];
+
+type XtermTheme = Record<string, string>;
+
+const TERMINAL_THEMES: Record<ThemeName, XtermTheme> = {
+    retro: {
+        background: '#0f0f23', foreground: '#f8fafc',
+        cursor: '#00d4ff', selectionBackground: '#8b5cf655',
+        black: '#1e293b', red: '#ff5c8a', green: '#10b981', yellow: '#ffb454',
+        blue: '#0ea5e9', magenta: '#c084fc', cyan: '#00d4ff', white: '#cbd5e1',
+        brightBlack: '#64748b', brightRed: '#ff0080', brightGreen: '#34d399',
+        brightYellow: '#ffd166', brightBlue: '#38bdf8', brightMagenta: '#e879f9',
+        brightCyan: '#67e8f9', brightWhite: '#f8fafc'
+    },
+    dark: {
+        background: '#0d1117', foreground: '#e6edf3',
+        cursor: '#60a5fa', selectionBackground: '#818cf855',
+        black: '#161b22', red: '#ff7b72', green: '#3fb950', yellow: '#d29922',
+        blue: '#58a6ff', magenta: '#bc8cff', cyan: '#39c5cf', white: '#b1bac4',
+        brightBlack: '#8b949e', brightRed: '#ffa198', brightGreen: '#56d364',
+        brightYellow: '#e3b341', brightBlue: '#79c0ff', brightMagenta: '#d2a8ff',
+        brightCyan: '#56d4dd', brightWhite: '#f0f6fc'
+    },
+    // Solarized-Light-style ANSI: every colour is dark enough to read on white.
+    // Using the dark themes' palette here would render yellow and cyan output
+    // as near-invisible pastel, which is exactly the "theme looks fine until
+    // you run a build" failure worth avoiding.
+    light: {
+        background: '#ffffff', foreground: '#1f2328',
+        cursor: '#0369a1', selectionBackground: '#0369a133',
+        // Yellow is the problem colour on white — #ca8a04 measures 2.9:1 and
+        // npm/composer warnings are printed in it. Both yellows are shifted a
+        // step darker so bright stays visibly brighter than normal and both
+        // still clear 3:1.
+        black: '#1f2328', red: '#b91c1c', green: '#15803d', yellow: '#854d0e',
+        blue: '#1d4ed8', magenta: '#a21caf', cyan: '#0e7490', white: '#57606a',
+        brightBlack: '#636c76', brightRed: '#dc2626', brightGreen: '#16a34a',
+        brightYellow: '#a16207', brightBlue: '#2563eb', brightMagenta: '#c026d3',
+        brightCyan: '#0891b2', brightWhite: '#1f2328'
+    },
+    matrix: {
+        background: '#000600', foreground: '#39ff14',
+        cursor: '#39ff14', selectionBackground: '#39ff1444',
+        black: '#01210a', red: '#7fff00', green: '#39ff14', yellow: '#9dff5e',
+        blue: '#00ff9c', magenta: '#00e676', cyan: '#00ff9c', white: '#c8ffc8',
+        brightBlack: '#3f9f5a', brightRed: '#aaff56', brightGreen: '#6bff8f',
+        brightYellow: '#c8ffc8', brightBlue: '#5cffc0', brightMagenta: '#5cffa8',
+        brightCyan: '#8affd6', brightWhite: '#e8ffe8'
+    },
+    podium: {
+        background: '#04081d', foreground: '#e6edff',
+        cursor: '#38bdf8', selectionBackground: '#38bdf844',
+        black: '#0f1a45', red: '#f87171', green: '#34d399', yellow: '#fbbf24',
+        blue: '#38bdf8', magenta: '#a78bfa', cyan: '#67e8f9', white: '#b9c4e0',
+        brightBlack: '#9ba6c4', brightRed: '#fca5a5', brightGreen: '#6ee7b7',
+        brightYellow: '#fcd34d', brightBlue: '#7dd3fc', brightMagenta: '#c4b5fd',
+        brightCyan: '#a5f3fc', brightWhite: '#ffffff'
+    }
+};
+
+// Exposed so the e2e suite can assert contrast across the whole palette
+// rather than eyeballing screenshots. Reading the real table beats the test
+// keeping its own copy, which would pass while the app shipped bad colours.
+(window as any).__terminalThemes = TERMINAL_THEMES;
+
+const THEME_STORAGE_KEY = 'podium-gui-theme';
+let currentTheme: ThemeName = 'retro';
+
+function terminalThemeFor(name: ThemeName): XtermTheme {
+    return TERMINAL_THEMES[name] || TERMINAL_THEMES.retro;
+}
+
+function isThemeName(v: string | null): v is ThemeName {
+    return !!v && THEMES.some(t => t.id === v);
+}
+
+function applyTheme(name: ThemeName, persist = true): void {
+    currentTheme = name;
+    document.documentElement.setAttribute('data-theme', name);
+    if (persist) {
+        try { localStorage.setItem(THEME_STORAGE_KEY, name); } catch { /* private mode */ }
+    }
+
+    // Repaint live terminals. Without this a theme switch leaves every open
+    // session on the old palette until it is closed and reopened, which reads
+    // as "the theme didn't apply" when the terminal is the visible pane.
+    for (const session of terminalSessions.values()) {
+        try { session.term.options.theme = terminalThemeFor(name); } catch { /* disposed */ }
+    }
+
+    document.querySelectorAll<HTMLElement>('[data-theme-option]').forEach(el => {
+        el.classList.toggle('active', el.dataset.themeOption === name);
+    });
+}
+
+function loadTheme(): void {
+    let saved: string | null = null;
+    try { saved = localStorage.getItem(THEME_STORAGE_KEY); } catch { /* ignore */ }
+    applyTheme(isThemeName(saved) ? saved : 'retro', false);
+}
+
+function renderThemePicker(): void {
+    const host = document.getElementById('theme-picker');
+    if (!host) return;
+    host.innerHTML = THEMES.map(t => `
+        <button class="theme-swatch" data-theme-option="${t.id}"
+                data-testid="theme-${t.id}" onclick="selectTheme('${t.id}')"
+                title="${t.hint}">
+            <span class="theme-swatch-preview theme-preview-${t.id}">
+                <span class="tsp-bar"></span><span class="tsp-bar"></span><span class="tsp-bar"></span>
+            </span>
+            <span class="theme-swatch-label">${t.label}</span>
+        </button>
+    `).join('');
+    applyTheme(currentTheme, false);
+}
+
+function selectTheme(name: string): void {
+    if (isThemeName(name)) applyTheme(name);
+}
+
 // Which fields each agent actually uses, from `podium ai-set --help` and the
 // CLI's endpoint table. `--api-base` is no longer aider-only: Podium passes it
 // to whichever env var each agent CLI reads. gemini has no endpoint at all
@@ -1298,7 +1449,33 @@ function debugAiState(state: any): void {
 // Cached per session; the installed CLI does not change underneath us.
 let cliCaps: { qwen: boolean; clearableEndpoint: boolean } = { qwen: true, clearableEndpoint: true };
 
+// Settings is now the single entry point; the AI form is one tab inside it.
+// `showAiSettings()` is kept as an alias rather than removed — it is referenced
+// from the first-run prompt and from tests, and there is no reason to break
+// those to rename a button.
+async function showSettings(tab: 'appearance' | 'ai' = 'appearance'): Promise<void> {
+    renderThemePicker();
+    switchSettingsTab(tab);
+    showModal('settings-modal');
+    // Loaded after the modal is up so opening Appearance is instant and does
+    // not wait on the CLI capability probe.
+    await loadAiSettingsForm();
+}
+
 async function showAiSettings(): Promise<void> {
+    await showSettings('ai');
+}
+
+function switchSettingsTab(tab: string): void {
+    document.querySelectorAll<HTMLElement>('[data-settings-tab]').forEach(el => {
+        el.classList.toggle('active', el.dataset.settingsTab === tab);
+    });
+    document.querySelectorAll<HTMLElement>('[data-settings-panel]').forEach(el => {
+        el.style.display = el.dataset.settingsPanel === tab ? 'block' : 'none';
+    });
+}
+
+async function loadAiSettingsForm(): Promise<void> {
     clearFieldErrors();
 
     // Hide agents this CLI cannot actually run. The cheap-models support is on
@@ -1352,7 +1529,6 @@ async function showAiSettings(): Promise<void> {
     (document.getElementById('ai-preset') as HTMLSelectElement).value = '';
 
     await onAiAgentChange();
-    showModal('ai-settings-modal');
 }
 
 async function onAiAgentChange(): Promise<void> {
@@ -1971,9 +2147,9 @@ async function openAgentTerminal(options: AgentTerminalOptions): Promise<void> {
 
     const term = new Terminal({
         fontSize: 13,
-        fontFamily: 'monospace',
+        fontFamily: "'JetBrains Mono', ui-monospace, monospace",
         cursorBlink: true,
-        theme: { background: '#0f0f23', foreground: '#f8fafc' }
+        theme: terminalThemeFor(currentTheme)
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
@@ -2902,6 +3078,9 @@ async function submitEditProject(): Promise<void> {
     if (overlayStreaming && output) output.textContent += data;
 };
 (window as any).showAiSettings = showAiSettings;
+(window as any).showSettings = showSettings;
+(window as any).selectTheme = selectTheme;
+(window as any).switchSettingsTab = switchSettingsTab;
 (window as any).onAiAgentChange = onAiAgentChange;
 (window as any).applyAiPreset = applyAiPreset;
 (window as any).saveAiSettings = saveAiSettings;
