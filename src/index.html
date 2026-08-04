@@ -6,6 +6,19 @@
     <title>Podium - PHP Development Platform</title>
     <link rel="stylesheet" href="styles.css">
     <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css">
+    <script>
+        // Set the theme before first paint. Doing this in the renderer's
+        // DOMContentLoaded instead leaves the loading splash painted in the
+        // default theme and then snapping to the chosen one.
+        (function () {
+            try {
+                var t = localStorage.getItem('podium-gui-theme');
+                if (t && ['retro', 'dark', 'light', 'matrix', 'podium'].indexOf(t) !== -1) {
+                    document.documentElement.setAttribute('data-theme', t);
+                }
+            } catch (e) { /* storage unavailable; default theme is fine */ }
+        })();
+    </script>
 </head>
 <body>
     <div class="app">
@@ -76,7 +89,7 @@
             <!-- Secondary links, moved out of the header -->
             <footer class="app-footer">
                 <div class="footer-links">
-                    <button class="btn btn-secondary btn-small" onclick="showAiSettings()" data-testid="ai-settings-open" title="Choose and install the AI agent">🤖 AI Agent</button>
+                    <button class="btn btn-secondary btn-small" onclick="showSettings('appearance')" data-testid="settings-open" title="Theme and AI agent settings">⚙️ Settings</button>
                     <button class="btn btn-secondary btn-small" onclick="showHelpModal()" data-testid="help-modal-open" title="Help & CLI Commands">❓ Help</button>
                     <button class="btn btn-secondary btn-small" onclick="openUrl('https://github.com/CaneBayComputers/podium-cli')" data-testid="github-cli" title="Podium CLI on GitHub">🐙 Podium CLI on GitHub</button>
                     <button class="btn btn-secondary btn-small" onclick="openUrl('https://patreon.com/canebaycomputers')" data-testid="patreon" title="Support on Patreon">❤️ Patreon</button>
@@ -301,13 +314,31 @@
             (ensure_ai_agent_installed: npm -g for codex/gemini, curl installers
             for claude/aider), so saving here can take a while and streams.
         -->
-        <div id="ai-settings-modal" class="modal">
+        <div id="settings-modal" class="modal">
             <div class="modal-content">
                 <div class="modal-header">
-                    <h3>🤖 AI Agent</h3>
+                    <h3>⚙️ Settings</h3>
                     <button class="modal-close" onclick="closeModal()">&times;</button>
                 </div>
-                <div class="modal-body">
+
+                <div class="settings-tabs">
+                    <button class="settings-tab" data-settings-tab="appearance"
+                            data-testid="settings-tab-appearance"
+                            onclick="switchSettingsTab('appearance')">🎨 Appearance</button>
+                    <button class="settings-tab" data-settings-tab="ai"
+                            data-testid="settings-tab-ai"
+                            onclick="switchSettingsTab('ai')">🤖 AI Agent</button>
+                </div>
+
+                <div class="modal-body" data-settings-panel="appearance">
+                    <div class="form-group">
+                        <label>Theme</label>
+                        <span class="form-help">Applies immediately, including any open terminals.</span>
+                        <div id="theme-picker" class="theme-picker" data-testid="theme-picker"></div>
+                    </div>
+                </div>
+
+                <div class="modal-body" data-settings-panel="ai" style="display: none;">
                     <p class="stage-intro">
                         Used by Create with AI and Modify with AI. Podium installs the agent for you
                         if it is not already on this machine.
