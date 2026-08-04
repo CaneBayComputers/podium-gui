@@ -914,7 +914,53 @@ async function run() {
     // found by running installers on clean machines, and each is invisible
     // until it bites. A syntax slip or a dropped guard should fail here rather
     // than on someone's fresh install.
-    console.log('\ninstallers');
+    // --- Packaging: does the build actually include the UI? -----------------
+  // The suite runs against dist/main.js in a dev checkout, where src/ is simply
+  // present on disk — so every renderer assertion passes even when the built
+  // package contains no UI at all. That is exactly what shipped in
+  // 1.0.0-beta.1: main.ts loaded '../src/index.html', the files glob matched
+  // only root-level *.html, and every package on every platform opened a window
+  // with nothing in it. The window even had the right title, because that is
+  // set on BrowserWindow rather than coming from the page.
+  //
+  // Static check, no build required: every file main.ts loads must be covered
+  // by one of the build.files globs.
+  console.log('\npackaging');
+  {
+    const fs = require('fs');
+    const path = require('path');
+    const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+    const mainSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.ts'), 'utf8');
+    const globs = (pkg.build.files || []).filter((g) => !g.startsWith('!'));
+
+    // loadFile is written as path.join(__dirname, '..', 'src', 'x.html'), so
+    // rebuild the real relative path from the quoted segments rather than
+    // grabbing the basename — 'index.html' alone matches no glob and would
+    // fail this test for the wrong reason.
+    const loaded = [...mainSrc.matchAll(/loadFile\(([^)]*)\)/g)]
+      .map((m) => [...m[1].matchAll(/['"]([^'"]+)['"]/g)]
+        .map((q) => q[1])
+        .filter((seg) => seg !== '..' && seg !== '.')
+        .join('/'))
+      .filter((f) => f.endsWith('.html'));
+    check('main.ts loads at least one page', loaded.length > 0, loaded.join(','));
+
+    // A glob covers the file if its leading directory segment matches.
+    const covered = (file) => globs.some((g) => {
+      const root = g.split('/')[0].replace(/\*+/g, '');
+      return root && file.startsWith(root);
+    });
+
+    for (const page of loaded) {
+      check(`build packages ${page}`, covered(page), `globs: ${globs.join(' ')}`);
+    }
+
+    // The stylesheet is referenced from the HTML rather than from main.ts, so
+    // it needs its own assertion or it silently drops out of the package.
+    check('build packages src/styles.css', covered('src/styles.css'), globs.join(' '));
+  }
+
+  console.log('\ninstallers');
     const { execSync } = require('child_process');
     const fsMod = require('fs');
     const pathMod = require('path');

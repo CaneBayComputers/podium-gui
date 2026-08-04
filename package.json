@@ -53,6 +53,7 @@
     },
     "files": [
       "dist/**/*",
+      "src/**/*",
       "*.html",
       "*.css",
       "assets/**/*",
