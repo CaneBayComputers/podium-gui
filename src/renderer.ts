@@ -73,6 +73,7 @@ document.addEventListener('DOMContentLoaded', (): void => {
     // renders the picker.
     loadTheme();
     renderThemePicker();
+    loadFilterState();
 
     // Show initial loading screen
     showInitialLoading();
@@ -300,12 +301,14 @@ async function loadProjects(): Promise<void> {
             projects = [];
             sharedServices = {};
             renderProjects();
+            renderFilterBar();   // counts derive from the project list
             return;
         }
 
         parseProjectStatusJSON(result.stdout);
         await hydrateProjectMetadata();
         renderProjects();
+        renderFilterBar();   // counts derive from the project list
     } catch (error) {
         console.error('Failed to load projects:', error);
         // Only show error if it's a real failure, not just empty state
@@ -445,6 +448,133 @@ function parseProjectStatus(statusOutput: string): void {
     parseProjectStatusJSON(statusOutput);
 }
 
+
+// ---------------------------------------------------------------------------
+// PROJECT FILTERING AND SORTING
+//
+// State lives here rather than being read from the DOM at render time, so the
+// controls and the grid cannot disagree. Persisted, because a filter you have
+// to reapply on every launch is worse than no filter.
+// ---------------------------------------------------------------------------
+type RunFilter = 'all' | 'running' | 'stopped';
+type SortKey = 'name' | 'newest' | 'last-on';
+
+const FILTER_STORAGE_KEY = 'podium-gui-filters';
+
+let runFilter: RunFilter = 'all';
+let sortKey: SortKey = 'name';
+let emojiFilter: Set<string> = new Set();
+
+function loadFilterState(): void {
+    try {
+        const raw = localStorage.getItem(FILTER_STORAGE_KEY);
+        if (!raw) return;
+        const v = JSON.parse(raw);
+        if (['all', 'running', 'stopped'].includes(v.runFilter)) runFilter = v.runFilter;
+        if (['name', 'newest', 'last-on'].includes(v.sortKey)) sortKey = v.sortKey;
+        if (Array.isArray(v.emoji)) emojiFilter = new Set(v.emoji);
+    } catch { /* corrupt or unavailable; defaults are fine */ }
+}
+
+function saveFilterState(): void {
+    try {
+        localStorage.setItem(FILTER_STORAGE_KEY, JSON.stringify({
+            runFilter, sortKey, emoji: [...emojiFilter]
+        }));
+    } catch { /* private mode */ }
+}
+
+// The emoji shown on a tile, resolved the same way renderProjects does it —
+// otherwise the filter counts a different emoji than the user can see.
+function projectEmoji(p: Project): string {
+    const m = withMetadata(p);
+    return m.emoji || (m.type === 'laravel' ? '🎯' : m.type === 'wordpress' ? '📝' : '🐘');
+}
+
+function visibleProjects(): Project[] {
+    let list = projects.slice();
+
+    if (runFilter === 'running') list = list.filter(p => p.dockerRunning);
+    else if (runFilter === 'stopped') list = list.filter(p => !p.dockerRunning);
+
+    if (emojiFilter.size) list = list.filter(p => emojiFilter.has(projectEmoji(p)));
+
+    const nameOf = (p: Project) => (withMetadata(p).display_name || p.name).toLowerCase();
+    list.sort((a, b) => {
+        if (sortKey === 'name') return nameOf(a).localeCompare(nameOf(b));
+        // `newest` and `last-on` both fall back to name when the underlying
+        // value is missing, so the order stays stable and predictable rather
+        // than arbitrary. last_on is not written by the CLI yet.
+        const av = (a as any)[sortKey === 'newest' ? 'created_at' : 'last_on'] || '';
+        const bv = (b as any)[sortKey === 'newest' ? 'created_at' : 'last_on'] || '';
+        if (av && bv) return bv.localeCompare(av);
+        if (av) return -1;
+        if (bv) return 1;
+        return nameOf(a).localeCompare(nameOf(b));
+    });
+    return list;
+}
+
+function renderFilterBar(): void {
+    const host = document.getElementById('project-filters');
+    if (!host) return;
+
+    const counts = new Map<string, number>();
+    for (const p of projects) {
+        const e = projectEmoji(p);
+        counts.set(e, (counts.get(e) || 0) + 1);
+    }
+    const emojiButtons = [...counts.entries()]
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+        .map(([e, n]) => `<button class="emoji-chip${emojiFilter.has(e) ? ' active' : ''}"
+              data-testid="emoji-filter-${e}" onclick="toggleEmojiFilter('${e}')"
+              title="${n} project${n === 1 ? '' : 's'}">${e}<span class="emoji-count">${n}</span></button>`)
+        .join('');
+
+    const running = projects.filter(p => p.dockerRunning).length;
+    host.innerHTML = `
+        <div class="filter-group">
+            <select data-testid="filter-run" onchange="setRunFilter(this.value)">
+                <option value="all"${runFilter === 'all' ? ' selected' : ''}>All (${projects.length})</option>
+                <option value="running"${runFilter === 'running' ? ' selected' : ''}>Running (${running})</option>
+                <option value="stopped"${runFilter === 'stopped' ? ' selected' : ''}>Stopped (${projects.length - running})</option>
+            </select>
+            <select data-testid="filter-sort" onchange="setSortKey(this.value)">
+                <option value="name"${sortKey === 'name' ? ' selected' : ''}>Sort: Name</option>
+                <option value="newest"${sortKey === 'newest' ? ' selected' : ''}>Sort: Newest</option>
+                <option value="last-on"${sortKey === 'last-on' ? ' selected' : ''}>Sort: Last on</option>
+            </select>
+        </div>
+        <div class="emoji-filters" data-testid="emoji-filters">${emojiButtons}</div>
+        ${emojiFilter.size ? `<button class="btn btn-secondary btn-small" data-testid="clear-emoji-filter" onclick="clearEmojiFilter()">Clear emoji</button>` : ''}
+    `;
+}
+
+function resetFilters(): void {
+    runFilter = 'all'; sortKey = 'name'; emojiFilter.clear();
+    saveFilterState(); renderProjects(); renderFilterBar();
+}
+
+function setRunFilter(v: string): void {
+    runFilter = (['all', 'running', 'stopped'].includes(v) ? v : 'all') as RunFilter;
+    saveFilterState(); renderProjects(); renderFilterBar();
+}
+
+function setSortKey(v: string): void {
+    sortKey = (['name', 'newest', 'last-on'].includes(v) ? v : 'name') as SortKey;
+    saveFilterState(); renderProjects(); renderFilterBar();
+}
+
+function toggleEmojiFilter(e: string): void {
+    emojiFilter.has(e) ? emojiFilter.delete(e) : emojiFilter.add(e);
+    saveFilterState(); renderProjects(); renderFilterBar();
+}
+
+function clearEmojiFilter(): void {
+    emojiFilter.clear();
+    saveFilterState(); renderProjects(); renderFilterBar();
+}
+
 function renderProjects(): void {
     const grid: HTMLElement | null = document.getElementById('projects-grid');
     if (!grid) return;
@@ -461,7 +591,22 @@ function renderProjects(): void {
         return;
     }
 
-    grid.innerHTML = projects.map((parsed: Project) => {
+    const shown = visibleProjects();
+    if (shown.length === 0) {
+        // Distinguish "no projects" from "your filter hid them all" — otherwise
+        // a filter looks like data loss.
+        grid.innerHTML = `
+            <div class="project-card placeholder" data-testid="no-matches">
+                <div class="project-icon">🔍</div>
+                <h3>No projects match</h3>
+                <p>${projects.length} project${projects.length === 1 ? '' : 's'} hidden by the current filter.</p>
+                <button class="btn btn-primary" onclick="resetFilters()">Show all</button>
+            </div>
+        `;
+        return;
+    }
+
+    grid.innerHTML = shown.map((parsed: Project) => {
         // Apply cached display metadata here rather than trusting the parsed
         // object — see projectMetadata for why.
         const project = withMetadata(parsed);
@@ -3055,6 +3200,7 @@ async function submitEditProject(): Promise<void> {
 
             showSuccess(`Project "${displayName}" updated successfully!`);
             renderProjects();
+            renderFilterBar();   // counts derive from the project list
 
             // Refresh project list
             setTimeout(() => {
@@ -3081,6 +3227,11 @@ async function submitEditProject(): Promise<void> {
 (window as any).showAiSettings = showAiSettings;
 (window as any).showSettings = showSettings;
 (window as any).showDonateModal = showDonateModal;
+(window as any).setRunFilter = setRunFilter;
+(window as any).setSortKey = setSortKey;
+(window as any).toggleEmojiFilter = toggleEmojiFilter;
+(window as any).clearEmojiFilter = clearEmojiFilter;
+(window as any).resetFilters = resetFilters;
 (window as any).selectTheme = selectTheme;
 (window as any).switchSettingsTab = switchSettingsTab;
 (window as any).onAiAgentChange = onAiAgentChange;
