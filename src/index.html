@@ -382,21 +382,6 @@
                         if it is not already on this machine.
                     </p>
 
-                    <!-- Presets first: a known-good configuration beats a blank
-                         URL field, and running against a cheap or local model is
-                         the whole point of this panel. -->
-                    <div class="form-group">
-                        <label for="ai-preset">Preset</label>
-                        <select id="ai-preset" data-testid="ai-preset" onchange="applyAiPreset()">
-                            <option value="">Custom — set the fields yourself</option>
-                            <option value="hosted">Default (hosted) — Claude, no endpoint</option>
-                            <option value="ollama">Ollama (local, free)</option>
-                            <option value="openrouter">OpenRouter (~30x cheaper than Sonnet)</option>
-                            <option value="lmstudio">LM Studio (local)</option>
-                        </select>
-                        <span class="form-help" id="ai-preset-help">Fills the fields below; you can still edit them.</span>
-                    </div>
-
                     <div class="form-group">
                         <label for="ai-agent">Agent</label>
                         <select id="ai-agent" data-testid="ai-agent" onchange="onAiAgentChange()">
@@ -429,9 +414,25 @@
                         <div class="field-error" id="ai-api-key-error"></div>
                     </div>
 
+                    <!--
+                        Agents that talk to their vendor by default (Claude Code)
+                        keep the endpoint behind this, so the normal case is not
+                        a blank URL field inviting a wrong value. Shown expanded
+                        whenever an endpoint is already stored.
+                    -->
+                    <div class="form-group" id="ai-api-base-advanced" style="display: none;">
+                        <button type="button" class="link-button" onclick="revealApiBase()"
+                                data-testid="ai-api-base-reveal">Use a custom API endpoint…</button>
+                        <span class="form-help" id="ai-api-base-advanced-help"></span>
+                    </div>
+
                     <div class="form-group" id="ai-api-base-group" style="display: none;">
                         <label for="ai-api-base">API Endpoint</label>
                         <input type="text" id="ai-api-base" data-testid="ai-api-base" placeholder="https://api.example.com/v1">
+                        <!-- Known-good URLs for the selected agent. These fill the
+                             field they sit under and nothing else — the old Preset
+                             dropdown also reassigned your agent. -->
+                        <div class="endpoint-presets" id="ai-endpoint-presets" data-testid="ai-endpoint-presets"></div>
                         <span class="form-help" id="ai-api-base-help"></span>
                     </div>
 

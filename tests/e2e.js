@@ -686,55 +686,82 @@ async function run() {
     check('qwen offered exactly when the installed CLI supports it',
       qwenUsable === caps.qwen, `cli.qwen=${caps.qwen} offered=${qwenUsable}`);
 
-    const localPresetsUsable = await win.evaluate(() => {
-      const o = document.querySelector('#ai-preset option[value="ollama"]');
-      return !!o && !o.hidden && !o.disabled;
-    });
-    check('local presets follow the same capability',
-      localPresetsUsable === caps.qwen, `cli.qwen=${caps.qwen} presets=${localPresetsUsable}`);
+    // The Preset dropdown is gone — it reassigned the agent behind the user's
+    // back and its "Custom" entry did nothing at all.
+    check('the preset dropdown is gone', await win.locator('#ai-preset').count() === 0);
 
     // --api-base is no longer aider-only: the CLI passes it to whichever env var
-    // each agent reads. gemini is the only one with no endpoint at all.
-    for (const [agent, shouldShow] of [['codex', true], ['qwen', true], ['claude', true], ['gemini', false]]) {
+    // each agent reads. gemini is the only one with no endpoint at all. claude
+    // has one but keeps it folded behind a reveal.
+    for (const [agent, shouldShow] of [['codex', true], ['qwen', true], ['gemini', false]]) {
       await win.selectOption('#ai-agent', agent);
       await win.waitForTimeout(250);
       check(`${agent} endpoint field ${shouldShow ? 'shown' : 'hidden'}`,
         (await win.isVisible('#ai-api-base-group')) === shouldShow);
     }
 
+    // Claude Code signs in to Anthropic on its own, so an empty URL field is
+    // noise at best and an invitation to a wrong value at worst.
+    await win.evaluate(() => { document.getElementById('ai-api-base').value = ''; });
+    await win.selectOption('#ai-agent', 'claude');
+    await win.waitForTimeout(250);
+    check('claude hides the endpoint behind a reveal',
+      !(await win.isVisible('#ai-api-base-group')) && await win.isVisible(t('ai-api-base-reveal')));
+
+    await win.click(t('ai-api-base-reveal'));
+    await win.waitForTimeout(250);
+    check('the reveal opens the endpoint field', await win.isVisible('#ai-api-base-group'));
+
     // claude needs an Anthropic-compatible proxy — pointing it at a raw Ollama
     // URL is the obvious mistake, so the note has to say so.
-    await win.selectOption('#ai-agent', 'claude');
-    await win.waitForTimeout(200);
     check('claude endpoint note warns it must be Anthropic-compatible',
       /anthropic/i.test((await win.textContent('#ai-api-base-help')) || ''),
       await win.textContent('#ai-api-base-help'));
 
-    // Presets are the part users actually use.
-    const presets = await win.locator('#ai-preset option').evaluateAll((o) => o.map((x) => x.value));
-    check('offers the local/cheap presets',
-      ['hosted', 'ollama', 'openrouter', 'lmstudio'].every((p) => presets.includes(p)),
-      presets.join(','));
+    // An endpoint already in force must never be hidden — that would make the
+    // panel show a configuration the CLI is not using.
+    await win.evaluate(() => {
+      document.getElementById('ai-api-base').value = 'https://proxy.example/v1';
+      window.onAiAgentChange();
+    });
+    await win.waitForTimeout(250);
+    check('a stored endpoint stays visible rather than folding away',
+      await win.isVisible('#ai-api-base-group'));
 
-    await win.selectOption('#ai-preset', 'ollama');
+    // Endpoint chips replace the presets: they fill the field they sit under
+    // and are scoped to what the selected agent can actually talk to.
+    await win.evaluate(() => { document.getElementById('ai-api-base').value = ''; });
+    await win.selectOption('#ai-agent', 'claude');
+    await win.waitForTimeout(250);
+    check('claude is offered no OpenAI-shaped endpoint chips',
+      await win.locator('#ai-endpoint-presets .endpoint-chip').count() === 0);
+
+    await win.selectOption('#ai-agent', 'codex');
+    await win.waitForTimeout(250);
+    const chips = await win.locator('#ai-endpoint-presets .endpoint-chip').count();
+    check('OpenAI-compatible agents get endpoint chips', chips >= 3, `${chips} chips`);
+
+    const agentBefore = await win.inputValue('#ai-agent');
+    await win.click(t('endpoint-ollama'));
     await win.waitForTimeout(600);
     const ollama = await win.evaluate(() => ({
       agent: document.getElementById('ai-agent').value,
       base: document.getElementById('ai-api-base').value,
       warning: document.getElementById('ai-local-warning').style.display
     }));
-    check('Ollama preset fills agent and endpoint',
-      ollama.agent === 'qwen' && /11434/.test(ollama.base), JSON.stringify(ollama));
+    check('an endpoint chip fills the URL', /11434/.test(ollama.base), ollama.base);
+    check('an endpoint chip leaves the agent alone',
+      ollama.agent === agentBefore, `${agentBefore} -> ${ollama.agent}`);
     check('a local endpoint surfaces the VRAM warning', ollama.warning === 'block',
       'small models return confident wrong answers — this must be visible');
 
-    await win.selectOption('#ai-preset', 'openrouter');
+    await win.click(t('endpoint-openrouter'));
     await win.waitForTimeout(400);
     const remote = await win.evaluate(() => ({
-      model: document.getElementById('ai-model').value,
+      base: document.getElementById('ai-api-base').value,
       warning: document.getElementById('ai-local-warning').style.display
     }));
-    check('OpenRouter preset fills a model', remote.model.length > 0, remote.model);
+    check('a remote endpoint chip fills the URL', /openrouter/.test(remote.base), remote.base);
     check('a remote endpoint hides the VRAM warning', remote.warning === 'none');
 
     // Switching agents must clear the previous agent's validation message —

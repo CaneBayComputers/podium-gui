@@ -1580,50 +1580,65 @@ const AI_AGENT_RULES: Record<string, {
     modelRequired: boolean;
     keyRequired: boolean;
     apiBase: boolean;
+    // True when talking to the vendor is the normal case, so the endpoint is
+    // an advanced option rather than a field waiting to be filled in.
+    apiBaseAdvanced?: boolean;
     apiBaseNote: string;
+    // Which known-good endpoints make sense for this agent's wire format.
+    endpoints?: string[];
     minNode?: number;
 }> = {
-    claude: { modelRequired: false, keyRequired: false, apiBase: true,
+    claude: { modelRequired: false, keyRequired: false, apiBase: true, apiBaseAdvanced: true,
               apiBaseNote: 'Must be Anthropic-compatible — a LiteLLM proxy for local models, not a raw Ollama URL.' },
     codex:  { modelRequired: false, keyRequired: false, apiBase: true,
-              apiBaseNote: 'OpenAI-compatible endpoint.' },
+              apiBaseNote: 'OpenAI-compatible endpoint.', endpoints: ['ollama', 'lmstudio', 'openrouter'] },
     gemini: { modelRequired: false, keyRequired: false, apiBase: false,
               apiBaseNote: '' },
     qwen:   { modelRequired: true,  keyRequired: false, apiBase: true,
-              apiBaseNote: 'OpenAI-compatible endpoint.', minNode: 22 },
+              apiBaseNote: 'OpenAI-compatible endpoint.',
+              endpoints: ['ollama', 'lmstudio', 'openrouter'], minNode: 22 },
     aider:  { modelRequired: true,  keyRequired: true,  apiBase: true,
-              apiBaseNote: 'OpenAI-compatible endpoint.' }
+              apiBaseNote: 'OpenAI-compatible endpoint.', endpoints: ['ollama', 'lmstudio', 'openrouter'] }
 };
 
-// Known-good configurations. A dropdown of these beats a blank URL field —
-// running against a cheap or local model is most of the point of this panel.
-const AI_PRESETS: Record<string, {
-    agent: string; apiBase: string; apiKey: string; model: string; clearKey: boolean;
-}> = {
-    hosted:     { agent: 'claude', apiBase: '', apiKey: '', model: '', clearKey: true },
-    ollama:     { agent: 'qwen',   apiBase: 'http://localhost:11434/v1', apiKey: 'ollama', model: '', clearKey: false },
-    openrouter: { agent: 'qwen',   apiBase: 'https://openrouter.ai/api/v1', apiKey: '', model: 'qwen/qwen3-coder-next', clearKey: false },
-    lmstudio:   { agent: 'codex',  apiBase: 'http://localhost:1234/v1', apiKey: 'local', model: '', clearKey: false }
+// Endpoints worth not having to remember. These fill the URL field and, where
+// the service wants a placeholder token rather than a real key, the key field.
+// They deliberately do NOT touch the agent: the previous Preset dropdown did,
+// which meant picking a model host silently reassigned the agent above it.
+const AI_ENDPOINTS: Record<string, { label: string; url: string; key?: string }> = {
+    ollama:     { label: 'Ollama',     url: 'http://localhost:11434/v1', key: 'ollama' },
+    lmstudio:   { label: 'LM Studio',  url: 'http://localhost:1234/v1',  key: 'local' },
+    openrouter: { label: 'OpenRouter', url: 'https://openrouter.ai/api/v1' }
 };
 
 function isLocalEndpoint(url: string): boolean {
     return /localhost|127\.0\.0\.1|0\.0\.0\.0/.test(url || '');
 }
 
-async function applyAiPreset(): Promise<void> {
-    const key = (document.getElementById('ai-preset') as HTMLSelectElement)?.value || '';
-    const preset = AI_PRESETS[key];
+function renderEndpointPresets(agent: string): void {
+    const host = document.getElementById('ai-endpoint-presets');
+    if (!host) return;
+
+    const keys = (AI_AGENT_RULES[agent]?.endpoints || []).filter((k) => AI_ENDPOINTS[k]);
+    host.innerHTML = keys.map((k) => {
+        const e = AI_ENDPOINTS[k]!;
+        return `<button type="button" class="endpoint-chip" data-testid="endpoint-${k}"
+                        onclick="applyEndpoint('${k}')" title="${escapeHtml(e.url)}">${escapeHtml(e.label)}</button>`;
+    }).join('');
+    host.style.display = keys.length ? 'flex' : 'none';
+}
+
+async function applyEndpoint(key: string): Promise<void> {
+    const preset = AI_ENDPOINTS[key];
     if (!preset) return;
 
-    (document.getElementById('ai-agent') as HTMLSelectElement).value = preset.agent;
-    (document.getElementById('ai-api-base') as HTMLInputElement).value = preset.apiBase;
-    (document.getElementById('ai-api-key') as HTMLInputElement).value = preset.apiKey;
-    (document.getElementById('ai-model') as HTMLInputElement).value = preset.model;
+    (document.getElementById('ai-api-base') as HTMLInputElement).value = preset.url;
 
-    // "Default (hosted)" has to actively CLEAR the stored key and endpoint —
-    // omitting the flags would leave the previous local settings in place.
-    const clear = document.getElementById('ai-clear-key') as HTMLInputElement;
-    if (clear) clear.checked = preset.clearKey;
+    // Only fill a key the service treats as a placeholder, and only over a
+    // blank field — overwriting a real key the user typed would be worse than
+    // leaving them to paste it again.
+    const keyInput = document.getElementById('ai-api-key') as HTMLInputElement;
+    if (preset.key && keyInput && !keyInput.value) keyInput.value = preset.key;
 
     await onAiAgentChange();
 }
@@ -1680,20 +1695,6 @@ async function loadAiSettingsForm(): Promise<void> {
         qwenOption.hidden = !cliCaps.qwen;
         qwenOption.disabled = !cliCaps.qwen;
     }
-    // The presets that depend on qwen go with it.
-    for (const preset of ['ollama', 'openrouter']) {
-        const option = document.querySelector(`#ai-preset option[value="${preset}"]`) as HTMLOptionElement;
-        if (option) {
-            option.hidden = !cliCaps.qwen;
-            option.disabled = !cliCaps.qwen;
-        }
-    }
-    const presetHelp = document.getElementById('ai-preset-help');
-    if (presetHelp) {
-        presetHelp.textContent = cliCaps.qwen
-            ? 'Fills the fields below; you can still edit them.'
-            : 'Local-model presets need a newer Podium CLI — run `podium update`.';
-    }
     const output = document.getElementById('ai-settings-output');
     const wrap = document.getElementById('ai-settings-output-wrap');
     if (output) output.textContent = '';
@@ -1719,9 +1720,21 @@ async function loadAiSettingsForm(): Promise<void> {
     if (clearGroup) clearGroup.style.display = current.has_api_key ? 'block' : 'none';
     if (clearBox) clearBox.checked = false;
 
-    (document.getElementById('ai-preset') as HTMLSelectElement).value = '';
+    // Reopening Settings starts from the stored configuration, so an endpoint
+    // revealed by hand last time must fold away again if nothing was saved.
+    apiBaseRevealed = false;
 
     await onAiAgentChange();
+}
+
+// Set when the user asks to see an endpoint field that is folded away by
+// default; reset each time the form reloads from the stored configuration.
+let apiBaseRevealed = false;
+
+async function revealApiBase(): Promise<void> {
+    apiBaseRevealed = true;
+    await onAiAgentChange();
+    (document.getElementById('ai-api-base') as HTMLInputElement)?.focus();
 }
 
 async function onAiAgentChange(): Promise<void> {
@@ -1740,11 +1753,29 @@ async function onAiAgentChange(): Promise<void> {
             : 'Create with AI and Modify with AI stay disabled without an agent.';
     }
 
+    // Claude Code talks to Anthropic unless told otherwise, so its endpoint sits
+    // behind a disclosure. An endpoint that is already set always shows — hiding
+    // a value that is in force would make the panel lie about the configuration.
+    const storedBase = (document.getElementById('ai-api-base') as HTMLInputElement)?.value || '';
+    const foldAway = !!rules?.apiBaseAdvanced && !storedBase && !apiBaseRevealed;
+
     const baseGroup = document.getElementById('ai-api-base-group');
-    if (baseGroup) baseGroup.style.display = rules?.apiBase ? 'block' : 'none';
+    if (baseGroup) baseGroup.style.display = rules?.apiBase && !foldAway ? 'block' : 'none';
+
+    const baseAdvanced = document.getElementById('ai-api-base-advanced');
+    if (baseAdvanced) baseAdvanced.style.display = rules?.apiBase && foldAway ? 'block' : 'none';
+
+    const advancedHelp = document.getElementById('ai-api-base-advanced-help');
+    if (advancedHelp) {
+        advancedHelp.textContent = agent === 'claude'
+            ? 'Claude Code signs in to Anthropic on its own. Only needed if you are proxying it.'
+            : 'Only needed if you are pointing this agent somewhere other than its default.';
+    }
 
     const baseHelp = document.getElementById('ai-api-base-help');
     if (baseHelp) baseHelp.textContent = rules?.apiBaseNote || '';
+
+    renderEndpointPresets(agent);
 
     const modelReq = document.getElementById('ai-model-req');
     if (modelReq) modelReq.textContent = rules?.modelRequired ? '(required)' : '(optional)';
@@ -3285,7 +3316,8 @@ async function submitEditProject(): Promise<void> {
 (window as any).selectTheme = selectTheme;
 (window as any).switchSettingsTab = switchSettingsTab;
 (window as any).onAiAgentChange = onAiAgentChange;
-(window as any).applyAiPreset = applyAiPreset;
+(window as any).applyEndpoint = applyEndpoint;
+(window as any).revealApiBase = revealApiBase;
 (window as any).saveAiSettings = saveAiSettings;
 (window as any).showCreateWithAI = showCreateWithAI;
 (window as any).handleClassifyIdea = handleClassifyIdea;
