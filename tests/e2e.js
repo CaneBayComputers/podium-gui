@@ -1299,6 +1299,25 @@ async function run() {
       check(`${file} keeps every hard-won guard`, missing.length === 0, missing.join('; '));
     }
 
+    // The source launcher travels with the repo, so the other machines get it
+    // by pulling rather than by having a copy installed alongside them.
+    const launcher = pathMod.join(ROOT, 'scripts/podium-gui-dev.sh');
+    check('source launcher exists and is executable',
+      fsMod.existsSync(launcher) && (fsMod.statSync(launcher).mode & 0o111) !== 0);
+    let launcherOk = true;
+    try { execSync(`bash -n ${JSON.stringify(launcher)}`, { stdio: 'pipe' }); }
+    catch (error) { launcherOk = false; }
+    check('source launcher parses', launcherOk);
+
+    const launcherBody = fsMod.readFileSync(launcher, 'utf8');
+    // It is symlinked from ~/scripts and from /usr/local/bin, so a hardcoded
+    // path would resolve to the wrong checkout on three of the four machines.
+    check('source launcher finds its own checkout rather than a fixed path',
+      /readlink -f "\$\{BASH_SOURCE\[0\]\}"/.test(launcherBody));
+    // A .desktop launch never sources .bashrc, so npm is missing from the menu
+    // even though it works fine from a terminal.
+    check('source launcher recovers npm from nvm', /NVM_DIR/.test(launcherBody));
+
     // Arch-only landmines, both from the CLI's installer.
     const archBody = fsMod.readFileSync(pathMod.join(ROOT, 'install-arch.sh'), 'utf8');
     check('arch initialises the pacman keyring', /pacman-key --init/.test(archBody));
