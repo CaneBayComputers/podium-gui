@@ -1447,6 +1447,10 @@ let cliCaps: { qwen: boolean; clearableEndpoint: boolean } = { qwen: true, clear
 // `showAiSettings()` is kept as an alias rather than removed — it is referenced
 // from the first-run prompt and from tests, and there is no reason to break
 // those to rename a button.
+function showDonateModal(): void {
+    showModal('donate-modal');
+}
+
 async function showSettings(tab: 'appearance' | 'ai' = 'appearance'): Promise<void> {
     renderThemePicker();
     switchSettingsTab(tab);
@@ -3073,6 +3077,7 @@ async function submitEditProject(): Promise<void> {
 };
 (window as any).showAiSettings = showAiSettings;
 (window as any).showSettings = showSettings;
+(window as any).showDonateModal = showDonateModal;
 (window as any).selectTheme = selectTheme;
 (window as any).switchSettingsTab = switchSettingsTab;
 (window as any).onAiAgentChange = onAiAgentChange;
