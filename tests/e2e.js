@@ -572,6 +572,29 @@ async function run() {
 
     // --- Main-process IPC, exercised directly ---------------------------
     console.log('\nipc');
+
+    // Every packaged install failed with "spawn podium ENOENT" from the panel
+    // launcher while working from a terminal, because a .desktop launch has no
+    // /usr/local/bin on PATH. Testing it from this shell proves nothing — the
+    // PATH has to actually be taken away.
+    const podiumCmd = await app.evaluate(async ({ ipcMain }) => {
+      const handler = ipcMain._invokeHandlers.get('get-podium-command');
+      if (!handler) return { error: 'get-podium-command not registered' };
+      const before = process.env.PATH;
+      process.env.PATH = '/nonexistent';
+      const stripped = await handler({});
+      process.env.PATH = before;
+      const normal = await handler({});
+      return { stripped, normal };
+    });
+    check('podium resolves from PATH when it is there',
+      !podiumCmd.error && podiumCmd.normal?.command?.endsWith('podium'),
+      podiumCmd.error || JSON.stringify(podiumCmd.normal));
+    check('podium still resolves with PATH stripped, as a menu launch has it',
+      !podiumCmd.error &&
+      (podiumCmd.stripped?.command?.startsWith('/') || podiumCmd.stripped?.command === 'bash'),
+      JSON.stringify(podiumCmd.stripped));
+
     const catalog = await app.evaluate(async ({ ipcMain }) => {
       const handler = ipcMain._invokeHandlers.get('get-app-catalog');
       if (!handler) return { error: 'get-app-catalog not registered' };

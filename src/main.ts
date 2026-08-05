@@ -259,6 +259,64 @@ const PODIUM_ENV_PATH = '/etc/podium-cli/.env';
 // is not on PATH.
 const PODIUM_CLI_DIR = '/usr/local/share/podium-cli';
 
+// Where `podium` actually is, as an argv pair.
+//
+// Bare spawn('podium') only works when the launching environment has the CLI on
+// PATH. A shell has it; a .desktop launcher started by the panel does not, and
+// a packaged install therefore failed with "spawn podium ENOENT" for every
+// command while working perfectly from a terminal. Resolving it here means each
+// call site gets the same answer instead of one of them having a fallback.
+//
+// Deliberately not cached. It is a handful of stat calls at human frequency,
+// and a cache would make the resolution untestable — the first call would fix
+// the answer before any test could vary the environment.
+function resolvePodium(): { command: string; prefix: string[] } {
+  // PATH first — a dev checkout or a user-installed copy should win over the
+  // packaged one, the same way it would in a shell.
+  const pathDirs = (process.env.PATH || '').split(path.delimiter).filter(Boolean);
+  const candidates = [
+    ...pathDirs.map((dir) => path.join(dir, 'podium')),
+    '/usr/local/bin/podium',
+    '/usr/bin/podium',
+    '/opt/homebrew/bin/podium'
+  ];
+
+  for (const candidate of candidates) {
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return { command: candidate, prefix: [] };
+    } catch {
+      // Not there, or not executable — keep looking.
+    }
+  }
+
+  // Last resort: the CLI's own entry script, run through bash so it does not
+  // need its executable bit.
+  const shipped = path.join(PODIUM_CLI_DIR, 'src', 'podium');
+  if (fs.existsSync(shipped)) {
+    return { command: 'bash', prefix: [shipped] };
+  }
+
+  // Nothing found. Return the bare name so the failure is the familiar ENOENT
+  // rather than something invented here.
+  return { command: 'podium', prefix: [] };
+}
+
+// Exposed so the resolution can be exercised against a stripped PATH — the
+// exact condition that broke every packaged menu launch.
+ipcMain.handle('get-podium-command', async (): Promise<{ command: string; prefix: string[] }> =>
+  resolvePodium());
+
+// The renderer asks for commands by name. Rewrite the one command that is ours
+// and leave everything else (docker, git) alone — those genuinely are expected
+// to be on PATH, and silently rewriting them would hide a real misconfiguration.
+function resolveIfPodium(command: string, args: string[]): { command: string; args: string[] } {
+  if (command !== 'podium') return { command, args };
+
+  const podium = resolvePodium();
+  return { command: podium.command, args: [...podium.prefix, ...args] };
+}
+
 // Read a single KEY=value out of Podium's config. Returns null when the file is
 // absent, the key is missing, or the value is empty.
 function readEnvValue(key: string): string | null {
@@ -442,19 +500,9 @@ ipcMain.handle('execute-podium', async (event: IpcMainInvokeEvent, subcommand: s
       return child;
     };
 
-    // Try the global podium command first, then fall back to the installed copy.
-    const primary: ChildProcess = run('podium', allArgs);
-
-    primary.on('error', () => {
-      const podiumPath: string = path.join(PODIUM_CLI_DIR, 'src', 'podium');
-      if (!fs.existsSync(podiumPath)) {
-        reject(new Error('Podium CLI not found'));
-        return;
-      }
-
-      const fallback: ChildProcess = run('bash', [podiumPath, ...allArgs]);
-      fallback.on('error', (error: Error) => reject(error));
-    });
+    const podium = resolvePodium();
+    const child: ChildProcess = run(podium.command, [...podium.prefix, ...allArgs]);
+    child.on('error', (error: Error) => reject(error));
   });
 });
 
@@ -673,7 +721,8 @@ ipcMain.handle('pty-start', async (
       ptySessions.delete(sessionId);
     }
 
-    const shell = pty.spawn(command, args, {
+    const resolved = resolveIfPodium(command, args);
+    const shell = pty.spawn(resolved.command, resolved.args, {
       name: 'xterm-color',
       cols: 100,
       rows: 28,
@@ -881,8 +930,9 @@ interface ExecuteCommandOptions {
 ipcMain.handle('execute-command', async (event: IpcMainInvokeEvent, command: string, args: string[] = [], options: ExecuteCommandOptions = {}): Promise<CommandResult> => {
   return new Promise((resolve, reject) => {
     debugLog('Executing command', { command, args, options });
-    
-    const process: ChildProcess = spawn(command, args, {
+
+    const resolved = resolveIfPodium(command, args);
+    const process: ChildProcess = spawn(resolved.command, resolved.args, {
       stdio: ['pipe', 'pipe', 'pipe'],
       ...options
     });
@@ -926,7 +976,8 @@ ipcMain.handle('execute-command-stream', async (event: IpcMainInvokeEvent, comma
     // Create temp file for progress tracking
     const tempFile = `/tmp/podium-progress-${Date.now()}.log`;
     
-    const childProcess: ChildProcess = spawn(command, args, {
+    const resolved = resolveIfPodium(command, args);
+    const childProcess: ChildProcess = spawn(resolved.command, resolved.args, {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env, NO_COLOR: '1' },
       ...options
@@ -1197,7 +1248,8 @@ function getProjectsDir(): string {
 // future CLI fixes are picked up for free.
 function runPodium(args: string[]): Promise<CommandResult> {
   return new Promise((resolve) => {
-    const child = spawn('podium', args, {
+    const podium = resolvePodium();
+    const child = spawn(podium.command, [...podium.prefix, ...args], {
       cwd: os.homedir(),
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env, NO_COLOR: '1' }
