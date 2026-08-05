@@ -333,6 +333,45 @@ async function run() {
     check('new project modal closed behind it',
       !(await win.isVisible('#new-project-modal')));
 
+    // The install pane used to lose the end of its own output. Streaming was
+    // gated on installInProgress, which is cleared the moment the invoke
+    // resolves — and the reply travels on a different channel from the stream
+    // events, so it can arrive first. The dropped chunk was exactly where the
+    // CLI prints the URL, credentials and notes, which is the whole reason the
+    // install deliberately does not pass --json-output.
+    const rendererSrc = require('fs').readFileSync(
+      require('path').join(require('./helpers').ROOT, 'src/renderer.ts'), 'utf8');
+    const streamHandler = rendererSrc.slice(rendererSrc.indexOf('// Live output from the streamed install'));
+    check('install streaming is not gated on the completion flag',
+      /installStreamActive/.test(streamHandler.slice(0, 400)) &&
+      !/!installInProgress/.test(streamHandler.slice(0, 400)));
+
+    // And the repair path itself: a pane holding a truncated prefix must come
+    // back complete once the command's own captured output is available.
+    const repaired = await win.evaluate(() => {
+      const pane = document.getElementById('install-output');
+      const full = 'Waiting...\nApp is ready! (HTTP 200)\n\n  URL: http://app/\n  Credentials: admin/secret\n  Note: read the docs\n';
+      pane.textContent = 'Waiting...\nApp is ready! (HTTP 200)\n';
+      window.reconcileInstallOutput({ stdout: full });
+      const after = pane.textContent;
+      pane.textContent = '';
+      return { after, restored: after === full };
+    });
+    check('a truncated install pane is repaired from the captured output',
+      repaired.restored, JSON.stringify(repaired.after));
+
+    // Repairing must not duplicate what already arrived.
+    const idempotent = await win.evaluate(() => {
+      const pane = document.getElementById('install-output');
+      const full = 'line one\nline two\n';
+      pane.textContent = full;
+      window.reconcileInstallOutput({ stdout: full });
+      const after = pane.textContent;
+      pane.textContent = '';
+      return after === full;
+    });
+    check('repairing a complete pane changes nothing', idempotent);
+
     // Back returns to the choice instead of dumping the user at the dashboard.
     await win.click(t('install-back'));
     await win.waitForSelector('#new-project-modal.show', { timeout: 5000 });
