@@ -2845,6 +2845,14 @@ let appCatalog: CatalogApp[] = [];
 let selectedApp: CatalogApp | null = null;
 let installInProgress = false;
 
+// Separate from installInProgress on purpose. Streaming used to be gated on
+// that flag, which is cleared the moment `execute-command-stream` resolves —
+// and the invoke's reply travels on a different channel from the stream events,
+// so it can arrive first. The last chunk was then dropped, which is precisely
+// where the CLI prints the URL, credentials and notes. This flag is cleared
+// only when a NEW install starts or the modal is closed, never on completion.
+let installStreamActive = false;
+
 async function showInstallApp(): Promise<void> {
     selectedApp = null;
     installInProgress = false;
@@ -2856,6 +2864,7 @@ async function showInstallApp(): Promise<void> {
     if (search) search.value = '';
     if (nameInput) nameInput.value = '';
     if (output) output.textContent = '';
+    installStreamActive = false;
 
     setInstallView('picker');
     showModal('install-app-modal');
@@ -2983,6 +2992,7 @@ async function handleInstallApp(): Promise<void> {
     const target = projectName || app.slug;
 
     installInProgress = true;
+    installStreamActive = true;
     setInstallView('progress');
 
     const title = document.getElementById('install-progress-title');
@@ -3000,6 +3010,10 @@ async function handleInstallApp(): Promise<void> {
         const result = await ipcRenderer.invoke('execute-command-stream', 'podium', args);
 
         installInProgress = false;
+        // The result carries the complete captured output, so use it to close
+        // any gap the stream left. Belt and braces with the flag change above:
+        // the summary block is the whole point of not passing --json-output.
+        reconcileInstallOutput(result);
 
         if (result.code === 0) {
             showSuccess(`${app.display} installed at http://${target}/`);
@@ -3020,11 +3034,36 @@ async function handleInstallApp(): Promise<void> {
 // Live output from the streamed install
 ipcRenderer.on('command-stream-data', (_event: any, payload: { type: string; data: string }) => {
     const output = document.getElementById('install-output');
-    if (!output || !installInProgress) return;
+    if (!output || !installStreamActive) return;
 
     output.textContent += payload.data;
     output.scrollTop = output.scrollHeight;
 });
+
+// Reconcile the pane against the command's own captured output.
+//
+// Appends only what is missing rather than replacing wholesale: the stream
+// interleaves stdout and stderr in the order they were produced, and replacing
+// with stdout alone would reorder or lose that. When the shown text is a clean
+// prefix of the captured stdout — the case when a trailing chunk was lost —
+// this restores the tail exactly.
+function reconcileInstallOutput(result: { stdout?: string; stderr?: string }): void {
+    const output = document.getElementById('install-output');
+    if (!output) return;
+
+    const captured = result.stdout || '';
+    const shown = output.textContent || '';
+    if (!captured || captured === shown) return;
+
+    if (captured.startsWith(shown)) {
+        output.textContent = captured;
+    } else if (!shown.includes(captured.trimEnd().split('\n').pop() || '')) {
+        // Not a clean prefix (stderr interleaved) and the final line never
+        // arrived — append the captured tail rather than lose it.
+        output.textContent = `${shown}\n${captured.slice(shown.length)}`;
+    }
+    output.scrollTop = output.scrollHeight;
+}
 
 function cloneProject(): void {
     showModal('clone-project-modal');
@@ -3712,6 +3751,7 @@ async function submitEditProject(): Promise<void> {
 (window as any).renderAppCatalog = renderAppCatalog;
 (window as any).selectApp = selectApp;
 (window as any).handleInstallApp = handleInstallApp;
+(window as any).reconcileInstallOutput = reconcileInstallOutput;
 (window as any).refreshProjects = refreshProjects;
 (window as any).manualRefresh = manualRefresh;
 (window as any).startAutoRefresh = startAutoRefresh;
