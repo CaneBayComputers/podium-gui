@@ -415,7 +415,9 @@ function parseProjectStatusJSON(statusOutput: string): void {
 // is called by both loadProjects() and loadServices() — so anything written onto
 // the project objects gets wiped by whichever call finishes last. Keeping
 // metadata in its own map makes it survive that.
-let projectMetadata: Record<string, { display_name: string; description: string; emoji: string }> = {};
+let projectMetadata: Record<string, {
+    display_name: string; description: string; emoji: string; last_on?: string;
+}> = {};
 
 async function hydrateProjectMetadata(): Promise<void> {
     await Promise.all(projects.map(async (project: Project) => {
@@ -439,6 +441,10 @@ function withMetadata(project: Project): Project {
     if (metadata.display_name) merged.display_name = metadata.display_name;
     if (metadata.description) merged.description = metadata.description;
     if (metadata.emoji) merged.emoji = metadata.emoji;
+    // Written by the CLI on start AND stop, so it means "last time this was
+    // up". Absent on projects not started or stopped since the CLI began
+    // writing it — those sort last rather than to an invented epoch date.
+    if (metadata.last_on) (merged as any).last_on = metadata.last_on;
 
     return merged;
 }
@@ -588,8 +594,13 @@ function visibleProjects(): Project[] {
         // `newest` and `last-on` both fall back to name when the underlying
         // value is missing, so the order stays stable and predictable rather
         // than arbitrary. last_on is not written by the CLI yet.
-        const av = (a as any)[sortKey === 'newest' ? 'created_at' : 'last_on'] || '';
-        const bv = (b as any)[sortKey === 'newest' ? 'created_at' : 'last_on'] || '';
+        // Read THROUGH withMetadata. last_on lives in the compose file's
+        // x-metadata and is merged in at render time, so the raw project
+        // objects never carry it — sorting on them silently compared undefined
+        // to undefined and left the order untouched.
+        const key = sortKey === 'newest' ? 'created_at' : 'last_on';
+        const av = (withMetadata(a) as any)[key] || '';
+        const bv = (withMetadata(b) as any)[key] || '';
         if (av && bv) return bv.localeCompare(av);
         if (av) return -1;
         if (bv) return 1;
@@ -3690,6 +3701,9 @@ async function submitEditProject(): Promise<void> {
 // this, and there is no way to observe it from the DOM.
 (window as any).__terminalRows = () => [...terminalSessions.values()][0]?.term?.rows ?? 0;
 (window as any).renderProjects = renderProjects;
+// The filtered+sorted list the grid is built from, so the suite can assert on
+// the ordering rather than on tile text.
+(window as any).__visibleProjects = () => visibleProjects().map(withMetadata);
 (window as any).modifyWithAI = modifyWithAI;
 (window as any).showInstallApp = showInstallApp;
 (window as any).showProjectKindStep = showProjectKindStep;
