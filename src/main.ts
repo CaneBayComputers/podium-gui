@@ -302,6 +302,79 @@ function resolvePodium(): { command: string; prefix: string[] } {
   return { command: 'podium', prefix: [] };
 }
 
+// Terminal emulators that can be told "run this command", in the order worth
+// trying. Each entry is the flag that precedes the command, because they do not
+// agree: -e takes a command, --  takes the rest of the argv, and gnome-terminal
+// wants both. Ordered so a desktop's own terminal wins over a stray xterm.
+const TERMINAL_EMULATORS: Array<{ bin: string; args: (cmd: string[]) => string[] }> = [
+  { bin: 'x-terminal-emulator', args: (c) => ['-e', ...c] },
+  { bin: 'gnome-terminal',      args: (c) => ['--', ...c] },
+  { bin: 'konsole',             args: (c) => ['-e', ...c] },
+  { bin: 'xfce4-terminal',      args: (c) => ['-e', c.join(' ')] },
+  { bin: 'mate-terminal',       args: (c) => ['--', ...c] },
+  { bin: 'kitty',               args: (c) => [...c] },
+  { bin: 'alacritty',           args: (c) => ['-e', ...c] },
+  { bin: 'xterm',               args: (c) => ['-e', ...c] }
+];
+
+// Hand a command to the user's own terminal emulator.
+//
+// The shell keeps running after the command exits (`exec bash` style) so a
+// finished agent does not take its output with it — the whole reason someone
+// picks a system terminal is to keep the scrollback.
+ipcMain.handle('open-system-terminal', async (
+  _event: IpcMainInvokeEvent,
+  cwd: string,
+  command: string,
+  args: string[] = []
+): Promise<{ ok: boolean; error?: string }> => {
+  const resolved = resolveIfPodium(command, args);
+  const quoted = [resolved.command, ...resolved.args]
+    .map((part) => `'${part.replace(/'/g, `'\\''`)}'`)
+    .join(' ');
+  const inner = ['bash', '-lc', `cd ${JSON.stringify(cwd)} && ${quoted}; exec bash`];
+
+  if (process.platform === 'darwin') {
+    try {
+      const script = `tell application "Terminal" to do script ${JSON.stringify(`cd ${cwd} && ${quoted}`)}`;
+      spawn('osascript', ['-e', script], { detached: true, stdio: 'ignore' }).unref();
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: (error as Error).message };
+    }
+  }
+
+  for (const emulator of TERMINAL_EMULATORS) {
+    const found = resolveOnPath(emulator.bin);
+    if (!found) continue;
+
+    try {
+      const child = spawn(found, emulator.args(inner), { detached: true, stdio: 'ignore' });
+      child.unref();
+      debugLog('Opened system terminal', { emulator: found, cwd, command, args });
+      return { ok: true };
+    } catch (error) {
+      debugLog('System terminal failed to start', { emulator: found, error });
+      // Installed but unusable — keep going rather than giving up on the rest.
+    }
+  }
+
+  return { ok: false, error: 'no terminal emulator found' };
+});
+
+function resolveOnPath(bin: string): string | null {
+  for (const dir of (process.env.PATH || '').split(path.delimiter).filter(Boolean)) {
+    const candidate = path.join(dir, bin);
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return candidate;
+    } catch {
+      // Next directory.
+    }
+  }
+  return null;
+}
+
 // Exposed so the resolution can be exercised against a stripped PATH — the
 // exact condition that broke every packaged menu launch.
 ipcMain.handle('get-podium-command', async (): Promise<{ command: string; prefix: string[] }> =>

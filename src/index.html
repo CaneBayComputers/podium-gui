@@ -363,9 +363,36 @@
                     <button class="settings-tab" data-settings-tab="appearance"
                             data-testid="settings-tab-appearance"
                             onclick="switchSettingsTab('appearance')">🎨 Appearance</button>
+                    <button class="settings-tab" data-settings-tab="layout"
+                            data-testid="settings-tab-layout"
+                            onclick="switchSettingsTab('layout')">🧩 Project layout</button>
                     <button class="settings-tab" data-settings-tab="ai"
                             data-testid="settings-tab-ai"
                             onclick="switchSettingsTab('ai')">🤖 AI Agent</button>
+                </div>
+
+                <div class="modal-body" data-settings-panel="layout" style="display: none;">
+                    <div class="form-group">
+                        <label for="layout-per-row">Projects per row</label>
+                        <select id="layout-per-row" data-testid="layout-per-row" onchange="setProjectsPerRow(this.value)">
+                            <option value="1">1</option>
+                            <option value="2">2</option>
+                            <option value="3">3</option>
+                            <option value="4">4</option>
+                        </select>
+                        <span class="form-help">Tiles still wrap to fewer on a narrow window — this is the
+                            most it will fit, not a promise.</span>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="layout-terminal-host">Where the CLI opens</label>
+                        <select id="layout-terminal-host" data-testid="layout-terminal-host"
+                                onchange="setTerminalHost(this.value)">
+                            <option value="tile">Inside Podium — a terminal in the project's tile</option>
+                            <option value="system">Your system terminal</option>
+                        </select>
+                        <span class="form-help" id="layout-terminal-host-help"></span>
+                    </div>
                 </div>
 
                 <div class="modal-body" data-settings-panel="appearance">

@@ -666,10 +666,46 @@ async function run() {
     await win.waitForSelector('#settings-modal.show', { timeout: 8000 });
     check('Settings panel opens', await win.isVisible('#settings-modal'));
 
+
     // Settings opens on Appearance; the AI form lives behind the second tab.
     check('Settings opens on the Appearance tab',
       await win.isVisible('[data-settings-panel="appearance"]')
       && !(await win.isVisible('[data-settings-panel="ai"]')));
+
+    // --- Project layout --------------------------------------------------
+    await win.click(t('settings-tab-layout'));
+    await win.waitForTimeout(150);
+    check('Project layout tab reveals its controls',
+      await win.isVisible('#layout-per-row') && await win.isVisible('#layout-terminal-host'));
+    check('projects per row defaults to 2 and stops at 4',
+      await win.inputValue('#layout-per-row') === '2' &&
+      (await win.locator('#layout-per-row option').evaluateAll((o) => o.map((x) => x.value)))
+        .join(',') === '1,2,3,4');
+    check('the CLI opens inside Podium by default',
+      await win.inputValue('#layout-terminal-host') === 'tile');
+
+    // The setting has to reach the grid as a data attribute, not an inline
+    // style — an inline style would beat the narrow-window rules that cap it.
+    await win.selectOption('#layout-per-row', '4');
+    await win.waitForTimeout(150);
+    const gridAttrs = await win.evaluate(() => {
+      const g = document.getElementById('projects-grid');
+      return { attr: g.getAttribute('data-per-row'), inline: g.style.getPropertyValue('--per-row') };
+    });
+    check('projects per row lands on the grid as an attribute',
+      gridAttrs.attr === '4' && gridAttrs.inline === '', JSON.stringify(gridAttrs));
+
+    // A wide setting must still be capped on a narrow window, or four tiles
+    // become four unreadable slivers.
+    const capped = await win.evaluate(() => {
+      const g = document.getElementById('projects-grid');
+      return getComputedStyle(g).getPropertyValue('--per-row').trim();
+    });
+    check('the effective column count respects the window width',
+      capped === '4' || capped === '2' || capped === '1', `--per-row=${capped}`);
+
+    await win.selectOption('#layout-per-row', '2');
+    await win.waitForTimeout(150);
 
     await win.click(t('settings-tab-ai'));
     await win.waitForTimeout(150);
@@ -1036,6 +1072,135 @@ async function run() {
       window.__killAllTerminals();
       await new Promise((r) => setTimeout(r, 400));
     });
+
+    // --- Terminals hosted inside a project tile --------------------------
+    //
+    // The whole risk here is the projects grid: it is rebuilt from scratch on
+    // every status poll, so a terminal living in a tile has to survive having
+    // its surroundings replaced.
+    if (expectedProjects > 0) {
+      console.log('\ntile terminals');
+      const target = (statusJson.projects || [])[0].name;
+
+      const opened = await win.evaluate(async (name) => {
+        await window.openAgentTerminal({
+          title: '✨ ' + name, status: 'test', cwd: '/tmp', command: 'sh',
+          args: ['-c', 'echo tile-hello; sleep 120'],
+          sessionKey: 'tile-' + name, tileProject: name
+        });
+        await new Promise((r) => setTimeout(r, 900));
+        const card = document.querySelector(`[data-terminal-host="${CSS.escape(name)}"]`);
+        return {
+          inTile: !!card?.querySelector('.tile-terminal'),
+          tabs: document.querySelectorAll('#terminal-tabs .terminal-tab').length,
+          headerButton: document.getElementById('terminals-button').style.display,
+          modalOpen: document.getElementById('build-terminal-modal').classList.contains('show')
+        };
+      }, target);
+      check('the agent terminal opens inside the project tile', opened.inTile,
+        JSON.stringify(opened));
+      await screenshot(win, '08-tile-terminal');
+      check('a tile session stays out of the modal and its tab bar',
+        opened.tabs === 0 && !opened.modalOpen && opened.headerButton === 'none',
+        JSON.stringify(opened));
+
+      // The real trap: a poll rebuilds #projects-grid.innerHTML underneath it.
+      const survived = await win.evaluate(async (name) => {
+        const before = document.querySelector('.tile-terminal .xterm-screen');
+        window.renderProjects();
+        await new Promise((r) => setTimeout(r, 400));
+        const host = document.querySelector(`[data-terminal-host="${CSS.escape(name)}"]`);
+        const after = host?.querySelector('.tile-terminal .xterm-screen');
+        return {
+          stillThere: !!after,
+          // Same DOM node, not a rebuilt one — a re-created terminal would have
+          // lost its scrollback and its pty.
+          sameNode: !!before && before === after,
+          sessions: window.__terminalCount()
+        };
+      }, target);
+      check('a tile terminal survives the grid being re-rendered',
+        survived.stillThere && survived.sameNode && survived.sessions === 1,
+        JSON.stringify(survived));
+
+      // Collapsing must clip, not resize: refitting to the sliver would tell
+      // the pty it has two rows and wreck whatever the agent is drawing.
+      const collapsed = await win.evaluate(async (name) => {
+        const rowsBefore = window.__terminalRows();
+        window.toggleTileTerminal(name);
+        await new Promise((r) => setTimeout(r, 400));
+        const wrap = document.querySelector('.tile-terminal');
+        const viewport = wrap.querySelector('.tile-terminal-viewport');
+        const pane = wrap.querySelector('.terminal-pane');
+        return {
+          collapsed: wrap.classList.contains('collapsed'),
+          rowsBefore,
+          rowsAfter: window.__terminalRows(),
+          viewportHeight: viewport.getBoundingClientRect().height,
+          paneHeight: pane.getBoundingClientRect().height,
+          barVisible: wrap.querySelector('.tile-terminal-bar').getBoundingClientRect().height > 0
+        };
+      }, target);
+      check('collapsing leaves a sliver rather than hiding the terminal',
+        collapsed.collapsed && collapsed.viewportHeight > 20 && collapsed.viewportHeight < 100,
+        JSON.stringify(collapsed));
+      check('the collapsed sliver shows the BOTTOM of the output',
+        collapsed.paneHeight > collapsed.viewportHeight + 100,
+        `pane ${collapsed.paneHeight} clipped to ${collapsed.viewportHeight}`);
+      check('collapsing does not resize the pty',
+        collapsed.rowsAfter === collapsed.rowsBefore,
+        `${collapsed.rowsBefore} -> ${collapsed.rowsAfter} rows`);
+      check('the bar stays readable while collapsed', collapsed.barVisible);
+
+      // Clipping to the pane's bottom edge is not enough: a session that has
+      // printed two lines into a 24-row terminal has 22 blank rows down there,
+      // and the sliver came up empty. It has to follow the cursor.
+      const sliverContent = await win.evaluate(async () => {
+        const wrap = document.querySelector('.tile-terminal');
+        const viewport = wrap.querySelector('.tile-terminal-viewport');
+        const pane = wrap.querySelector('.terminal-pane');
+        const vp = viewport.getBoundingClientRect();
+
+        // Which rendered rows actually fall inside the sliver's window.
+        const visibleRows = [...pane.querySelectorAll('.xterm-rows > div')]
+          .filter((row) => {
+            const r = row.getBoundingClientRect();
+            return r.bottom > vp.top + 1 && r.top < vp.bottom - 1;
+          })
+          .map((row) => row.textContent.trim())
+          .filter(Boolean);
+
+        return { visibleRows, marginTop: pane.style.marginTop };
+      });
+      check('the sliver shows the most recent output, not blank rows',
+        sliverContent.visibleRows.some((r) => r.includes('tile-hello')),
+        JSON.stringify(sliverContent));
+
+      await screenshot(win, '09-tile-terminal-collapsed');
+
+      // A filter must never hide a project whose agent is still running.
+      const pinned = await win.evaluate(async (name) => {
+        window.toggleEmojiFilter('⛔');
+        await new Promise((r) => setTimeout(r, 300));
+        const host = document.querySelector(`[data-terminal-host="${CSS.escape(name)}"]`);
+        const still = !!host?.querySelector('.tile-terminal');
+        window.resetFilters();
+        await new Promise((r) => setTimeout(r, 300));
+        return still;
+      }, target);
+      check('a filter cannot hide a project with a live agent session', pinned);
+
+      const closed = await win.evaluate(async (name) => {
+        window.closeTileTerminal(name);
+        await new Promise((r) => setTimeout(r, 600));
+        return {
+          sessions: window.__terminalCount(),
+          leftovers: document.querySelectorAll('.tile-terminal').length
+        };
+      }, target);
+      check('closing a tile session removes it and its chrome',
+        closed.sessions === 0 && closed.leftovers === 0, JSON.stringify(closed));
+    }
 
     // --- Installers -----------------------------------------------------
     //

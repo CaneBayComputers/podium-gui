@@ -74,6 +74,7 @@ document.addEventListener('DOMContentLoaded', (): void => {
     loadTheme();
     renderThemePicker();
     loadFilterState();
+    loadLayoutState();
 
     // Show initial loading screen
     showInitialLoading();
@@ -450,6 +451,83 @@ function parseProjectStatus(statusOutput: string): void {
 
 
 // ---------------------------------------------------------------------------
+// PROJECT LAYOUT
+//
+// How wide the tiles are, and where "Modify with AI" opens. Both are per-machine
+// preferences rather than project state, so they live in localStorage next to
+// the filters.
+// ---------------------------------------------------------------------------
+type TerminalHost = 'tile' | 'system';
+
+const LAYOUT_STORAGE_KEY = 'podium-gui-layout';
+
+let projectsPerRow = 2;
+let terminalHost: TerminalHost = 'tile';
+
+function loadLayoutState(): void {
+    try {
+        const saved = JSON.parse(localStorage.getItem(LAYOUT_STORAGE_KEY) || '{}');
+        const perRow = Number(saved.perRow);
+        // Clamp rather than trust: a hand-edited 12 would render unreadable
+        // slivers with no way back except editing storage again.
+        if (perRow >= 1 && perRow <= 4) projectsPerRow = Math.floor(perRow);
+        if (saved.terminalHost === 'system' || saved.terminalHost === 'tile') {
+            terminalHost = saved.terminalHost;
+        }
+    } catch {
+        // Unparseable state falls back to the defaults.
+    }
+    applyLayout();
+}
+
+function saveLayoutState(): void {
+    try {
+        localStorage.setItem(LAYOUT_STORAGE_KEY,
+            JSON.stringify({ perRow: projectsPerRow, terminalHost }));
+    } catch {
+        // Storage full or blocked; the setting just will not persist.
+    }
+}
+
+// The width lives in a data attribute rather than an inline style so the
+// narrow-window media queries can still override it — an inline style would
+// win over them and leave four unreadable columns on a small screen.
+function applyLayout(): void {
+    document.getElementById('projects-grid')?.setAttribute('data-per-row', String(projectsPerRow));
+
+    const perRow = document.getElementById('layout-per-row') as HTMLSelectElement;
+    if (perRow) perRow.value = String(projectsPerRow);
+
+    const host = document.getElementById('layout-terminal-host') as HTMLSelectElement;
+    if (host) host.value = terminalHost;
+
+    const help = document.getElementById('layout-terminal-host-help');
+    if (help) {
+        help.textContent = terminalHost === 'system'
+            ? 'Podium opens your terminal emulator and hands the session to it.'
+            : 'The session appears in the project\'s own tile, and can be collapsed to a sliver.';
+    }
+}
+
+function setProjectsPerRow(value: string): void {
+    const n = Number(value);
+    if (!(n >= 1 && n <= 4)) return;
+    projectsPerRow = Math.floor(n);
+    saveLayoutState();
+    applyLayout();
+    // Tile terminals are sized in pixels by their container; a width change
+    // means the pty's column count is now wrong.
+    refitTileTerminals();
+}
+
+function setTerminalHost(value: string): void {
+    if (value !== 'tile' && value !== 'system') return;
+    terminalHost = value;
+    saveLayoutState();
+    applyLayout();
+}
+
+// ---------------------------------------------------------------------------
 // PROJECT FILTERING AND SORTING
 //
 // State lives here rather than being read from the DOM at render time, so the
@@ -494,10 +572,15 @@ function projectEmoji(p: Project): string {
 function visibleProjects(): Project[] {
     let list = projects.slice();
 
-    if (runFilter === 'running') list = list.filter(p => p.dockerRunning);
-    else if (runFilter === 'stopped') list = list.filter(p => !p.dockerRunning);
+    // A project running an agent in its tile is never filtered out. Hiding it
+    // would leave a live session with no window and no way to reach it — the
+    // filter would look like it had killed the agent.
+    const pinned = (p: Project) => hasTileTerminal(p.name);
 
-    if (emojiFilter.size) list = list.filter(p => emojiFilter.has(projectEmoji(p)));
+    if (runFilter === 'running') list = list.filter(p => p.dockerRunning || pinned(p));
+    else if (runFilter === 'stopped') list = list.filter(p => !p.dockerRunning || pinned(p));
+
+    if (emojiFilter.size) list = list.filter(p => emojiFilter.has(projectEmoji(p)) || pinned(p));
 
     const nameOf = (p: Project) => (withMetadata(p).display_name || p.name).toLowerCase();
     list.sort((a, b) => {
@@ -578,7 +661,12 @@ function clearEmojiFilter(): void {
 function renderProjects(): void {
     const grid: HTMLElement | null = document.getElementById('projects-grid');
     if (!grid) return;
-    
+
+    // The grid is rebuilt wholesale on every poll. Any terminal living in a
+    // tile has to be lifted out first or innerHTML destroys a running xterm
+    // and its pty along with the markup around it.
+    detachTileTerminals();
+
     if (projects.length === 0) {
         grid.innerHTML = `
             <div class="project-card placeholder">
@@ -588,6 +676,7 @@ function renderProjects(): void {
                 <button class="btn btn-primary" onclick="showCreateProject()">Create Project</button>
             </div>
         `;
+        reattachTileTerminals();
         return;
     }
 
@@ -603,6 +692,7 @@ function renderProjects(): void {
                 <button class="btn btn-primary" onclick="resetFilters()">Show all</button>
             </div>
         `;
+        reattachTileTerminals();
         return;
     }
 
@@ -652,10 +742,16 @@ function renderProjects(): void {
                         <button class="btn btn-secondary btn-sm" onclick="editProject('${project.name}')">Edit</button>
                         <button class="btn btn-danger btn-sm" onclick="showRemoveProjectModal('${project.name}')">Trash</button>
                     </div>
+                    <!-- Where an agent session lands. Empty until one is open;
+                         the pane is moved in rather than rebuilt, because
+                         re-rendering it would kill the terminal. -->
+                    <div class="tile-terminal-host" data-terminal-host="${escapeHtml(project.name)}"></div>
                 </div>
             </div>
         `;
     }).join('');
+
+    reattachTileTerminals();
 }
 
 
@@ -2217,6 +2313,12 @@ interface TerminalSession {
     pane: HTMLElement;
     exited: boolean;
     status: string;
+    // Where this session is shown. Tile sessions live in a project's card and
+    // stay out of the modal's tab bar entirely.
+    host: 'modal' | 'tile';
+    project?: string | undefined;
+    wrapper?: HTMLElement | undefined;
+    collapsed?: boolean | undefined;
 }
 
 // Sessions outlive the window: hiding the terminal modal leaves them running,
@@ -2227,11 +2329,18 @@ const terminalSessions = new Map<string, TerminalSession>();
 let activeTerminalId = '';
 let terminalResizeHandler: (() => void) | null = null;
 
+// The modal only ever knows about its own sessions. Tile sessions are visible
+// in their project's card, so putting them in the tab bar too would give one
+// terminal two homes and two × buttons that mean different things.
+function modalSessions(): TerminalSession[] {
+    return [...terminalSessions.values()].filter((s) => s.host === 'modal');
+}
+
 function updateTerminalsButton(): void {
     const button = document.getElementById('terminals-button');
     if (!button) return;
 
-    const live = terminalSessions.size;
+    const live = modalSessions().length;
     button.style.display = live > 0 ? '' : 'none';
     button.textContent = live > 1 ? `🖥️ Terminals (${live})` : '🖥️ Terminals';
 }
@@ -2240,7 +2349,7 @@ function renderTerminalTabs(): void {
     const bar = document.getElementById('terminal-tabs');
     if (!bar) return;
 
-    bar.innerHTML = [...terminalSessions.values()].map((session) => `
+    bar.innerHTML = modalSessions().map((session) => `
         <div class="terminal-tab${session.id === activeTerminalId ? ' active' : ''}${session.exited ? ' exited' : ''}"
              onclick="activateTerminal('${session.id}')"
              data-testid="terminal-tab-${escapeHtml(session.key)}">
@@ -2250,7 +2359,7 @@ function renderTerminalTabs(): void {
         </div>
     `).join('');
 
-    bar.style.display = terminalSessions.size > 1 ? 'flex' : 'none';
+    bar.style.display = modalSessions().length > 1 ? 'flex' : 'none';
     updateTerminalsButton();
 }
 
@@ -2276,7 +2385,7 @@ function activateTerminal(id: string): void {
     if (status) status.textContent = session.status;
 
     const title = document.getElementById('build-terminal-title');
-    if (title) title.textContent = terminalSessions.size > 1 ? '🖥️ Terminals' : session.label;
+    if (title) title.textContent = modalSessions().length > 1 ? '🖥️ Terminals' : session.label;
 
     renderTerminalTabs();
 
@@ -2288,11 +2397,11 @@ function activateTerminal(id: string): void {
 }
 
 function showTerminals(): void {
-    if (terminalSessions.size === 0) return;
+    const open = modalSessions();
+    if (open.length === 0) return;
     showModal('build-terminal-modal');
-    activateTerminal(activeTerminalId && terminalSessions.has(activeTerminalId)
-        ? activeTerminalId
-        : [...terminalSessions.keys()][0]!);
+    const active = terminalSessions.get(activeTerminalId);
+    activateTerminal(active && active.host === 'modal' ? activeTerminalId : open[0]!.id);
 }
 
 // Closing the window does NOT end the sessions — that is what the tab × is for.
@@ -2308,18 +2417,31 @@ function killTerminal(id: string): void {
 
     ipcRenderer.invoke('pty-kill', id);
     try { session.term.dispose(); } catch (error) { /* already gone */ }
-    session.pane.remove();
+    // Tile sessions own a wrapper around the pane; removing only the pane
+    // would leave an empty bar sitting in the card.
+    (session.wrapper || session.pane).remove();
     terminalSessions.delete(id);
 
-    if (terminalSessions.size === 0) {
+    if (terminalSessions.size === 0 && terminalResizeHandler) {
+        window.removeEventListener('resize', terminalResizeHandler);
+        terminalResizeHandler = null;
+    }
+
+    if (session.host === 'tile') {
+        updateTerminalsButton();
+        loadProjects();
+        return;
+    }
+
+    const remaining = modalSessions();
+    if (remaining.length === 0) {
         activeTerminalId = '';
-        if (terminalResizeHandler) {
-            window.removeEventListener('resize', terminalResizeHandler);
-            terminalResizeHandler = null;
-        }
+        // Clear the bar too. Leaving the last tab's markup behind meant a
+        // hidden-but-present tab for a session that no longer exists.
+        renderTerminalTabs();
         closeModal();
     } else if (activeTerminalId === id) {
-        activateTerminal([...terminalSessions.keys()][0]!);
+        activateTerminal(remaining[0]!.id);
     } else {
         renderTerminalTabs();
     }
@@ -2332,6 +2454,169 @@ function closeActiveTerminal(): void {
     if (activeTerminalId) killTerminal(activeTerminalId);
 }
 
+// ---------------------------------------------------------------------------
+// Terminals hosted inside a project tile
+//
+// The grid is rebuilt from scratch on every status poll, so a terminal living
+// in it has to survive having its surroundings replaced. The pane is never
+// re-created: it is parked in a detached holder before the rebuild and moved
+// back into the new markup afterwards, which xterm tolerates fine as long as
+// it gets a fit() once it is back on screen.
+// ---------------------------------------------------------------------------
+
+function tileSessionFor(project: string): TerminalSession | undefined {
+    return [...terminalSessions.values()].find((s) => s.host === 'tile' && s.project === project);
+}
+
+function hasTileTerminal(project: string): boolean {
+    return tileSessionFor(project) !== undefined;
+}
+
+function tileHolder(): HTMLElement {
+    let holder = document.getElementById('tile-terminal-holder');
+    if (!holder) {
+        holder = document.createElement('div');
+        holder.id = 'tile-terminal-holder';
+        holder.style.display = 'none';
+        document.body.appendChild(holder);
+    }
+    return holder;
+}
+
+function detachTileTerminals(): void {
+    const holder = tileHolder();
+    for (const session of terminalSessions.values()) {
+        if (session.host === 'tile' && session.wrapper) holder.appendChild(session.wrapper);
+    }
+}
+
+function reattachTileTerminals(): void {
+    for (const session of terminalSessions.values()) {
+        if (session.host !== 'tile' || !session.wrapper || !session.project) continue;
+
+        const host = document.querySelector(`[data-terminal-host="${CSS.escape(session.project)}"]`);
+        // No tile for it this pass (the project vanished from the list): leave
+        // the pane parked rather than dropping it — the pty is still alive.
+        if (!host) continue;
+
+        host.appendChild(session.wrapper);
+    }
+    refitTileTerminals();
+}
+
+// Fit after the move, not during: a pane measured while detached reports zero
+// rows, and the pty would be resized to nothing.
+function refitTileTerminals(): void {
+    setTimeout(() => {
+        for (const session of terminalSessions.values()) {
+            if (session.host === 'tile' && !session.collapsed) fitTerminal(session);
+        }
+    }, 30);
+}
+
+function tileTerminalStatus(session: TerminalSession): void {
+    const label = session.wrapper?.querySelector('.tile-terminal-status');
+    if (label) label.textContent = session.status;
+    session.wrapper?.classList.toggle('exited', session.exited);
+}
+
+// Slide the pane so the cursor's row sits at the bottom of the sliver.
+//
+// Clipping to the pane's bottom edge is not the same thing: a session that has
+// printed three lines into a 24-row terminal has 21 blank rows at the bottom,
+// so the sliver came up empty and looked broken. What "recent output" means is
+// the line the agent is writing on, which is where the cursor is.
+function anchorSliver(session: TerminalSession): void {
+    if (!session.wrapper || !session.collapsed) return;
+
+    const rows = session.term.rows || 1;
+    const paneHeight = session.pane.getBoundingClientRect().height;
+    if (!paneHeight) return;
+
+    const rowHeight = paneHeight / rows;
+    const cursorRow = session.term.buffer?.active?.cursorY ?? rows - 1;
+    const sliver = session.wrapper.querySelector('.tile-terminal-viewport')
+        ?.getBoundingClientRect().height || 58;
+
+    // Never positive: the pane only ever moves up, never down past its own top.
+    const offset = Math.min(0, sliver - (cursorRow + 1) * rowHeight - 6);
+    session.pane.style.marginTop = `${offset}px`;
+}
+
+// Output arrives a byte at a time from a pty; re-measuring on each chunk would
+// mean layout work on every keystroke the agent prints.
+let sliverPending = false;
+function scheduleSliverAnchor(): void {
+    if (sliverPending) return;
+    sliverPending = true;
+    setTimeout(() => {
+        sliverPending = false;
+        for (const session of terminalSessions.values()) {
+            if (session.host === 'tile' && session.collapsed) anchorSliver(session);
+        }
+    }, 120);
+}
+
+function toggleTileTerminal(project: string): void {
+    const session = tileSessionFor(project);
+    if (!session || !session.wrapper) return;
+
+    session.collapsed = !session.collapsed;
+    session.wrapper.classList.toggle('collapsed', session.collapsed);
+
+    const chevron = session.wrapper.querySelector('.tile-terminal-toggle');
+    if (chevron) {
+        chevron.textContent = session.collapsed ? '▸' : '▾';
+        chevron.setAttribute('title', session.collapsed ? 'Expand this session' : 'Collapse to a sliver');
+    }
+
+    // Collapsing deliberately does NOT refit. The pane keeps its pixel height
+    // and is clipped, so the pty's rows never change — refitting to the sliver
+    // would resize the agent's display to two lines and wreck its output.
+    if (session.collapsed) {
+        anchorSliver(session);
+    } else {
+        session.pane.style.marginTop = '';
+        setTimeout(() => fitTerminal(session), 30);
+    }
+}
+
+function closeTileTerminal(project: string): void {
+    const session = tileSessionFor(project);
+    if (session) killTerminal(session.id);
+}
+
+// Build the chrome around a tile-hosted pane: a bar that names the session,
+// shows its status, collapses it, and ends it.
+function buildTileWrapper(session: TerminalSession, project: string): HTMLElement {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'tile-terminal';
+    wrapper.dataset.testid = `tile-terminal-${project}`;
+
+    const bar = document.createElement('div');
+    bar.className = 'tile-terminal-bar';
+    bar.innerHTML = `
+        <span class="tile-terminal-label">${escapeHtml(session.label)}</span>
+        <span class="tile-terminal-status">${escapeHtml(session.status)}</span>
+        <button class="tile-terminal-toggle" title="Collapse to a sliver"
+                data-testid="tile-terminal-toggle-${escapeHtml(project)}"
+                onclick="toggleTileTerminal('${escapeHtml(project)}')">▾</button>
+        <button class="tile-terminal-close" title="End this session"
+                data-testid="tile-terminal-close-${escapeHtml(project)}"
+                onclick="closeTileTerminal('${escapeHtml(project)}')">&times;</button>
+    `;
+
+    // The pane sits inside its own clipping viewport so collapsing can pull it
+    // up without painting over the bar above it.
+    const viewport = document.createElement('div');
+    viewport.className = 'tile-terminal-viewport';
+    viewport.appendChild(session.pane);
+
+    wrapper.appendChild(bar);
+    wrapper.appendChild(viewport);
+    return wrapper;
+}
+
 interface AgentTerminalOptions {
     title: string;
     status: string;
@@ -2341,6 +2626,8 @@ interface AgentTerminalOptions {
     sessionKey: string;
     /** Shown if the pty cannot start, so the user can run it themselves. */
     fallbackHint?: string;
+    /** Which project's tile hosts this session. Omitted means the modal. */
+    tileProject?: string;
 }
 
 // One embedded-terminal implementation for both agent entry points: the build
@@ -2349,8 +2636,9 @@ async function openAgentTerminal(options: AgentTerminalOptions): Promise<void> {
     const { Terminal } = require('@xterm/xterm');
     const { FitAddon } = require('@xterm/addon-fit');
 
+    const inTile = !!options.tileProject;
     const panes = document.getElementById('terminal-panes');
-    if (!panes) return;
+    if (!panes && !inTile) return;
 
     closeModal();
 
@@ -2358,6 +2646,14 @@ async function openAgentTerminal(options: AgentTerminalOptions): Promise<void> {
     // second agent in the same directory.
     const existing = [...terminalSessions.values()].find((s) => s.key === options.sessionKey && !s.exited);
     if (existing) {
+        if (existing.host === 'tile') {
+            // Already in its tile. Expand it if it was collapsed and scroll to
+            // it, rather than silently doing nothing to a button press.
+            if (existing.collapsed) toggleTileTerminal(existing.project!);
+            existing.wrapper?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            existing.term.focus();
+            return;
+        }
         showModal('build-terminal-modal');
         activateTerminal(existing.id);
         return;
@@ -2367,7 +2663,7 @@ async function openAgentTerminal(options: AgentTerminalOptions): Promise<void> {
     const pane = document.createElement('div');
     pane.className = 'terminal-pane';
     pane.dataset.sessionId = id;
-    panes.appendChild(pane);
+    if (!inTile) panes!.appendChild(pane);
 
     const term = new Terminal({
         fontSize: 13,
@@ -2377,13 +2673,26 @@ async function openAgentTerminal(options: AgentTerminalOptions): Promise<void> {
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
-    term.open(pane);
 
     const session: TerminalSession = {
         id, key: options.sessionKey, label: options.title,
-        term, fit, pane, exited: false, status: options.status
+        term, fit, pane, exited: false, status: options.status,
+        host: inTile ? 'tile' : 'modal',
+        project: options.tileProject,
+        collapsed: false
     };
     terminalSessions.set(id, session);
+
+    // The pane has to be in the document before xterm measures it, or the first
+    // fit reports zero rows and the pty starts sized for nothing.
+    if (inTile) {
+        session.wrapper = buildTileWrapper(session, options.tileProject!);
+        const host = document.querySelector(`[data-terminal-host="${CSS.escape(options.tileProject!)}"]`);
+        // No tile on screen for it — a filter, or a status poll mid-flight.
+        // Park it and let the next render place it, so the pty still starts.
+        (host || tileHolder()).appendChild(session.wrapper);
+    }
+    term.open(pane);
 
     term.onData((data: string) => ipcRenderer.invoke('pty-input', id, data));
 
@@ -2395,8 +2704,13 @@ async function openAgentTerminal(options: AgentTerminalOptions): Promise<void> {
         window.addEventListener('resize', terminalResizeHandler);
     }
 
-    showModal('build-terminal-modal');
-    activateTerminal(id);
+    if (inTile) {
+        session.wrapper!.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        setTimeout(() => { fitTerminal(session); term.focus(); }, 30);
+    } else {
+        showModal('build-terminal-modal');
+        activateTerminal(id);
+    }
 
     const started = await ipcRenderer.invoke('pty-start', id, options.cwd, options.command, options.args);
 
@@ -2408,7 +2722,7 @@ async function openAgentTerminal(options: AgentTerminalOptions): Promise<void> {
         term.writeln(`\x1b[36m  ${options.fallbackHint || `cd ${options.cwd} && ${options.command} ${options.args.join(' ')}`}\x1b[0m`);
         session.status = 'Embedded terminal unavailable — run the command above.';
         session.exited = true;
-        activateTerminal(id);
+        if (inTile) tileTerminalStatus(session); else activateTerminal(id);
     }
 }
 
@@ -2427,6 +2741,17 @@ async function modifyWithAI(projectName: string): Promise<void> {
     // resume takes the project name and cds itself, so run it from the projects
     // directory rather than inside the project.
     const projectsDir = await ipcRenderer.invoke('get-projects-dir');
+
+    if (terminalHost === 'system') {
+        const opened = await ipcRenderer.invoke('open-system-terminal',
+            projectsDir, 'podium', ['resume', projectName]);
+        if (!opened.ok) {
+            showError(`Could not open a terminal (${opened.error}). `
+                + `Run this yourself: cd ${projectsDir} && podium resume ${projectName}`);
+        }
+        return;
+    }
+
     await openAgentTerminal({
         title: `✨ ${projectName}`,
         status: 'Resuming the AI session in this project.',
@@ -2434,7 +2759,8 @@ async function modifyWithAI(projectName: string): Promise<void> {
         command: 'podium',
         args: ['resume', projectName],
         sessionKey: `resume-${projectName}`,
-        fallbackHint: `cd ${projectsDir} && podium resume ${projectName}`
+        fallbackHint: `cd ${projectsDir} && podium resume ${projectName}`,
+        tileProject: projectName
     });
 }
 
@@ -2454,7 +2780,13 @@ async function openBuildTerminal(projectName: string, idea: string): Promise<voi
 }
 
 ipcRenderer.on('pty-data', (_event: any, payload: { sessionId: string; data: string }) => {
-    terminalSessions.get(payload.sessionId)?.term.write(payload.data);
+    const session = terminalSessions.get(payload.sessionId);
+    if (!session) return;
+
+    session.term.write(payload.data);
+    // A collapsed sliver has to follow the output, or it freezes on whatever
+    // was on screen when it was collapsed.
+    if (session.host === 'tile' && session.collapsed) scheduleSliverAnchor();
 });
 
 ipcRenderer.on('pty-exit', (_event: any, payload: { sessionId: string; exitCode: number }) => {
@@ -2466,6 +2798,14 @@ ipcRenderer.on('pty-exit', (_event: any, payload: { sessionId: string; exitCode:
         ? 'Session finished.'
         : `Session exited with code ${payload.exitCode}.`;
     session.term.writeln(`\r\n\x1b[2m[session ended: ${payload.exitCode}]\x1b[0m`);
+
+    if (session.host === 'tile') {
+        // The bar is the only place a collapsed session can report anything,
+        // so it has to say the agent is done even when the pane is a sliver.
+        tileTerminalStatus(session);
+        loadProjects();
+        return;
+    }
 
     if (session.id === activeTerminalId) {
         const status = document.getElementById('build-terminal-status');
@@ -3313,6 +3653,11 @@ async function submitEditProject(): Promise<void> {
 (window as any).toggleEmojiFilter = toggleEmojiFilter;
 (window as any).clearEmojiFilter = clearEmojiFilter;
 (window as any).resetFilters = resetFilters;
+(window as any).setProjectsPerRow = setProjectsPerRow;
+(window as any).setTerminalHost = setTerminalHost;
+(window as any).toggleTileTerminal = toggleTileTerminal;
+(window as any).closeTileTerminal = closeTileTerminal;
+(window as any).hasTileTerminal = hasTileTerminal;
 (window as any).selectTheme = selectTheme;
 (window as any).switchSettingsTab = switchSettingsTab;
 (window as any).onAiAgentChange = onAiAgentChange;
@@ -3341,6 +3686,10 @@ async function submitEditProject(): Promise<void> {
 (window as any).__killAllTerminals = () => {
     [...terminalSessions.keys()].forEach((id) => killTerminal(id));
 };
+// Rows of the first live session — collapsing a tile terminal must not change
+// this, and there is no way to observe it from the DOM.
+(window as any).__terminalRows = () => [...terminalSessions.values()][0]?.term?.rows ?? 0;
+(window as any).renderProjects = renderProjects;
 (window as any).modifyWithAI = modifyWithAI;
 (window as any).showInstallApp = showInstallApp;
 (window as any).showProjectKindStep = showProjectKindStep;

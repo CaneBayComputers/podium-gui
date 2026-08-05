@@ -478,7 +478,15 @@ body::before {
 }
 
 /* Projects Grid */
+/*
+ * --per-row is the user's Project layout setting. It is carried on a data
+ * attribute rather than an inline style so the narrow-window rules below can
+ * still override it — an inline style would beat them and leave four
+ * unreadable columns on a small screen.
+ */
 .projects-grid {
+    --per-row-pref: 2;
+    --per-row: var(--per-row-pref);
     display: flex;
     flex-wrap: wrap;
     gap: 1rem;
@@ -486,13 +494,18 @@ body::before {
     justify-content: flex-start;
 }
 
+.projects-grid[data-per-row="1"] { --per-row-pref: 1; }
+.projects-grid[data-per-row="2"] { --per-row-pref: 2; }
+.projects-grid[data-per-row="3"] { --per-row-pref: 3; }
+.projects-grid[data-per-row="4"] { --per-row-pref: 4; }
+
 .project-card {
     background: var(--card-bg);
     border: 1px solid var(--border-subtle);
     padding: 1rem;
     border-radius: 4px;
     transition: transform 0.2s ease, box-shadow 0.2s ease;
-    flex: 0 0 calc(33.333% - 0.67rem);
+    flex: 0 0 calc((100% - (var(--per-row) - 1) * 1rem) / var(--per-row));
     min-width: 300px;
     position: relative !important;
     overflow: hidden;
@@ -511,16 +524,113 @@ body::before {
     margin-top: 1.5rem;
 }
 
+/*
+ * A narrow window caps the setting rather than replacing it: someone who asked
+ * for one tile per row should still get one, not be widened back to two.
+ */
 @media (max-width: 1400px) {
-    .project-card {
-        flex: 0 0 calc(50% - 0.5rem);
-    }
+    .projects-grid { --per-row: min(var(--per-row-pref), 2); }
 }
 
 @media (max-width: 768px) {
-    .project-card {
-        flex: 0 0 100%;
-    }
+    .projects-grid { --per-row: 1; }
+}
+
+/*
+ * Agent terminals hosted inside a project tile.
+ *
+ * Collapsing clips the pane instead of resizing it. The pane keeps its full
+ * pixel height and is pulled up by a negative margin so its BOTTOM shows
+ * through the sliver — the most recent output, which is the part worth seeing.
+ * Refitting to the sliver instead would resize the pty to two rows and wreck
+ * whatever the agent is drawing.
+ */
+.tile-terminal-host:empty {
+    display: none;
+}
+
+.tile-terminal {
+    --term-height: 320px;
+    --sliver-height: 58px;
+    margin-top: 0.75rem;
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    overflow: hidden;
+    background: var(--bg-tertiary);
+}
+
+.tile-terminal-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.35rem 0.5rem;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+.tile-terminal-label {
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    white-space: nowrap;
+}
+
+.tile-terminal-status {
+    flex: 1;
+    min-width: 0;
+    font-size: 0.74rem;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* A finished session has to be legible while collapsed — the bar is the only
+   thing guaranteed to be on screen. */
+.tile-terminal.exited .tile-terminal-status {
+    color: var(--accent-green);
+}
+
+.tile-terminal-toggle,
+.tile-terminal-close {
+    padding: 0 0.35rem;
+    font-size: 0.95rem;
+    line-height: 1;
+    color: var(--text-muted);
+    background: none;
+    border: none;
+    cursor: pointer;
+}
+
+.tile-terminal-toggle:hover,
+.tile-terminal-close:hover {
+    color: var(--text-primary);
+}
+
+/* The clipping window. The bar must stay outside it, or the pane pulled up by
+   the negative margin below would be drawn straight over the top of it. */
+.tile-terminal-viewport {
+    height: var(--term-height);
+    overflow: hidden;
+    transition: height 0.18s ease;
+}
+
+.tile-terminal.collapsed .tile-terminal-viewport {
+    height: var(--sliver-height);
+}
+
+/* The modal's panes are absolutely positioned so they can stack; a tile pane
+   is the only thing in its viewport and has to take part in layout instead. */
+.tile-terminal .terminal-pane {
+    position: static;
+    inset: auto;
+    height: var(--term-height);
+    padding: 0.35rem;
+    transition: margin-top 0.18s ease;
+}
+
+.tile-terminal.collapsed .terminal-pane {
+    margin-top: calc(var(--sliver-height) - var(--term-height));
 }
 
 /* Generic cards (for other sections) */
