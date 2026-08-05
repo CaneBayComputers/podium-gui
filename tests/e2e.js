@@ -96,6 +96,12 @@ async function run() {
     // clean box as well as a populated one.
     const expectedProjects = (statusJson?.projects || []).length;
 
+    // Tile filters persist to localStorage, and the suite runs against the real
+    // user data dir — so a filter left on by hand makes "renders every project"
+    // fail for a reason that is not a regression. Start from a known state.
+    // (The filters get their own assertions further down.)
+    await win.evaluate(() => window.resetFilters && window.resetFilters());
+
     if (expectedProjects > 0) {
       await win.waitForFunction(
         () => document.querySelectorAll('#projects-grid .project-card:not(.placeholder)').length > 0,
@@ -107,9 +113,13 @@ async function run() {
     // The splash fades over 0.5s; let it finish so the capture is the dashboard.
     await win.waitForTimeout(600);
     await screenshot(win, '01-dashboard');
-    for (const id of ['create-ai', 'start-all', 'stop-all', 'new-project', 'clone-project', 'install-app']) {
+    for (const id of ['create-ai', 'start-all', 'stop-all', 'new-project', 'clone-project']) {
       check(`header action "${id}" present`, await win.locator(t(id)).count() === 1);
     }
+    // Install App folded into New Project's first step; a stray button here
+    // would mean two entry points into the same flow again.
+    check('install app is no longer a separate header action',
+      await win.locator(t('install-app')).count() === 0);
 
     // Help/Patreon/Donate moved out of the header into the footer, alongside a
     // link to the CLI the GUI is a front end for.
@@ -203,6 +213,51 @@ async function run() {
         wrong.length === 0, wrong.join('; '));
     }
 
+    // --- Tile filters ----------------------------------------------------
+    if (expectedProjects > 0) {
+      console.log('\nfilters');
+      const tiles = () => win.locator('#projects-grid .project-card:not(.placeholder)').count();
+      const allTiles = await tiles();
+
+      await win.evaluate(() => window.setRunFilter('running'));
+      const runningTiles = await tiles();
+      await win.evaluate(() => window.setRunFilter('stopped'));
+      const stoppedTiles = await tiles();
+      // Every project is one or the other, so the two halves must account for
+      // the whole — a tile lost by both filters would be invisible everywhere.
+      check('running and stopped partition the project list',
+        runningTiles + stoppedTiles === allTiles,
+        `${runningTiles} + ${stoppedTiles} != ${allTiles}`);
+      check('running filter matches what the CLI reports running',
+        runningTiles === running.length, `${runningTiles} vs ${running.length}`);
+
+      await win.evaluate(() => window.setRunFilter('all'));
+
+      // Each emoji chip's count must equal the tiles it leaves on screen.
+      const chips = await win.locator('#project-filters .emoji-chip').evaluateAll((els) =>
+        els.map((e) => ({
+          emoji: e.getAttribute('data-testid').replace('emoji-filter-', ''),
+          count: Number(e.querySelector('.emoji-count')?.textContent || 0),
+        })));
+      check('emoji chips are rendered', chips.length > 0, `${chips.length} chips`);
+      for (const { emoji, count } of chips) {
+        await win.evaluate((e) => window.toggleEmojiFilter(e), emoji);
+        const shown = await tiles();
+        check(`emoji ${emoji} count matches the tiles it shows`,
+          shown === count, `chip says ${count}, grid shows ${shown}`);
+        await win.evaluate((e) => window.toggleEmojiFilter(e), emoji);
+      }
+
+      // A filter that empties the grid must say so. Falling through to the
+      // "create your first project" placeholder reads as data loss.
+      await win.evaluate(() => { window.setRunFilter('running'); window.toggleEmojiFilter('⛔'); });
+      check('an empty result explains itself instead of looking empty',
+        await win.locator(t('no-matches')).count() === 1);
+
+      await win.evaluate(() => window.resetFilters());
+      check('reset restores every tile', await tiles() === allTiles);
+    }
+
     // Optional services (minio, meilisearch) must not appear as red "Stopped"
     // cards on a machine that never enabled them — that reads as a broken
     // service rather than an unused feature.
@@ -218,10 +273,26 @@ async function run() {
     }
 
     // --- Install-an-app modal (the step 2 feature) ----------------------
+    // Reached through New Project now, so the test walks the same path a user
+    // does rather than calling the modal directly.
     console.log('\ninstall app');
-    await win.click(t('install-app'));
+    await win.click(t('new-project'));
+    await win.waitForSelector('#new-project-modal.show', { timeout: 5000 });
+    check('new project opens on the kind choice, not the form',
+      await win.isVisible(t('new-project-choice')) &&
+      !(await win.isVisible('#new-project-form')));
+    await win.click(t('kind-app'));
     await win.waitForSelector('#install-app-modal.show', { timeout: 5000 });
     check('install modal opens', await win.isVisible('#install-app-modal'));
+    check('new project modal closed behind it',
+      !(await win.isVisible('#new-project-modal')));
+
+    // Back returns to the choice instead of dumping the user at the dashboard.
+    await win.click(t('install-back'));
+    await win.waitForSelector('#new-project-modal.show', { timeout: 5000 });
+    check('back returns to the kind choice', await win.isVisible(t('new-project-choice')));
+    await win.click(t('kind-app'));
+    await win.waitForSelector('#install-app-modal.show', { timeout: 5000 });
 
     // Catalogue is read from the CLI's apps.json at runtime.
     await win.waitForFunction(
@@ -415,6 +486,9 @@ async function run() {
     await win.click(t('new-project'));
     await win.waitForSelector('#new-project-modal.show', { timeout: 5000 });
     check('new project modal opens', await win.isVisible('#new-project-modal'));
+    await win.click(t('kind-framework'));
+    check('choosing a framework reveals the form and its footer',
+      await win.isVisible('#new-project-form') && await win.isVisible('#new-project-footer'));
 
     // Assert against the CLI's catalogue, not a list copied into the test —
     // a hardcoded list here would drift exactly the way the form used to.
@@ -498,6 +572,29 @@ async function run() {
 
     // --- Main-process IPC, exercised directly ---------------------------
     console.log('\nipc');
+
+    // Every packaged install failed with "spawn podium ENOENT" from the panel
+    // launcher while working from a terminal, because a .desktop launch has no
+    // /usr/local/bin on PATH. Testing it from this shell proves nothing — the
+    // PATH has to actually be taken away.
+    const podiumCmd = await app.evaluate(async ({ ipcMain }) => {
+      const handler = ipcMain._invokeHandlers.get('get-podium-command');
+      if (!handler) return { error: 'get-podium-command not registered' };
+      const before = process.env.PATH;
+      process.env.PATH = '/nonexistent';
+      const stripped = await handler({});
+      process.env.PATH = before;
+      const normal = await handler({});
+      return { stripped, normal };
+    });
+    check('podium resolves from PATH when it is there',
+      !podiumCmd.error && podiumCmd.normal?.command?.endsWith('podium'),
+      podiumCmd.error || JSON.stringify(podiumCmd.normal));
+    check('podium still resolves with PATH stripped, as a menu launch has it',
+      !podiumCmd.error &&
+      (podiumCmd.stripped?.command?.startsWith('/') || podiumCmd.stripped?.command === 'bash'),
+      JSON.stringify(podiumCmd.stripped));
+
     const catalog = await app.evaluate(async ({ ipcMain }) => {
       const handler = ipcMain._invokeHandlers.get('get-app-catalog');
       if (!handler) return { error: 'get-app-catalog not registered' };
@@ -569,10 +666,46 @@ async function run() {
     await win.waitForSelector('#settings-modal.show', { timeout: 8000 });
     check('Settings panel opens', await win.isVisible('#settings-modal'));
 
+
     // Settings opens on Appearance; the AI form lives behind the second tab.
     check('Settings opens on the Appearance tab',
       await win.isVisible('[data-settings-panel="appearance"]')
       && !(await win.isVisible('[data-settings-panel="ai"]')));
+
+    // --- Project layout --------------------------------------------------
+    await win.click(t('settings-tab-layout'));
+    await win.waitForTimeout(150);
+    check('Project layout tab reveals its controls',
+      await win.isVisible('#layout-per-row') && await win.isVisible('#layout-terminal-host'));
+    check('projects per row defaults to 2 and stops at 4',
+      await win.inputValue('#layout-per-row') === '2' &&
+      (await win.locator('#layout-per-row option').evaluateAll((o) => o.map((x) => x.value)))
+        .join(',') === '1,2,3,4');
+    check('the CLI opens inside Podium by default',
+      await win.inputValue('#layout-terminal-host') === 'tile');
+
+    // The setting has to reach the grid as a data attribute, not an inline
+    // style — an inline style would beat the narrow-window rules that cap it.
+    await win.selectOption('#layout-per-row', '4');
+    await win.waitForTimeout(150);
+    const gridAttrs = await win.evaluate(() => {
+      const g = document.getElementById('projects-grid');
+      return { attr: g.getAttribute('data-per-row'), inline: g.style.getPropertyValue('--per-row') };
+    });
+    check('projects per row lands on the grid as an attribute',
+      gridAttrs.attr === '4' && gridAttrs.inline === '', JSON.stringify(gridAttrs));
+
+    // A wide setting must still be capped on a narrow window, or four tiles
+    // become four unreadable slivers.
+    const capped = await win.evaluate(() => {
+      const g = document.getElementById('projects-grid');
+      return getComputedStyle(g).getPropertyValue('--per-row').trim();
+    });
+    check('the effective column count respects the window width',
+      capped === '4' || capped === '2' || capped === '1', `--per-row=${capped}`);
+
+    await win.selectOption('#layout-per-row', '2');
+    await win.waitForTimeout(150);
 
     await win.click(t('settings-tab-ai'));
     await win.waitForTimeout(150);
@@ -612,55 +745,82 @@ async function run() {
     check('qwen offered exactly when the installed CLI supports it',
       qwenUsable === caps.qwen, `cli.qwen=${caps.qwen} offered=${qwenUsable}`);
 
-    const localPresetsUsable = await win.evaluate(() => {
-      const o = document.querySelector('#ai-preset option[value="ollama"]');
-      return !!o && !o.hidden && !o.disabled;
-    });
-    check('local presets follow the same capability',
-      localPresetsUsable === caps.qwen, `cli.qwen=${caps.qwen} presets=${localPresetsUsable}`);
+    // The Preset dropdown is gone — it reassigned the agent behind the user's
+    // back and its "Custom" entry did nothing at all.
+    check('the preset dropdown is gone', await win.locator('#ai-preset').count() === 0);
 
     // --api-base is no longer aider-only: the CLI passes it to whichever env var
-    // each agent reads. gemini is the only one with no endpoint at all.
-    for (const [agent, shouldShow] of [['codex', true], ['qwen', true], ['claude', true], ['gemini', false]]) {
+    // each agent reads. gemini is the only one with no endpoint at all. claude
+    // has one but keeps it folded behind a reveal.
+    for (const [agent, shouldShow] of [['codex', true], ['qwen', true], ['gemini', false]]) {
       await win.selectOption('#ai-agent', agent);
       await win.waitForTimeout(250);
       check(`${agent} endpoint field ${shouldShow ? 'shown' : 'hidden'}`,
         (await win.isVisible('#ai-api-base-group')) === shouldShow);
     }
 
+    // Claude Code signs in to Anthropic on its own, so an empty URL field is
+    // noise at best and an invitation to a wrong value at worst.
+    await win.evaluate(() => { document.getElementById('ai-api-base').value = ''; });
+    await win.selectOption('#ai-agent', 'claude');
+    await win.waitForTimeout(250);
+    check('claude hides the endpoint behind a reveal',
+      !(await win.isVisible('#ai-api-base-group')) && await win.isVisible(t('ai-api-base-reveal')));
+
+    await win.click(t('ai-api-base-reveal'));
+    await win.waitForTimeout(250);
+    check('the reveal opens the endpoint field', await win.isVisible('#ai-api-base-group'));
+
     // claude needs an Anthropic-compatible proxy — pointing it at a raw Ollama
     // URL is the obvious mistake, so the note has to say so.
-    await win.selectOption('#ai-agent', 'claude');
-    await win.waitForTimeout(200);
     check('claude endpoint note warns it must be Anthropic-compatible',
       /anthropic/i.test((await win.textContent('#ai-api-base-help')) || ''),
       await win.textContent('#ai-api-base-help'));
 
-    // Presets are the part users actually use.
-    const presets = await win.locator('#ai-preset option').evaluateAll((o) => o.map((x) => x.value));
-    check('offers the local/cheap presets',
-      ['hosted', 'ollama', 'openrouter', 'lmstudio'].every((p) => presets.includes(p)),
-      presets.join(','));
+    // An endpoint already in force must never be hidden — that would make the
+    // panel show a configuration the CLI is not using.
+    await win.evaluate(() => {
+      document.getElementById('ai-api-base').value = 'https://proxy.example/v1';
+      window.onAiAgentChange();
+    });
+    await win.waitForTimeout(250);
+    check('a stored endpoint stays visible rather than folding away',
+      await win.isVisible('#ai-api-base-group'));
 
-    await win.selectOption('#ai-preset', 'ollama');
+    // Endpoint chips replace the presets: they fill the field they sit under
+    // and are scoped to what the selected agent can actually talk to.
+    await win.evaluate(() => { document.getElementById('ai-api-base').value = ''; });
+    await win.selectOption('#ai-agent', 'claude');
+    await win.waitForTimeout(250);
+    check('claude is offered no OpenAI-shaped endpoint chips',
+      await win.locator('#ai-endpoint-presets .endpoint-chip').count() === 0);
+
+    await win.selectOption('#ai-agent', 'codex');
+    await win.waitForTimeout(250);
+    const chips = await win.locator('#ai-endpoint-presets .endpoint-chip').count();
+    check('OpenAI-compatible agents get endpoint chips', chips >= 3, `${chips} chips`);
+
+    const agentBefore = await win.inputValue('#ai-agent');
+    await win.click(t('endpoint-ollama'));
     await win.waitForTimeout(600);
     const ollama = await win.evaluate(() => ({
       agent: document.getElementById('ai-agent').value,
       base: document.getElementById('ai-api-base').value,
       warning: document.getElementById('ai-local-warning').style.display
     }));
-    check('Ollama preset fills agent and endpoint',
-      ollama.agent === 'qwen' && /11434/.test(ollama.base), JSON.stringify(ollama));
+    check('an endpoint chip fills the URL', /11434/.test(ollama.base), ollama.base);
+    check('an endpoint chip leaves the agent alone',
+      ollama.agent === agentBefore, `${agentBefore} -> ${ollama.agent}`);
     check('a local endpoint surfaces the VRAM warning', ollama.warning === 'block',
       'small models return confident wrong answers — this must be visible');
 
-    await win.selectOption('#ai-preset', 'openrouter');
+    await win.click(t('endpoint-openrouter'));
     await win.waitForTimeout(400);
     const remote = await win.evaluate(() => ({
-      model: document.getElementById('ai-model').value,
+      base: document.getElementById('ai-api-base').value,
       warning: document.getElementById('ai-local-warning').style.display
     }));
-    check('OpenRouter preset fills a model', remote.model.length > 0, remote.model);
+    check('a remote endpoint chip fills the URL', /openrouter/.test(remote.base), remote.base);
     check('a remote endpoint hides the VRAM warning', remote.warning === 'none');
 
     // Switching agents must clear the previous agent's validation message —
@@ -912,6 +1072,135 @@ async function run() {
       window.__killAllTerminals();
       await new Promise((r) => setTimeout(r, 400));
     });
+
+    // --- Terminals hosted inside a project tile --------------------------
+    //
+    // The whole risk here is the projects grid: it is rebuilt from scratch on
+    // every status poll, so a terminal living in a tile has to survive having
+    // its surroundings replaced.
+    if (expectedProjects > 0) {
+      console.log('\ntile terminals');
+      const target = (statusJson.projects || [])[0].name;
+
+      const opened = await win.evaluate(async (name) => {
+        await window.openAgentTerminal({
+          title: '✨ ' + name, status: 'test', cwd: '/tmp', command: 'sh',
+          args: ['-c', 'echo tile-hello; sleep 120'],
+          sessionKey: 'tile-' + name, tileProject: name
+        });
+        await new Promise((r) => setTimeout(r, 900));
+        const card = document.querySelector(`[data-terminal-host="${CSS.escape(name)}"]`);
+        return {
+          inTile: !!card?.querySelector('.tile-terminal'),
+          tabs: document.querySelectorAll('#terminal-tabs .terminal-tab').length,
+          headerButton: document.getElementById('terminals-button').style.display,
+          modalOpen: document.getElementById('build-terminal-modal').classList.contains('show')
+        };
+      }, target);
+      check('the agent terminal opens inside the project tile', opened.inTile,
+        JSON.stringify(opened));
+      await screenshot(win, '08-tile-terminal');
+      check('a tile session stays out of the modal and its tab bar',
+        opened.tabs === 0 && !opened.modalOpen && opened.headerButton === 'none',
+        JSON.stringify(opened));
+
+      // The real trap: a poll rebuilds #projects-grid.innerHTML underneath it.
+      const survived = await win.evaluate(async (name) => {
+        const before = document.querySelector('.tile-terminal .xterm-screen');
+        window.renderProjects();
+        await new Promise((r) => setTimeout(r, 400));
+        const host = document.querySelector(`[data-terminal-host="${CSS.escape(name)}"]`);
+        const after = host?.querySelector('.tile-terminal .xterm-screen');
+        return {
+          stillThere: !!after,
+          // Same DOM node, not a rebuilt one — a re-created terminal would have
+          // lost its scrollback and its pty.
+          sameNode: !!before && before === after,
+          sessions: window.__terminalCount()
+        };
+      }, target);
+      check('a tile terminal survives the grid being re-rendered',
+        survived.stillThere && survived.sameNode && survived.sessions === 1,
+        JSON.stringify(survived));
+
+      // Collapsing must clip, not resize: refitting to the sliver would tell
+      // the pty it has two rows and wreck whatever the agent is drawing.
+      const collapsed = await win.evaluate(async (name) => {
+        const rowsBefore = window.__terminalRows();
+        window.toggleTileTerminal(name);
+        await new Promise((r) => setTimeout(r, 400));
+        const wrap = document.querySelector('.tile-terminal');
+        const viewport = wrap.querySelector('.tile-terminal-viewport');
+        const pane = wrap.querySelector('.terminal-pane');
+        return {
+          collapsed: wrap.classList.contains('collapsed'),
+          rowsBefore,
+          rowsAfter: window.__terminalRows(),
+          viewportHeight: viewport.getBoundingClientRect().height,
+          paneHeight: pane.getBoundingClientRect().height,
+          barVisible: wrap.querySelector('.tile-terminal-bar').getBoundingClientRect().height > 0
+        };
+      }, target);
+      check('collapsing leaves a sliver rather than hiding the terminal',
+        collapsed.collapsed && collapsed.viewportHeight > 20 && collapsed.viewportHeight < 100,
+        JSON.stringify(collapsed));
+      check('the collapsed sliver shows the BOTTOM of the output',
+        collapsed.paneHeight > collapsed.viewportHeight + 100,
+        `pane ${collapsed.paneHeight} clipped to ${collapsed.viewportHeight}`);
+      check('collapsing does not resize the pty',
+        collapsed.rowsAfter === collapsed.rowsBefore,
+        `${collapsed.rowsBefore} -> ${collapsed.rowsAfter} rows`);
+      check('the bar stays readable while collapsed', collapsed.barVisible);
+
+      // Clipping to the pane's bottom edge is not enough: a session that has
+      // printed two lines into a 24-row terminal has 22 blank rows down there,
+      // and the sliver came up empty. It has to follow the cursor.
+      const sliverContent = await win.evaluate(async () => {
+        const wrap = document.querySelector('.tile-terminal');
+        const viewport = wrap.querySelector('.tile-terminal-viewport');
+        const pane = wrap.querySelector('.terminal-pane');
+        const vp = viewport.getBoundingClientRect();
+
+        // Which rendered rows actually fall inside the sliver's window.
+        const visibleRows = [...pane.querySelectorAll('.xterm-rows > div')]
+          .filter((row) => {
+            const r = row.getBoundingClientRect();
+            return r.bottom > vp.top + 1 && r.top < vp.bottom - 1;
+          })
+          .map((row) => row.textContent.trim())
+          .filter(Boolean);
+
+        return { visibleRows, marginTop: pane.style.marginTop };
+      });
+      check('the sliver shows the most recent output, not blank rows',
+        sliverContent.visibleRows.some((r) => r.includes('tile-hello')),
+        JSON.stringify(sliverContent));
+
+      await screenshot(win, '09-tile-terminal-collapsed');
+
+      // A filter must never hide a project whose agent is still running.
+      const pinned = await win.evaluate(async (name) => {
+        window.toggleEmojiFilter('⛔');
+        await new Promise((r) => setTimeout(r, 300));
+        const host = document.querySelector(`[data-terminal-host="${CSS.escape(name)}"]`);
+        const still = !!host?.querySelector('.tile-terminal');
+        window.resetFilters();
+        await new Promise((r) => setTimeout(r, 300));
+        return still;
+      }, target);
+      check('a filter cannot hide a project with a live agent session', pinned);
+
+      const closed = await win.evaluate(async (name) => {
+        window.closeTileTerminal(name);
+        await new Promise((r) => setTimeout(r, 600));
+        return {
+          sessions: window.__terminalCount(),
+          leftovers: document.querySelectorAll('.tile-terminal').length
+        };
+      }, target);
+      check('closing a tile session removes it and its chrome',
+        closed.sessions === 0 && closed.leftovers === 0, JSON.stringify(closed));
+    }
 
     // --- Installers -----------------------------------------------------
     //

@@ -73,6 +73,8 @@ document.addEventListener('DOMContentLoaded', (): void => {
     // renders the picker.
     loadTheme();
     renderThemePicker();
+    loadFilterState();
+    loadLayoutState();
 
     // Show initial loading screen
     showInitialLoading();
@@ -300,12 +302,14 @@ async function loadProjects(): Promise<void> {
             projects = [];
             sharedServices = {};
             renderProjects();
+            renderFilterBar();   // counts derive from the project list
             return;
         }
 
         parseProjectStatusJSON(result.stdout);
         await hydrateProjectMetadata();
         renderProjects();
+        renderFilterBar();   // counts derive from the project list
     } catch (error) {
         console.error('Failed to load projects:', error);
         // Only show error if it's a real failure, not just empty state
@@ -445,10 +449,224 @@ function parseProjectStatus(statusOutput: string): void {
     parseProjectStatusJSON(statusOutput);
 }
 
+
+// ---------------------------------------------------------------------------
+// PROJECT LAYOUT
+//
+// How wide the tiles are, and where "Modify with AI" opens. Both are per-machine
+// preferences rather than project state, so they live in localStorage next to
+// the filters.
+// ---------------------------------------------------------------------------
+type TerminalHost = 'tile' | 'system';
+
+const LAYOUT_STORAGE_KEY = 'podium-gui-layout';
+
+let projectsPerRow = 2;
+let terminalHost: TerminalHost = 'tile';
+
+function loadLayoutState(): void {
+    try {
+        const saved = JSON.parse(localStorage.getItem(LAYOUT_STORAGE_KEY) || '{}');
+        const perRow = Number(saved.perRow);
+        // Clamp rather than trust: a hand-edited 12 would render unreadable
+        // slivers with no way back except editing storage again.
+        if (perRow >= 1 && perRow <= 4) projectsPerRow = Math.floor(perRow);
+        if (saved.terminalHost === 'system' || saved.terminalHost === 'tile') {
+            terminalHost = saved.terminalHost;
+        }
+    } catch {
+        // Unparseable state falls back to the defaults.
+    }
+    applyLayout();
+}
+
+function saveLayoutState(): void {
+    try {
+        localStorage.setItem(LAYOUT_STORAGE_KEY,
+            JSON.stringify({ perRow: projectsPerRow, terminalHost }));
+    } catch {
+        // Storage full or blocked; the setting just will not persist.
+    }
+}
+
+// The width lives in a data attribute rather than an inline style so the
+// narrow-window media queries can still override it — an inline style would
+// win over them and leave four unreadable columns on a small screen.
+function applyLayout(): void {
+    document.getElementById('projects-grid')?.setAttribute('data-per-row', String(projectsPerRow));
+
+    const perRow = document.getElementById('layout-per-row') as HTMLSelectElement;
+    if (perRow) perRow.value = String(projectsPerRow);
+
+    const host = document.getElementById('layout-terminal-host') as HTMLSelectElement;
+    if (host) host.value = terminalHost;
+
+    const help = document.getElementById('layout-terminal-host-help');
+    if (help) {
+        help.textContent = terminalHost === 'system'
+            ? 'Podium opens your terminal emulator and hands the session to it.'
+            : 'The session appears in the project\'s own tile, and can be collapsed to a sliver.';
+    }
+}
+
+function setProjectsPerRow(value: string): void {
+    const n = Number(value);
+    if (!(n >= 1 && n <= 4)) return;
+    projectsPerRow = Math.floor(n);
+    saveLayoutState();
+    applyLayout();
+    // Tile terminals are sized in pixels by their container; a width change
+    // means the pty's column count is now wrong.
+    refitTileTerminals();
+}
+
+function setTerminalHost(value: string): void {
+    if (value !== 'tile' && value !== 'system') return;
+    terminalHost = value;
+    saveLayoutState();
+    applyLayout();
+}
+
+// ---------------------------------------------------------------------------
+// PROJECT FILTERING AND SORTING
+//
+// State lives here rather than being read from the DOM at render time, so the
+// controls and the grid cannot disagree. Persisted, because a filter you have
+// to reapply on every launch is worse than no filter.
+// ---------------------------------------------------------------------------
+type RunFilter = 'all' | 'running' | 'stopped';
+type SortKey = 'name' | 'newest' | 'last-on';
+
+const FILTER_STORAGE_KEY = 'podium-gui-filters';
+
+let runFilter: RunFilter = 'all';
+let sortKey: SortKey = 'name';
+let emojiFilter: Set<string> = new Set();
+
+function loadFilterState(): void {
+    try {
+        const raw = localStorage.getItem(FILTER_STORAGE_KEY);
+        if (!raw) return;
+        const v = JSON.parse(raw);
+        if (['all', 'running', 'stopped'].includes(v.runFilter)) runFilter = v.runFilter;
+        if (['name', 'newest', 'last-on'].includes(v.sortKey)) sortKey = v.sortKey;
+        if (Array.isArray(v.emoji)) emojiFilter = new Set(v.emoji);
+    } catch { /* corrupt or unavailable; defaults are fine */ }
+}
+
+function saveFilterState(): void {
+    try {
+        localStorage.setItem(FILTER_STORAGE_KEY, JSON.stringify({
+            runFilter, sortKey, emoji: [...emojiFilter]
+        }));
+    } catch { /* private mode */ }
+}
+
+// The emoji shown on a tile, resolved the same way renderProjects does it —
+// otherwise the filter counts a different emoji than the user can see.
+function projectEmoji(p: Project): string {
+    const m = withMetadata(p);
+    return m.emoji || (m.type === 'laravel' ? '🎯' : m.type === 'wordpress' ? '📝' : '🐘');
+}
+
+function visibleProjects(): Project[] {
+    let list = projects.slice();
+
+    // A project running an agent in its tile is never filtered out. Hiding it
+    // would leave a live session with no window and no way to reach it — the
+    // filter would look like it had killed the agent.
+    const pinned = (p: Project) => hasTileTerminal(p.name);
+
+    if (runFilter === 'running') list = list.filter(p => p.dockerRunning || pinned(p));
+    else if (runFilter === 'stopped') list = list.filter(p => !p.dockerRunning || pinned(p));
+
+    if (emojiFilter.size) list = list.filter(p => emojiFilter.has(projectEmoji(p)) || pinned(p));
+
+    const nameOf = (p: Project) => (withMetadata(p).display_name || p.name).toLowerCase();
+    list.sort((a, b) => {
+        if (sortKey === 'name') return nameOf(a).localeCompare(nameOf(b));
+        // `newest` and `last-on` both fall back to name when the underlying
+        // value is missing, so the order stays stable and predictable rather
+        // than arbitrary. last_on is not written by the CLI yet.
+        const av = (a as any)[sortKey === 'newest' ? 'created_at' : 'last_on'] || '';
+        const bv = (b as any)[sortKey === 'newest' ? 'created_at' : 'last_on'] || '';
+        if (av && bv) return bv.localeCompare(av);
+        if (av) return -1;
+        if (bv) return 1;
+        return nameOf(a).localeCompare(nameOf(b));
+    });
+    return list;
+}
+
+function renderFilterBar(): void {
+    const host = document.getElementById('project-filters');
+    if (!host) return;
+
+    const counts = new Map<string, number>();
+    for (const p of projects) {
+        const e = projectEmoji(p);
+        counts.set(e, (counts.get(e) || 0) + 1);
+    }
+    const emojiButtons = [...counts.entries()]
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+        .map(([e, n]) => `<button class="emoji-chip${emojiFilter.has(e) ? ' active' : ''}"
+              data-testid="emoji-filter-${e}" onclick="toggleEmojiFilter('${e}')"
+              title="${n} project${n === 1 ? '' : 's'}">${e}<span class="emoji-count">${n}</span></button>`)
+        .join('');
+
+    const running = projects.filter(p => p.dockerRunning).length;
+    host.innerHTML = `
+        <div class="filter-group">
+            <select data-testid="filter-run" onchange="setRunFilter(this.value)">
+                <option value="all"${runFilter === 'all' ? ' selected' : ''}>All (${projects.length})</option>
+                <option value="running"${runFilter === 'running' ? ' selected' : ''}>Running (${running})</option>
+                <option value="stopped"${runFilter === 'stopped' ? ' selected' : ''}>Stopped (${projects.length - running})</option>
+            </select>
+            <select data-testid="filter-sort" onchange="setSortKey(this.value)">
+                <option value="name"${sortKey === 'name' ? ' selected' : ''}>Sort: Name</option>
+                <option value="newest"${sortKey === 'newest' ? ' selected' : ''}>Sort: Newest</option>
+                <option value="last-on"${sortKey === 'last-on' ? ' selected' : ''}>Sort: Last on</option>
+            </select>
+        </div>
+        <div class="emoji-filters" data-testid="emoji-filters">${emojiButtons}</div>
+        ${emojiFilter.size ? `<button class="btn btn-secondary btn-small" data-testid="clear-emoji-filter" onclick="clearEmojiFilter()">Clear emoji</button>` : ''}
+    `;
+}
+
+function resetFilters(): void {
+    runFilter = 'all'; sortKey = 'name'; emojiFilter.clear();
+    saveFilterState(); renderProjects(); renderFilterBar();
+}
+
+function setRunFilter(v: string): void {
+    runFilter = (['all', 'running', 'stopped'].includes(v) ? v : 'all') as RunFilter;
+    saveFilterState(); renderProjects(); renderFilterBar();
+}
+
+function setSortKey(v: string): void {
+    sortKey = (['name', 'newest', 'last-on'].includes(v) ? v : 'name') as SortKey;
+    saveFilterState(); renderProjects(); renderFilterBar();
+}
+
+function toggleEmojiFilter(e: string): void {
+    emojiFilter.has(e) ? emojiFilter.delete(e) : emojiFilter.add(e);
+    saveFilterState(); renderProjects(); renderFilterBar();
+}
+
+function clearEmojiFilter(): void {
+    emojiFilter.clear();
+    saveFilterState(); renderProjects(); renderFilterBar();
+}
+
 function renderProjects(): void {
     const grid: HTMLElement | null = document.getElementById('projects-grid');
     if (!grid) return;
-    
+
+    // The grid is rebuilt wholesale on every poll. Any terminal living in a
+    // tile has to be lifted out first or innerHTML destroys a running xterm
+    // and its pty along with the markup around it.
+    detachTileTerminals();
+
     if (projects.length === 0) {
         grid.innerHTML = `
             <div class="project-card placeholder">
@@ -458,10 +676,27 @@ function renderProjects(): void {
                 <button class="btn btn-primary" onclick="showCreateProject()">Create Project</button>
             </div>
         `;
+        reattachTileTerminals();
         return;
     }
 
-    grid.innerHTML = projects.map((parsed: Project) => {
+    const shown = visibleProjects();
+    if (shown.length === 0) {
+        // Distinguish "no projects" from "your filter hid them all" — otherwise
+        // a filter looks like data loss.
+        grid.innerHTML = `
+            <div class="project-card placeholder" data-testid="no-matches">
+                <div class="project-icon">🔍</div>
+                <h3>No projects match</h3>
+                <p>${projects.length} project${projects.length === 1 ? '' : 's'} hidden by the current filter.</p>
+                <button class="btn btn-primary" onclick="resetFilters()">Show all</button>
+            </div>
+        `;
+        reattachTileTerminals();
+        return;
+    }
+
+    grid.innerHTML = shown.map((parsed: Project) => {
         // Apply cached display metadata here rather than trusting the parsed
         // object — see projectMetadata for why.
         const project = withMetadata(parsed);
@@ -507,10 +742,16 @@ function renderProjects(): void {
                         <button class="btn btn-secondary btn-sm" onclick="editProject('${project.name}')">Edit</button>
                         <button class="btn btn-danger btn-sm" onclick="showRemoveProjectModal('${project.name}')">Trash</button>
                     </div>
+                    <!-- Where an agent session lands. Empty until one is open;
+                         the pane is moved in rather than rebuilt, because
+                         re-rendering it would kill the terminal. -->
+                    <div class="tile-terminal-host" data-terminal-host="${escapeHtml(project.name)}"></div>
                 </div>
             </div>
         `;
     }).join('');
+
+    reattachTileTerminals();
 }
 
 
@@ -736,8 +977,55 @@ function openUrl(url: string): void {
 
 async function showCreateProject(): Promise<void> {
     showModal('new-project-modal');
+    showProjectKindStep();
+}
+
+// ---------------------------------------------------------------------------
+// New Project, step one: framework or ready-made app
+//
+// The header used to carry a separate Install App button. Both flows create a
+// project, so the question belongs at the front of one flow rather than in two
+// competing buttons the user has to tell apart before clicking.
+// ---------------------------------------------------------------------------
+
+function showProjectKindStep(): void {
+    const choice = document.getElementById('new-project-choice');
+    const form = document.getElementById('new-project-form');
+    const footer = document.getElementById('new-project-footer');
+
+    if (choice) choice.style.display = '';
+    if (form) form.style.display = 'none';
+    // The footer's Create button acts on the form; showing it beside the
+    // choice would offer to submit a form that is not on screen.
+    if (footer) footer.style.display = 'none';
+}
+
+async function chooseProjectKind(kind: 'framework' | 'app'): Promise<void> {
+    if (kind === 'app') {
+        // Unchanged installer flow — only the way into it has moved.
+        closeModal();
+        await showInstallApp();
+        return;
+    }
+
+    const choice = document.getElementById('new-project-choice');
+    const form = document.getElementById('new-project-form');
+    const footer = document.getElementById('new-project-footer');
+
+    if (choice) choice.style.display = 'none';
+    if (form) form.style.display = '';
+    if (footer) footer.style.display = '';
+
     // Built from the CLI's catalogue on first open, then cached.
     await loadFrameworkCatalog();
+}
+
+// Back out of the install picker to the choice, rather than closing outright
+// and making the user find New Project again.
+function backToProjectKind(): void {
+    closeModal();
+    showModal('new-project-modal');
+    showProjectKindStep();
 }
 
 
@@ -1171,9 +1459,9 @@ async function createNewProject(): Promise<void> {
     console.log('DEBUG: createNewProject called');
 
     showModal('new-project-modal');
-    // The header button and the empty-state button are separate entry points;
-    // both need the catalogue built before the form is usable.
-    await loadFrameworkCatalog();
+    // The catalogue is loaded when the framework path is chosen, not here —
+    // someone heading for the app installer should not wait on it.
+    showProjectKindStep();
 }
 
 // Make this function available globally immediately
@@ -1388,50 +1676,65 @@ const AI_AGENT_RULES: Record<string, {
     modelRequired: boolean;
     keyRequired: boolean;
     apiBase: boolean;
+    // True when talking to the vendor is the normal case, so the endpoint is
+    // an advanced option rather than a field waiting to be filled in.
+    apiBaseAdvanced?: boolean;
     apiBaseNote: string;
+    // Which known-good endpoints make sense for this agent's wire format.
+    endpoints?: string[];
     minNode?: number;
 }> = {
-    claude: { modelRequired: false, keyRequired: false, apiBase: true,
+    claude: { modelRequired: false, keyRequired: false, apiBase: true, apiBaseAdvanced: true,
               apiBaseNote: 'Must be Anthropic-compatible — a LiteLLM proxy for local models, not a raw Ollama URL.' },
     codex:  { modelRequired: false, keyRequired: false, apiBase: true,
-              apiBaseNote: 'OpenAI-compatible endpoint.' },
+              apiBaseNote: 'OpenAI-compatible endpoint.', endpoints: ['ollama', 'lmstudio', 'openrouter'] },
     gemini: { modelRequired: false, keyRequired: false, apiBase: false,
               apiBaseNote: '' },
     qwen:   { modelRequired: true,  keyRequired: false, apiBase: true,
-              apiBaseNote: 'OpenAI-compatible endpoint.', minNode: 22 },
+              apiBaseNote: 'OpenAI-compatible endpoint.',
+              endpoints: ['ollama', 'lmstudio', 'openrouter'], minNode: 22 },
     aider:  { modelRequired: true,  keyRequired: true,  apiBase: true,
-              apiBaseNote: 'OpenAI-compatible endpoint.' }
+              apiBaseNote: 'OpenAI-compatible endpoint.', endpoints: ['ollama', 'lmstudio', 'openrouter'] }
 };
 
-// Known-good configurations. A dropdown of these beats a blank URL field —
-// running against a cheap or local model is most of the point of this panel.
-const AI_PRESETS: Record<string, {
-    agent: string; apiBase: string; apiKey: string; model: string; clearKey: boolean;
-}> = {
-    hosted:     { agent: 'claude', apiBase: '', apiKey: '', model: '', clearKey: true },
-    ollama:     { agent: 'qwen',   apiBase: 'http://localhost:11434/v1', apiKey: 'ollama', model: '', clearKey: false },
-    openrouter: { agent: 'qwen',   apiBase: 'https://openrouter.ai/api/v1', apiKey: '', model: 'qwen/qwen3-coder-next', clearKey: false },
-    lmstudio:   { agent: 'codex',  apiBase: 'http://localhost:1234/v1', apiKey: 'local', model: '', clearKey: false }
+// Endpoints worth not having to remember. These fill the URL field and, where
+// the service wants a placeholder token rather than a real key, the key field.
+// They deliberately do NOT touch the agent: the previous Preset dropdown did,
+// which meant picking a model host silently reassigned the agent above it.
+const AI_ENDPOINTS: Record<string, { label: string; url: string; key?: string }> = {
+    ollama:     { label: 'Ollama',     url: 'http://localhost:11434/v1', key: 'ollama' },
+    lmstudio:   { label: 'LM Studio',  url: 'http://localhost:1234/v1',  key: 'local' },
+    openrouter: { label: 'OpenRouter', url: 'https://openrouter.ai/api/v1' }
 };
 
 function isLocalEndpoint(url: string): boolean {
     return /localhost|127\.0\.0\.1|0\.0\.0\.0/.test(url || '');
 }
 
-async function applyAiPreset(): Promise<void> {
-    const key = (document.getElementById('ai-preset') as HTMLSelectElement)?.value || '';
-    const preset = AI_PRESETS[key];
+function renderEndpointPresets(agent: string): void {
+    const host = document.getElementById('ai-endpoint-presets');
+    if (!host) return;
+
+    const keys = (AI_AGENT_RULES[agent]?.endpoints || []).filter((k) => AI_ENDPOINTS[k]);
+    host.innerHTML = keys.map((k) => {
+        const e = AI_ENDPOINTS[k]!;
+        return `<button type="button" class="endpoint-chip" data-testid="endpoint-${k}"
+                        onclick="applyEndpoint('${k}')" title="${escapeHtml(e.url)}">${escapeHtml(e.label)}</button>`;
+    }).join('');
+    host.style.display = keys.length ? 'flex' : 'none';
+}
+
+async function applyEndpoint(key: string): Promise<void> {
+    const preset = AI_ENDPOINTS[key];
     if (!preset) return;
 
-    (document.getElementById('ai-agent') as HTMLSelectElement).value = preset.agent;
-    (document.getElementById('ai-api-base') as HTMLInputElement).value = preset.apiBase;
-    (document.getElementById('ai-api-key') as HTMLInputElement).value = preset.apiKey;
-    (document.getElementById('ai-model') as HTMLInputElement).value = preset.model;
+    (document.getElementById('ai-api-base') as HTMLInputElement).value = preset.url;
 
-    // "Default (hosted)" has to actively CLEAR the stored key and endpoint —
-    // omitting the flags would leave the previous local settings in place.
-    const clear = document.getElementById('ai-clear-key') as HTMLInputElement;
-    if (clear) clear.checked = preset.clearKey;
+    // Only fill a key the service treats as a placeholder, and only over a
+    // blank field — overwriting a real key the user typed would be worse than
+    // leaving them to paste it again.
+    const keyInput = document.getElementById('ai-api-key') as HTMLInputElement;
+    if (preset.key && keyInput && !keyInput.value) keyInput.value = preset.key;
 
     await onAiAgentChange();
 }
@@ -1488,20 +1791,6 @@ async function loadAiSettingsForm(): Promise<void> {
         qwenOption.hidden = !cliCaps.qwen;
         qwenOption.disabled = !cliCaps.qwen;
     }
-    // The presets that depend on qwen go with it.
-    for (const preset of ['ollama', 'openrouter']) {
-        const option = document.querySelector(`#ai-preset option[value="${preset}"]`) as HTMLOptionElement;
-        if (option) {
-            option.hidden = !cliCaps.qwen;
-            option.disabled = !cliCaps.qwen;
-        }
-    }
-    const presetHelp = document.getElementById('ai-preset-help');
-    if (presetHelp) {
-        presetHelp.textContent = cliCaps.qwen
-            ? 'Fills the fields below; you can still edit them.'
-            : 'Local-model presets need a newer Podium CLI — run `podium update`.';
-    }
     const output = document.getElementById('ai-settings-output');
     const wrap = document.getElementById('ai-settings-output-wrap');
     if (output) output.textContent = '';
@@ -1527,9 +1816,21 @@ async function loadAiSettingsForm(): Promise<void> {
     if (clearGroup) clearGroup.style.display = current.has_api_key ? 'block' : 'none';
     if (clearBox) clearBox.checked = false;
 
-    (document.getElementById('ai-preset') as HTMLSelectElement).value = '';
+    // Reopening Settings starts from the stored configuration, so an endpoint
+    // revealed by hand last time must fold away again if nothing was saved.
+    apiBaseRevealed = false;
 
     await onAiAgentChange();
+}
+
+// Set when the user asks to see an endpoint field that is folded away by
+// default; reset each time the form reloads from the stored configuration.
+let apiBaseRevealed = false;
+
+async function revealApiBase(): Promise<void> {
+    apiBaseRevealed = true;
+    await onAiAgentChange();
+    (document.getElementById('ai-api-base') as HTMLInputElement)?.focus();
 }
 
 async function onAiAgentChange(): Promise<void> {
@@ -1548,11 +1849,29 @@ async function onAiAgentChange(): Promise<void> {
             : 'Create with AI and Modify with AI stay disabled without an agent.';
     }
 
+    // Claude Code talks to Anthropic unless told otherwise, so its endpoint sits
+    // behind a disclosure. An endpoint that is already set always shows — hiding
+    // a value that is in force would make the panel lie about the configuration.
+    const storedBase = (document.getElementById('ai-api-base') as HTMLInputElement)?.value || '';
+    const foldAway = !!rules?.apiBaseAdvanced && !storedBase && !apiBaseRevealed;
+
     const baseGroup = document.getElementById('ai-api-base-group');
-    if (baseGroup) baseGroup.style.display = rules?.apiBase ? 'block' : 'none';
+    if (baseGroup) baseGroup.style.display = rules?.apiBase && !foldAway ? 'block' : 'none';
+
+    const baseAdvanced = document.getElementById('ai-api-base-advanced');
+    if (baseAdvanced) baseAdvanced.style.display = rules?.apiBase && foldAway ? 'block' : 'none';
+
+    const advancedHelp = document.getElementById('ai-api-base-advanced-help');
+    if (advancedHelp) {
+        advancedHelp.textContent = agent === 'claude'
+            ? 'Claude Code signs in to Anthropic on its own. Only needed if you are proxying it.'
+            : 'Only needed if you are pointing this agent somewhere other than its default.';
+    }
 
     const baseHelp = document.getElementById('ai-api-base-help');
     if (baseHelp) baseHelp.textContent = rules?.apiBaseNote || '';
+
+    renderEndpointPresets(agent);
 
     const modelReq = document.getElementById('ai-model-req');
     if (modelReq) modelReq.textContent = rules?.modelRequired ? '(required)' : '(optional)';
@@ -1994,6 +2313,12 @@ interface TerminalSession {
     pane: HTMLElement;
     exited: boolean;
     status: string;
+    // Where this session is shown. Tile sessions live in a project's card and
+    // stay out of the modal's tab bar entirely.
+    host: 'modal' | 'tile';
+    project?: string | undefined;
+    wrapper?: HTMLElement | undefined;
+    collapsed?: boolean | undefined;
 }
 
 // Sessions outlive the window: hiding the terminal modal leaves them running,
@@ -2004,11 +2329,18 @@ const terminalSessions = new Map<string, TerminalSession>();
 let activeTerminalId = '';
 let terminalResizeHandler: (() => void) | null = null;
 
+// The modal only ever knows about its own sessions. Tile sessions are visible
+// in their project's card, so putting them in the tab bar too would give one
+// terminal two homes and two × buttons that mean different things.
+function modalSessions(): TerminalSession[] {
+    return [...terminalSessions.values()].filter((s) => s.host === 'modal');
+}
+
 function updateTerminalsButton(): void {
     const button = document.getElementById('terminals-button');
     if (!button) return;
 
-    const live = terminalSessions.size;
+    const live = modalSessions().length;
     button.style.display = live > 0 ? '' : 'none';
     button.textContent = live > 1 ? `🖥️ Terminals (${live})` : '🖥️ Terminals';
 }
@@ -2017,7 +2349,7 @@ function renderTerminalTabs(): void {
     const bar = document.getElementById('terminal-tabs');
     if (!bar) return;
 
-    bar.innerHTML = [...terminalSessions.values()].map((session) => `
+    bar.innerHTML = modalSessions().map((session) => `
         <div class="terminal-tab${session.id === activeTerminalId ? ' active' : ''}${session.exited ? ' exited' : ''}"
              onclick="activateTerminal('${session.id}')"
              data-testid="terminal-tab-${escapeHtml(session.key)}">
@@ -2027,7 +2359,7 @@ function renderTerminalTabs(): void {
         </div>
     `).join('');
 
-    bar.style.display = terminalSessions.size > 1 ? 'flex' : 'none';
+    bar.style.display = modalSessions().length > 1 ? 'flex' : 'none';
     updateTerminalsButton();
 }
 
@@ -2053,7 +2385,7 @@ function activateTerminal(id: string): void {
     if (status) status.textContent = session.status;
 
     const title = document.getElementById('build-terminal-title');
-    if (title) title.textContent = terminalSessions.size > 1 ? '🖥️ Terminals' : session.label;
+    if (title) title.textContent = modalSessions().length > 1 ? '🖥️ Terminals' : session.label;
 
     renderTerminalTabs();
 
@@ -2065,11 +2397,11 @@ function activateTerminal(id: string): void {
 }
 
 function showTerminals(): void {
-    if (terminalSessions.size === 0) return;
+    const open = modalSessions();
+    if (open.length === 0) return;
     showModal('build-terminal-modal');
-    activateTerminal(activeTerminalId && terminalSessions.has(activeTerminalId)
-        ? activeTerminalId
-        : [...terminalSessions.keys()][0]!);
+    const active = terminalSessions.get(activeTerminalId);
+    activateTerminal(active && active.host === 'modal' ? activeTerminalId : open[0]!.id);
 }
 
 // Closing the window does NOT end the sessions — that is what the tab × is for.
@@ -2085,18 +2417,31 @@ function killTerminal(id: string): void {
 
     ipcRenderer.invoke('pty-kill', id);
     try { session.term.dispose(); } catch (error) { /* already gone */ }
-    session.pane.remove();
+    // Tile sessions own a wrapper around the pane; removing only the pane
+    // would leave an empty bar sitting in the card.
+    (session.wrapper || session.pane).remove();
     terminalSessions.delete(id);
 
-    if (terminalSessions.size === 0) {
+    if (terminalSessions.size === 0 && terminalResizeHandler) {
+        window.removeEventListener('resize', terminalResizeHandler);
+        terminalResizeHandler = null;
+    }
+
+    if (session.host === 'tile') {
+        updateTerminalsButton();
+        loadProjects();
+        return;
+    }
+
+    const remaining = modalSessions();
+    if (remaining.length === 0) {
         activeTerminalId = '';
-        if (terminalResizeHandler) {
-            window.removeEventListener('resize', terminalResizeHandler);
-            terminalResizeHandler = null;
-        }
+        // Clear the bar too. Leaving the last tab's markup behind meant a
+        // hidden-but-present tab for a session that no longer exists.
+        renderTerminalTabs();
         closeModal();
     } else if (activeTerminalId === id) {
-        activateTerminal([...terminalSessions.keys()][0]!);
+        activateTerminal(remaining[0]!.id);
     } else {
         renderTerminalTabs();
     }
@@ -2109,6 +2454,169 @@ function closeActiveTerminal(): void {
     if (activeTerminalId) killTerminal(activeTerminalId);
 }
 
+// ---------------------------------------------------------------------------
+// Terminals hosted inside a project tile
+//
+// The grid is rebuilt from scratch on every status poll, so a terminal living
+// in it has to survive having its surroundings replaced. The pane is never
+// re-created: it is parked in a detached holder before the rebuild and moved
+// back into the new markup afterwards, which xterm tolerates fine as long as
+// it gets a fit() once it is back on screen.
+// ---------------------------------------------------------------------------
+
+function tileSessionFor(project: string): TerminalSession | undefined {
+    return [...terminalSessions.values()].find((s) => s.host === 'tile' && s.project === project);
+}
+
+function hasTileTerminal(project: string): boolean {
+    return tileSessionFor(project) !== undefined;
+}
+
+function tileHolder(): HTMLElement {
+    let holder = document.getElementById('tile-terminal-holder');
+    if (!holder) {
+        holder = document.createElement('div');
+        holder.id = 'tile-terminal-holder';
+        holder.style.display = 'none';
+        document.body.appendChild(holder);
+    }
+    return holder;
+}
+
+function detachTileTerminals(): void {
+    const holder = tileHolder();
+    for (const session of terminalSessions.values()) {
+        if (session.host === 'tile' && session.wrapper) holder.appendChild(session.wrapper);
+    }
+}
+
+function reattachTileTerminals(): void {
+    for (const session of terminalSessions.values()) {
+        if (session.host !== 'tile' || !session.wrapper || !session.project) continue;
+
+        const host = document.querySelector(`[data-terminal-host="${CSS.escape(session.project)}"]`);
+        // No tile for it this pass (the project vanished from the list): leave
+        // the pane parked rather than dropping it — the pty is still alive.
+        if (!host) continue;
+
+        host.appendChild(session.wrapper);
+    }
+    refitTileTerminals();
+}
+
+// Fit after the move, not during: a pane measured while detached reports zero
+// rows, and the pty would be resized to nothing.
+function refitTileTerminals(): void {
+    setTimeout(() => {
+        for (const session of terminalSessions.values()) {
+            if (session.host === 'tile' && !session.collapsed) fitTerminal(session);
+        }
+    }, 30);
+}
+
+function tileTerminalStatus(session: TerminalSession): void {
+    const label = session.wrapper?.querySelector('.tile-terminal-status');
+    if (label) label.textContent = session.status;
+    session.wrapper?.classList.toggle('exited', session.exited);
+}
+
+// Slide the pane so the cursor's row sits at the bottom of the sliver.
+//
+// Clipping to the pane's bottom edge is not the same thing: a session that has
+// printed three lines into a 24-row terminal has 21 blank rows at the bottom,
+// so the sliver came up empty and looked broken. What "recent output" means is
+// the line the agent is writing on, which is where the cursor is.
+function anchorSliver(session: TerminalSession): void {
+    if (!session.wrapper || !session.collapsed) return;
+
+    const rows = session.term.rows || 1;
+    const paneHeight = session.pane.getBoundingClientRect().height;
+    if (!paneHeight) return;
+
+    const rowHeight = paneHeight / rows;
+    const cursorRow = session.term.buffer?.active?.cursorY ?? rows - 1;
+    const sliver = session.wrapper.querySelector('.tile-terminal-viewport')
+        ?.getBoundingClientRect().height || 58;
+
+    // Never positive: the pane only ever moves up, never down past its own top.
+    const offset = Math.min(0, sliver - (cursorRow + 1) * rowHeight - 6);
+    session.pane.style.marginTop = `${offset}px`;
+}
+
+// Output arrives a byte at a time from a pty; re-measuring on each chunk would
+// mean layout work on every keystroke the agent prints.
+let sliverPending = false;
+function scheduleSliverAnchor(): void {
+    if (sliverPending) return;
+    sliverPending = true;
+    setTimeout(() => {
+        sliverPending = false;
+        for (const session of terminalSessions.values()) {
+            if (session.host === 'tile' && session.collapsed) anchorSliver(session);
+        }
+    }, 120);
+}
+
+function toggleTileTerminal(project: string): void {
+    const session = tileSessionFor(project);
+    if (!session || !session.wrapper) return;
+
+    session.collapsed = !session.collapsed;
+    session.wrapper.classList.toggle('collapsed', session.collapsed);
+
+    const chevron = session.wrapper.querySelector('.tile-terminal-toggle');
+    if (chevron) {
+        chevron.textContent = session.collapsed ? '▸' : '▾';
+        chevron.setAttribute('title', session.collapsed ? 'Expand this session' : 'Collapse to a sliver');
+    }
+
+    // Collapsing deliberately does NOT refit. The pane keeps its pixel height
+    // and is clipped, so the pty's rows never change — refitting to the sliver
+    // would resize the agent's display to two lines and wreck its output.
+    if (session.collapsed) {
+        anchorSliver(session);
+    } else {
+        session.pane.style.marginTop = '';
+        setTimeout(() => fitTerminal(session), 30);
+    }
+}
+
+function closeTileTerminal(project: string): void {
+    const session = tileSessionFor(project);
+    if (session) killTerminal(session.id);
+}
+
+// Build the chrome around a tile-hosted pane: a bar that names the session,
+// shows its status, collapses it, and ends it.
+function buildTileWrapper(session: TerminalSession, project: string): HTMLElement {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'tile-terminal';
+    wrapper.dataset.testid = `tile-terminal-${project}`;
+
+    const bar = document.createElement('div');
+    bar.className = 'tile-terminal-bar';
+    bar.innerHTML = `
+        <span class="tile-terminal-label">${escapeHtml(session.label)}</span>
+        <span class="tile-terminal-status">${escapeHtml(session.status)}</span>
+        <button class="tile-terminal-toggle" title="Collapse to a sliver"
+                data-testid="tile-terminal-toggle-${escapeHtml(project)}"
+                onclick="toggleTileTerminal('${escapeHtml(project)}')">▾</button>
+        <button class="tile-terminal-close" title="End this session"
+                data-testid="tile-terminal-close-${escapeHtml(project)}"
+                onclick="closeTileTerminal('${escapeHtml(project)}')">&times;</button>
+    `;
+
+    // The pane sits inside its own clipping viewport so collapsing can pull it
+    // up without painting over the bar above it.
+    const viewport = document.createElement('div');
+    viewport.className = 'tile-terminal-viewport';
+    viewport.appendChild(session.pane);
+
+    wrapper.appendChild(bar);
+    wrapper.appendChild(viewport);
+    return wrapper;
+}
+
 interface AgentTerminalOptions {
     title: string;
     status: string;
@@ -2118,6 +2626,8 @@ interface AgentTerminalOptions {
     sessionKey: string;
     /** Shown if the pty cannot start, so the user can run it themselves. */
     fallbackHint?: string;
+    /** Which project's tile hosts this session. Omitted means the modal. */
+    tileProject?: string;
 }
 
 // One embedded-terminal implementation for both agent entry points: the build
@@ -2126,8 +2636,9 @@ async function openAgentTerminal(options: AgentTerminalOptions): Promise<void> {
     const { Terminal } = require('@xterm/xterm');
     const { FitAddon } = require('@xterm/addon-fit');
 
+    const inTile = !!options.tileProject;
     const panes = document.getElementById('terminal-panes');
-    if (!panes) return;
+    if (!panes && !inTile) return;
 
     closeModal();
 
@@ -2135,6 +2646,14 @@ async function openAgentTerminal(options: AgentTerminalOptions): Promise<void> {
     // second agent in the same directory.
     const existing = [...terminalSessions.values()].find((s) => s.key === options.sessionKey && !s.exited);
     if (existing) {
+        if (existing.host === 'tile') {
+            // Already in its tile. Expand it if it was collapsed and scroll to
+            // it, rather than silently doing nothing to a button press.
+            if (existing.collapsed) toggleTileTerminal(existing.project!);
+            existing.wrapper?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            existing.term.focus();
+            return;
+        }
         showModal('build-terminal-modal');
         activateTerminal(existing.id);
         return;
@@ -2144,7 +2663,7 @@ async function openAgentTerminal(options: AgentTerminalOptions): Promise<void> {
     const pane = document.createElement('div');
     pane.className = 'terminal-pane';
     pane.dataset.sessionId = id;
-    panes.appendChild(pane);
+    if (!inTile) panes!.appendChild(pane);
 
     const term = new Terminal({
         fontSize: 13,
@@ -2154,13 +2673,26 @@ async function openAgentTerminal(options: AgentTerminalOptions): Promise<void> {
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
-    term.open(pane);
 
     const session: TerminalSession = {
         id, key: options.sessionKey, label: options.title,
-        term, fit, pane, exited: false, status: options.status
+        term, fit, pane, exited: false, status: options.status,
+        host: inTile ? 'tile' : 'modal',
+        project: options.tileProject,
+        collapsed: false
     };
     terminalSessions.set(id, session);
+
+    // The pane has to be in the document before xterm measures it, or the first
+    // fit reports zero rows and the pty starts sized for nothing.
+    if (inTile) {
+        session.wrapper = buildTileWrapper(session, options.tileProject!);
+        const host = document.querySelector(`[data-terminal-host="${CSS.escape(options.tileProject!)}"]`);
+        // No tile on screen for it — a filter, or a status poll mid-flight.
+        // Park it and let the next render place it, so the pty still starts.
+        (host || tileHolder()).appendChild(session.wrapper);
+    }
+    term.open(pane);
 
     term.onData((data: string) => ipcRenderer.invoke('pty-input', id, data));
 
@@ -2172,8 +2704,13 @@ async function openAgentTerminal(options: AgentTerminalOptions): Promise<void> {
         window.addEventListener('resize', terminalResizeHandler);
     }
 
-    showModal('build-terminal-modal');
-    activateTerminal(id);
+    if (inTile) {
+        session.wrapper!.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        setTimeout(() => { fitTerminal(session); term.focus(); }, 30);
+    } else {
+        showModal('build-terminal-modal');
+        activateTerminal(id);
+    }
 
     const started = await ipcRenderer.invoke('pty-start', id, options.cwd, options.command, options.args);
 
@@ -2185,7 +2722,7 @@ async function openAgentTerminal(options: AgentTerminalOptions): Promise<void> {
         term.writeln(`\x1b[36m  ${options.fallbackHint || `cd ${options.cwd} && ${options.command} ${options.args.join(' ')}`}\x1b[0m`);
         session.status = 'Embedded terminal unavailable — run the command above.';
         session.exited = true;
-        activateTerminal(id);
+        if (inTile) tileTerminalStatus(session); else activateTerminal(id);
     }
 }
 
@@ -2204,6 +2741,17 @@ async function modifyWithAI(projectName: string): Promise<void> {
     // resume takes the project name and cds itself, so run it from the projects
     // directory rather than inside the project.
     const projectsDir = await ipcRenderer.invoke('get-projects-dir');
+
+    if (terminalHost === 'system') {
+        const opened = await ipcRenderer.invoke('open-system-terminal',
+            projectsDir, 'podium', ['resume', projectName]);
+        if (!opened.ok) {
+            showError(`Could not open a terminal (${opened.error}). `
+                + `Run this yourself: cd ${projectsDir} && podium resume ${projectName}`);
+        }
+        return;
+    }
+
     await openAgentTerminal({
         title: `✨ ${projectName}`,
         status: 'Resuming the AI session in this project.',
@@ -2211,7 +2759,8 @@ async function modifyWithAI(projectName: string): Promise<void> {
         command: 'podium',
         args: ['resume', projectName],
         sessionKey: `resume-${projectName}`,
-        fallbackHint: `cd ${projectsDir} && podium resume ${projectName}`
+        fallbackHint: `cd ${projectsDir} && podium resume ${projectName}`,
+        tileProject: projectName
     });
 }
 
@@ -2231,7 +2780,13 @@ async function openBuildTerminal(projectName: string, idea: string): Promise<voi
 }
 
 ipcRenderer.on('pty-data', (_event: any, payload: { sessionId: string; data: string }) => {
-    terminalSessions.get(payload.sessionId)?.term.write(payload.data);
+    const session = terminalSessions.get(payload.sessionId);
+    if (!session) return;
+
+    session.term.write(payload.data);
+    // A collapsed sliver has to follow the output, or it freezes on whatever
+    // was on screen when it was collapsed.
+    if (session.host === 'tile' && session.collapsed) scheduleSliverAnchor();
 });
 
 ipcRenderer.on('pty-exit', (_event: any, payload: { sessionId: string; exitCode: number }) => {
@@ -2243,6 +2798,14 @@ ipcRenderer.on('pty-exit', (_event: any, payload: { sessionId: string; exitCode:
         ? 'Session finished.'
         : `Session exited with code ${payload.exitCode}.`;
     session.term.writeln(`\r\n\x1b[2m[session ended: ${payload.exitCode}]\x1b[0m`);
+
+    if (session.host === 'tile') {
+        // The bar is the only place a collapsed session can report anything,
+        // so it has to say the agent is done even when the pane is a sliver.
+        tileTerminalStatus(session);
+        loadProjects();
+        return;
+    }
 
     if (session.id === activeTerminalId) {
         const status = document.getElementById('build-terminal-status');
@@ -2308,10 +2871,13 @@ function setInstallView(view: 'picker' | 'progress'): void {
     const progress = document.getElementById('install-progress');
     const submit = document.getElementById('install-submit-btn') as HTMLButtonElement;
     const cancel = document.getElementById('install-cancel-btn') as HTMLButtonElement;
+    const back = document.getElementById('install-back-btn') as HTMLButtonElement;
 
     if (picker) picker.style.display = view === 'picker' ? 'block' : 'none';
     if (progress) progress.style.display = view === 'progress' ? 'block' : 'none';
     if (submit) submit.style.display = view === 'picker' ? '' : 'none';
+    // Going "back" mid-install would hide a running install behind a form.
+    if (back) back.style.display = view === 'picker' ? '' : 'none';
     if (cancel) cancel.textContent = view === 'picker' ? 'Cancel' : 'Close';
 }
 
@@ -3055,6 +3621,7 @@ async function submitEditProject(): Promise<void> {
 
             showSuccess(`Project "${displayName}" updated successfully!`);
             renderProjects();
+            renderFilterBar();   // counts derive from the project list
 
             // Refresh project list
             setTimeout(() => {
@@ -3081,10 +3648,21 @@ async function submitEditProject(): Promise<void> {
 (window as any).showAiSettings = showAiSettings;
 (window as any).showSettings = showSettings;
 (window as any).showDonateModal = showDonateModal;
+(window as any).setRunFilter = setRunFilter;
+(window as any).setSortKey = setSortKey;
+(window as any).toggleEmojiFilter = toggleEmojiFilter;
+(window as any).clearEmojiFilter = clearEmojiFilter;
+(window as any).resetFilters = resetFilters;
+(window as any).setProjectsPerRow = setProjectsPerRow;
+(window as any).setTerminalHost = setTerminalHost;
+(window as any).toggleTileTerminal = toggleTileTerminal;
+(window as any).closeTileTerminal = closeTileTerminal;
+(window as any).hasTileTerminal = hasTileTerminal;
 (window as any).selectTheme = selectTheme;
 (window as any).switchSettingsTab = switchSettingsTab;
 (window as any).onAiAgentChange = onAiAgentChange;
-(window as any).applyAiPreset = applyAiPreset;
+(window as any).applyEndpoint = applyEndpoint;
+(window as any).revealApiBase = revealApiBase;
 (window as any).saveAiSettings = saveAiSettings;
 (window as any).showCreateWithAI = showCreateWithAI;
 (window as any).handleClassifyIdea = handleClassifyIdea;
@@ -3108,8 +3686,15 @@ async function submitEditProject(): Promise<void> {
 (window as any).__killAllTerminals = () => {
     [...terminalSessions.keys()].forEach((id) => killTerminal(id));
 };
+// Rows of the first live session — collapsing a tile terminal must not change
+// this, and there is no way to observe it from the DOM.
+(window as any).__terminalRows = () => [...terminalSessions.values()][0]?.term?.rows ?? 0;
+(window as any).renderProjects = renderProjects;
 (window as any).modifyWithAI = modifyWithAI;
 (window as any).showInstallApp = showInstallApp;
+(window as any).showProjectKindStep = showProjectKindStep;
+(window as any).chooseProjectKind = chooseProjectKind;
+(window as any).backToProjectKind = backToProjectKind;
 (window as any).renderAppCatalog = renderAppCatalog;
 (window as any).selectApp = selectApp;
 (window as any).handleInstallApp = handleInstallApp;

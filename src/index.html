@@ -37,7 +37,6 @@
                     <button class="btn btn-warning" onclick="stopAllProjects()" data-testid="stop-all">Stop All</button>
                     <button class="btn btn-primary" onclick="createNewProject()" data-testid="new-project">+ New Project</button>
                     <button class="btn btn-primary" onclick="cloneProject()" data-testid="clone-project">📥 Clone</button>
-                    <button class="btn btn-primary" onclick="showInstallApp()" data-testid="install-app">📦 Install App</button>
                     <!-- Only appears while sessions are alive, so they can be
                          reopened after the window is hidden. -->
                     <button class="btn btn-secondary" onclick="showTerminals()" id="terminals-button"
@@ -52,6 +51,8 @@
         <main class="main-content">
             <!-- Project Dashboard -->
             <section class="dashboard">
+
+                <div id="project-filters" class="project-filters" data-testid="project-filters"></div>
 
                 <!-- Projects Grid -->
                 <div id="projects-grid" data-testid="projects-grid" class="projects-grid">
@@ -102,7 +103,30 @@
                     <button class="modal-close" onclick="closeModal()">&times;</button>
                 </div>
                 <div class="modal-body">
-                    <form id="new-project-form">
+                    <!--
+                        Step one is what kind of project this is. Scaffolding a
+                        framework and installing finished software are genuinely
+                        different flows, and asking here is what lets the header
+                        drop its separate Install App button.
+                    -->
+                    <div id="new-project-choice" class="kind-choice" data-testid="new-project-choice">
+                        <button type="button" class="kind-option" onclick="chooseProjectKind('framework')"
+                                data-testid="kind-framework">
+                            <span class="kind-icon">🧱</span>
+                            <strong>Start from a framework</strong>
+                            <span class="kind-note">Scaffold an empty project you write yourself — Laravel,
+                                WordPress, Drupal and the rest of the catalogue.</span>
+                        </button>
+                        <button type="button" class="kind-option" onclick="chooseProjectKind('app')"
+                                data-testid="kind-app">
+                            <span class="kind-icon">📦</span>
+                            <strong>Install a ready-made app</strong>
+                            <span class="kind-note">Deploy finished software someone else wrote, already
+                                configured and ready to log into.</span>
+                        </button>
+                    </div>
+
+                    <form id="new-project-form" style="display: none;">
                         <div class="form-group">
                             <label>Project Name</label>
                             <input type="text" id="project-name" data-testid="project-name" placeholder="My Awesome Project" required>
@@ -186,7 +210,8 @@
                         </div>
                     </form>
                 </div>
-                <div class="modal-footer">
+                <div class="modal-footer" id="new-project-footer" style="display: none;">
+                    <button class="btn btn-secondary" onclick="showProjectKindStep()" data-testid="new-project-back">← Back</button>
                     <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
                     <button class="btn btn-primary" onclick="handleCreateProject()" data-testid="create-project-submit">Create Project</button>
                 </div>
@@ -338,9 +363,36 @@
                     <button class="settings-tab" data-settings-tab="appearance"
                             data-testid="settings-tab-appearance"
                             onclick="switchSettingsTab('appearance')">🎨 Appearance</button>
+                    <button class="settings-tab" data-settings-tab="layout"
+                            data-testid="settings-tab-layout"
+                            onclick="switchSettingsTab('layout')">🧩 Project layout</button>
                     <button class="settings-tab" data-settings-tab="ai"
                             data-testid="settings-tab-ai"
                             onclick="switchSettingsTab('ai')">🤖 AI Agent</button>
+                </div>
+
+                <div class="modal-body" data-settings-panel="layout" style="display: none;">
+                    <div class="form-group">
+                        <label for="layout-per-row">Projects per row</label>
+                        <select id="layout-per-row" data-testid="layout-per-row" onchange="setProjectsPerRow(this.value)">
+                            <option value="1">1</option>
+                            <option value="2">2</option>
+                            <option value="3">3</option>
+                            <option value="4">4</option>
+                        </select>
+                        <span class="form-help">Tiles still wrap to fewer on a narrow window — this is the
+                            most it will fit, not a promise.</span>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="layout-terminal-host">Where the CLI opens</label>
+                        <select id="layout-terminal-host" data-testid="layout-terminal-host"
+                                onchange="setTerminalHost(this.value)">
+                            <option value="tile">Inside Podium — a terminal in the project's tile</option>
+                            <option value="system">Your system terminal</option>
+                        </select>
+                        <span class="form-help" id="layout-terminal-host-help"></span>
+                    </div>
                 </div>
 
                 <div class="modal-body" data-settings-panel="appearance">
@@ -356,21 +408,6 @@
                         Used by Create with AI and Modify with AI. Podium installs the agent for you
                         if it is not already on this machine.
                     </p>
-
-                    <!-- Presets first: a known-good configuration beats a blank
-                         URL field, and running against a cheap or local model is
-                         the whole point of this panel. -->
-                    <div class="form-group">
-                        <label for="ai-preset">Preset</label>
-                        <select id="ai-preset" data-testid="ai-preset" onchange="applyAiPreset()">
-                            <option value="">Custom — set the fields yourself</option>
-                            <option value="hosted">Default (hosted) — Claude, no endpoint</option>
-                            <option value="ollama">Ollama (local, free)</option>
-                            <option value="openrouter">OpenRouter (~30x cheaper than Sonnet)</option>
-                            <option value="lmstudio">LM Studio (local)</option>
-                        </select>
-                        <span class="form-help" id="ai-preset-help">Fills the fields below; you can still edit them.</span>
-                    </div>
 
                     <div class="form-group">
                         <label for="ai-agent">Agent</label>
@@ -404,9 +441,25 @@
                         <div class="field-error" id="ai-api-key-error"></div>
                     </div>
 
+                    <!--
+                        Agents that talk to their vendor by default (Claude Code)
+                        keep the endpoint behind this, so the normal case is not
+                        a blank URL field inviting a wrong value. Shown expanded
+                        whenever an endpoint is already stored.
+                    -->
+                    <div class="form-group" id="ai-api-base-advanced" style="display: none;">
+                        <button type="button" class="link-button" onclick="revealApiBase()"
+                                data-testid="ai-api-base-reveal">Use a custom API endpoint…</button>
+                        <span class="form-help" id="ai-api-base-advanced-help"></span>
+                    </div>
+
                     <div class="form-group" id="ai-api-base-group" style="display: none;">
                         <label for="ai-api-base">API Endpoint</label>
                         <input type="text" id="ai-api-base" data-testid="ai-api-base" placeholder="https://api.example.com/v1">
+                        <!-- Known-good URLs for the selected agent. These fill the
+                             field they sit under and nothing else — the old Preset
+                             dropdown also reassigned your agent. -->
+                        <div class="endpoint-presets" id="ai-endpoint-presets" data-testid="ai-endpoint-presets"></div>
                         <span class="form-help" id="ai-api-base-help"></span>
                     </div>
 
@@ -581,6 +634,10 @@
                     </div>
                 </div>
                 <div class="form-actions">
+                    <!-- Install is reached through New Project now, so picking
+                         the wrong kind has to be one click to undo. -->
+                    <button class="btn btn-secondary" onclick="backToProjectKind()" id="install-back-btn"
+                            data-testid="install-back">← Back</button>
                     <button class="btn btn-secondary" onclick="closeModal()" id="install-cancel-btn" data-testid="install-cancel">Cancel</button>
                     <button class="btn btn-primary" onclick="handleInstallApp()" id="install-submit-btn"
                             data-testid="install-submit" disabled>Install</button>

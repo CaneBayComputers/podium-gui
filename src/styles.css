@@ -478,7 +478,15 @@ body::before {
 }
 
 /* Projects Grid */
+/*
+ * --per-row is the user's Project layout setting. It is carried on a data
+ * attribute rather than an inline style so the narrow-window rules below can
+ * still override it — an inline style would beat them and leave four
+ * unreadable columns on a small screen.
+ */
 .projects-grid {
+    --per-row-pref: 2;
+    --per-row: var(--per-row-pref);
     display: flex;
     flex-wrap: wrap;
     gap: 1rem;
@@ -486,13 +494,18 @@ body::before {
     justify-content: flex-start;
 }
 
+.projects-grid[data-per-row="1"] { --per-row-pref: 1; }
+.projects-grid[data-per-row="2"] { --per-row-pref: 2; }
+.projects-grid[data-per-row="3"] { --per-row-pref: 3; }
+.projects-grid[data-per-row="4"] { --per-row-pref: 4; }
+
 .project-card {
     background: var(--card-bg);
     border: 1px solid var(--border-subtle);
     padding: 1rem;
     border-radius: 4px;
     transition: transform 0.2s ease, box-shadow 0.2s ease;
-    flex: 0 0 calc(33.333% - 0.67rem);
+    flex: 0 0 calc((100% - (var(--per-row) - 1) * 1rem) / var(--per-row));
     min-width: 300px;
     position: relative !important;
     overflow: hidden;
@@ -511,16 +524,113 @@ body::before {
     margin-top: 1.5rem;
 }
 
+/*
+ * A narrow window caps the setting rather than replacing it: someone who asked
+ * for one tile per row should still get one, not be widened back to two.
+ */
 @media (max-width: 1400px) {
-    .project-card {
-        flex: 0 0 calc(50% - 0.5rem);
-    }
+    .projects-grid { --per-row: min(var(--per-row-pref), 2); }
 }
 
 @media (max-width: 768px) {
-    .project-card {
-        flex: 0 0 100%;
-    }
+    .projects-grid { --per-row: 1; }
+}
+
+/*
+ * Agent terminals hosted inside a project tile.
+ *
+ * Collapsing clips the pane instead of resizing it. The pane keeps its full
+ * pixel height and is pulled up by a negative margin so its BOTTOM shows
+ * through the sliver — the most recent output, which is the part worth seeing.
+ * Refitting to the sliver instead would resize the pty to two rows and wreck
+ * whatever the agent is drawing.
+ */
+.tile-terminal-host:empty {
+    display: none;
+}
+
+.tile-terminal {
+    --term-height: 320px;
+    --sliver-height: 58px;
+    margin-top: 0.75rem;
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    overflow: hidden;
+    background: var(--bg-tertiary);
+}
+
+.tile-terminal-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.35rem 0.5rem;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+.tile-terminal-label {
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    white-space: nowrap;
+}
+
+.tile-terminal-status {
+    flex: 1;
+    min-width: 0;
+    font-size: 0.74rem;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* A finished session has to be legible while collapsed — the bar is the only
+   thing guaranteed to be on screen. */
+.tile-terminal.exited .tile-terminal-status {
+    color: var(--accent-green);
+}
+
+.tile-terminal-toggle,
+.tile-terminal-close {
+    padding: 0 0.35rem;
+    font-size: 0.95rem;
+    line-height: 1;
+    color: var(--text-muted);
+    background: none;
+    border: none;
+    cursor: pointer;
+}
+
+.tile-terminal-toggle:hover,
+.tile-terminal-close:hover {
+    color: var(--text-primary);
+}
+
+/* The clipping window. The bar must stay outside it, or the pane pulled up by
+   the negative margin below would be drawn straight over the top of it. */
+.tile-terminal-viewport {
+    height: var(--term-height);
+    overflow: hidden;
+    transition: height 0.18s ease;
+}
+
+.tile-terminal.collapsed .tile-terminal-viewport {
+    height: var(--sliver-height);
+}
+
+/* The modal's panes are absolutely positioned so they can stack; a tile pane
+   is the only thing in its viewport and has to take part in layout instead. */
+.tile-terminal .terminal-pane {
+    position: static;
+    inset: auto;
+    height: var(--term-height);
+    padding: 0.35rem;
+    transition: margin-top 0.18s ease;
+}
+
+.tile-terminal.collapsed .terminal-pane {
+    margin-top: calc(var(--sliver-height) - var(--term-height));
 }
 
 /* Generic cards (for other sections) */
@@ -1737,6 +1847,93 @@ span.status-indicator {
     color: var(--text-muted);
 }
 
+/* Reveal for options that are folded away by default. */
+.link-button {
+    display: inline-block;
+    padding: 0;
+    font: inherit;
+    color: var(--accent-blue);
+    background: none;
+    border: none;
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}
+
+.link-button:hover {
+    color: var(--neon-cyan);
+}
+
+/* Known-good endpoints, sitting under the field they fill. */
+.endpoint-presets {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin-top: 0.45rem;
+}
+
+.endpoint-chip {
+    padding: 0.25rem 0.6rem;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-subtle);
+    border-radius: 999px;
+    cursor: pointer;
+    transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+
+.endpoint-chip:hover {
+    color: var(--text-primary);
+    background: var(--card-hover);
+    border-color: var(--accent-blue);
+}
+
+/* New Project, step one — framework or ready-made app. */
+.kind-choice {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 1rem;
+}
+
+.kind-option {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.4rem;
+    padding: 1.4rem 1.2rem;
+    text-align: left;
+    font: inherit;
+    color: var(--text-primary);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-subtle);
+    border-radius: 10px;
+    cursor: pointer;
+    transition: background 0.12s ease, border-color 0.12s ease, transform 0.12s ease;
+}
+
+.kind-option:hover,
+.kind-option:focus-visible {
+    background: var(--card-hover);
+    border-color: var(--accent-blue);
+    transform: translateY(-2px);
+}
+
+.kind-icon {
+    font-size: 1.8rem;
+    line-height: 1;
+}
+
+.kind-option strong {
+    font-size: 1.02rem;
+}
+
+.kind-note {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    line-height: 1.45;
+}
+
 .app-entry {
     padding: 0.7rem 0.9rem;
     border-bottom: 1px solid var(--border-subtle);
@@ -2295,3 +2492,47 @@ label > .form-help {
     margin-top: 0.75rem;
 }
 .donate-links .btn { justify-content: flex-start; text-align: left; }
+
+/* Project filter bar */
+.project-filters {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    margin-bottom: 1rem;
+}
+.project-filters .filter-group { display: flex; gap: 0.5rem; }
+.project-filters select {
+    background: var(--card-bg);
+    color: var(--text-primary);
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    padding: 0.35rem 0.6rem;
+    font-family: inherit;
+    font-size: 0.85rem;
+}
+.emoji-filters { display: flex; gap: 0.35rem; flex-wrap: wrap; }
+.emoji-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    background: var(--card-bg);
+    border: 1px solid var(--border-subtle);
+    border-radius: 999px;
+    padding: 0.25rem 0.6rem;
+    cursor: pointer;
+    font-size: 0.95rem;
+    line-height: 1;
+    transition: border-color 0.15s ease;
+}
+.emoji-chip:hover { border-color: var(--border-accent); }
+.emoji-chip.active {
+    border-color: var(--neon-purple);
+    box-shadow: 0 0 8px rgba(var(--glow-rgb), calc(0.3 * var(--tint-strength)));
+}
+/* The count is the point of the chip — it must stay legible, not decorative. */
+.emoji-count {
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+    font-weight: 600;
+}
