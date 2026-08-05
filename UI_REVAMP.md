@@ -3,8 +3,10 @@
 Requested 2026-08-05. Captured verbatim in intent; grouped by area, with open
 questions and CLI dependencies called out.
 
-**Status:** everything below is implemented except the one item blocked on the
-CLI, marked ⛔. Each section notes the commit that landed it.
+**Status: every item is implemented.** Each section notes the commit that landed
+it. The one item that needed a CLI change got one (`332f83a`); a follow-up
+performance issue found while verifying it is recorded under Terminals and has
+been raised, but it does not block anything here.
 
 ## Themes — done (`b259923`)
 
@@ -52,11 +54,20 @@ Notes on what the implementation commits to:
 - A project with a **live agent session is never filtered out**. Hiding it would
   leave a running agent with no window and no way to reach it.
 
-> **CLI dependency (still open)**: sort-by-last-on needs a `last_on` timestamp in
-> the `x-metadata` section of each project's `docker-compose.yml`. Until the CLI
-> writes it, that sort option falls back to sorting by name — stable rather than
-> arbitrary. ISO-8601 UTC agreed with the CLI session; x-metadata now survives
-> regeneration (CLI `aef13ca`).
+> **CLI dependency — resolved (CLI `eb81685`, GUI `2d07e1d`).** `last_on` is now
+> written into each project's `x-metadata` as ISO-8601 UTC, on both start and
+> stop — so it means "last time this was up", not "last time somebody started
+> it", which is what makes it sort correctly for a project that ran for a week
+> and stopped yesterday.
+>
+> Wiring it up exposed a GUI bug: the sort was reading `last_on` straight off the
+> parsed project objects, which never carry it — it comes out of the compose file
+> and is merged in at render time — so the comparison was `undefined` against
+> `undefined` and the order never changed. Fixed to read through the merge.
+>
+> Projects that have not been started or stopped since the CLI began writing it
+> have no value and sort **last**: absent means unknown, and there is no
+> backfill by design.
 
 ## AI agent settings — done (`5358ff9`)
 
@@ -85,10 +96,11 @@ Notes on what the implementation commits to:
 Patreon, Ko-fi (`ko-fi.com/canebaycomputers`), ValorPay (via
 `donate.podiumcli.com`) and GitHub Sponsors (`shrimpwagon`).
 
-## Terminals — done (`96fccb4`), except one item
+## Terminals — done (`96fccb4`, CLI `332f83a`)
 
-- ⛔ **Modify with AI must not run a podium up/start when the project is already
-  running.** See the CLI dependency below — this cannot be fixed from the GUI.
+- ✅ **Modify with AI must not run a podium up/start when the project is already
+  running.** Fixed in the CLI (`332f83a`), which is where it belonged — no GUI
+  change was needed. See below.
 - Settings gained a **Project layout** tab:
   - projects per row — default 2, max 4 ✅
   - toggle: open the CLI in a **system terminal** or **inside Podium**
@@ -113,15 +125,24 @@ Implementation notes worth keeping:
 - The tile bar carries the session status and turns green on exit, because when
   collapsed it is the only part guaranteed to be on screen.
 
-> **CLI dependency (blocking)**: `podium resume <project>` unconditionally runs
-> `startup.sh` (`src/scripts/resume.sh`, around line 50) with no flag to skip it.
-> On an already-running project that costs seconds and can prompt for sudo. The
-> GUI cannot work around it without duplicating the CLI's per-agent resume flags
-> (`claude --continue`, `codex resume --last`, `qwen --continue`,
-> `gemini --resume latest`, `aider --restore-chat-history`), which would rot on
-> the next agent change. **Asked for:** a `--no-start` flag on `podium resume`,
-> or an early return in `startup.sh` when the project's containers are already
-> up. Report this to the CLI session; do not patch podium-cli from here.
+> **CLI dependency — resolved (`332f83a`).** `podium resume` used to run
+> `startup.sh` unconditionally. The CLI added an early return in `startup.sh`
+> when the containers are already up, rather than the `--no-start` flag that was
+> the other option on the table. That was the better call and no flag is needed:
+> the CLI checks the container's real state at the moment of use, whereas a flag
+> would have carried the GUI's belief about that state, formed at status-poll
+> time and already stale by the time the user clicks — and the GUI would have
+> had to reimplement the same running-check to decide whether to pass it.
+>
+> Verified here: `podium up` on a running project reports "already running" and
+> does not restart it.
+>
+> **Still slower than it should be, reported not fixed:** a no-op `podium up`
+> takes 12.58s, reproducibly. `podium status` alone is 0.44s, and the nine
+> connectivity pings plus two HTTP checks are 0.15s. A `bash -x` trace with an
+> `EPOCHREALTIME` PS4 puts 12.00s of it on a single statement — a hardcoded
+> `sleep 12` at `startup.sh:243`, below the early return, which still waits for
+> containers to boot when nothing was started. Raised with the CLI.
 
 > **Open question, unresolved**: how to signal "the agent is finished" while
 > collapsed. The status bar covers the exit case (it reports the exit code and
