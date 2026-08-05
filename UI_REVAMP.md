@@ -137,12 +137,25 @@ Implementation notes worth keeping:
 > Verified here: `podium up` on a running project reports "already running" and
 > does not restart it.
 >
-> **Still slower than it should be, reported not fixed:** a no-op `podium up`
-> takes 12.58s, reproducibly. `podium status` alone is 0.44s, and the nine
-> connectivity pings plus two HTTP checks are 0.15s. A `bash -x` trace with an
-> `EPOCHREALTIME` PS4 puts 12.00s of it on a single statement — a hardcoded
-> `sleep 12` at `startup.sh:243`, below the early return, which still waits for
-> containers to boot when nothing was started. Raised with the CLI.
+> **Follow-up, also fixed (CLI `7bd2345`).** A no-op `podium up` was still
+> 12.58s. A `bash -x` trace with an `EPOCHREALTIME` PS4 put 12.00s of it on one
+> statement — a hardcoded `sleep 12` in `startup.sh` that sat below the early
+> return and waited for containers that had been up for hours. Now guarded by
+> the `PROJECT_ALREADY_RUNNING` flag that was already being computed.
+>
+> Verified here, including the case that would have broken: **12.58s → 0.54s**
+> for the no-op, while a cold start still takes **12.99s** and serves **HTTP
+> 200**. The easy way to "fix" a sleep is to delete it, which looks identical on
+> the no-op path and silently breaks real starts — status checks would run
+> against containers that are not up yet.
+>
+> **Open, and honestly unverified: does this remove the spurious sudo prompt?**
+> The mechanism suggests yes — the sudo came from the shared-service pass and
+> the `/etc/hosts` work, both now skipped for a running project. But neither
+> this box nor the CLI's has a normal sudo timeout: `sudo -n true` succeeds
+> immediately after `sudo -k`, so the test cannot fail whatever the answer is.
+> Needs a machine with a normal sudo timeout. Recorded as unverified rather than
+> claimed as fixed.
 
 > **Open question, unresolved**: how to signal "the agent is finished" while
 > collapsed. The status bar covers the exit case (it reports the exit code and
