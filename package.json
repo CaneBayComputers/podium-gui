@@ -17,6 +17,7 @@
     "clean": "rm -rf dist release",
     "rebuild": "npm run clean && npm run build-ts",
     "test:e2e": "npm run build-ts && node tests/e2e.js",
+    "test:packaged": "npm run pack && node tests/packaged-smoke.js",
     "test": "npm run test:e2e",
     "dist:linux": "npm run clean && npm run build-ts && electron-builder --linux deb rpm pacman",
     "dist:mac": "npm run clean && npm run build-ts && electron-builder --mac dmg"
