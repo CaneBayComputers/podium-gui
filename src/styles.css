@@ -1737,6 +1737,51 @@ span.status-indicator {
     color: var(--text-muted);
 }
 
+/* New Project, step one — framework or ready-made app. */
+.kind-choice {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 1rem;
+}
+
+.kind-option {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.4rem;
+    padding: 1.4rem 1.2rem;
+    text-align: left;
+    font: inherit;
+    color: var(--text-primary);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-subtle);
+    border-radius: 10px;
+    cursor: pointer;
+    transition: background 0.12s ease, border-color 0.12s ease, transform 0.12s ease;
+}
+
+.kind-option:hover,
+.kind-option:focus-visible {
+    background: var(--card-hover);
+    border-color: var(--accent-blue);
+    transform: translateY(-2px);
+}
+
+.kind-icon {
+    font-size: 1.8rem;
+    line-height: 1;
+}
+
+.kind-option strong {
+    font-size: 1.02rem;
+}
+
+.kind-note {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    line-height: 1.45;
+}
+
 .app-entry {
     padding: 0.7rem 0.9rem;
     border-bottom: 1px solid var(--border-subtle);

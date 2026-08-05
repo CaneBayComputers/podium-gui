@@ -881,8 +881,55 @@ function openUrl(url: string): void {
 
 async function showCreateProject(): Promise<void> {
     showModal('new-project-modal');
+    showProjectKindStep();
+}
+
+// ---------------------------------------------------------------------------
+// New Project, step one: framework or ready-made app
+//
+// The header used to carry a separate Install App button. Both flows create a
+// project, so the question belongs at the front of one flow rather than in two
+// competing buttons the user has to tell apart before clicking.
+// ---------------------------------------------------------------------------
+
+function showProjectKindStep(): void {
+    const choice = document.getElementById('new-project-choice');
+    const form = document.getElementById('new-project-form');
+    const footer = document.getElementById('new-project-footer');
+
+    if (choice) choice.style.display = '';
+    if (form) form.style.display = 'none';
+    // The footer's Create button acts on the form; showing it beside the
+    // choice would offer to submit a form that is not on screen.
+    if (footer) footer.style.display = 'none';
+}
+
+async function chooseProjectKind(kind: 'framework' | 'app'): Promise<void> {
+    if (kind === 'app') {
+        // Unchanged installer flow — only the way into it has moved.
+        closeModal();
+        await showInstallApp();
+        return;
+    }
+
+    const choice = document.getElementById('new-project-choice');
+    const form = document.getElementById('new-project-form');
+    const footer = document.getElementById('new-project-footer');
+
+    if (choice) choice.style.display = 'none';
+    if (form) form.style.display = '';
+    if (footer) footer.style.display = '';
+
     // Built from the CLI's catalogue on first open, then cached.
     await loadFrameworkCatalog();
+}
+
+// Back out of the install picker to the choice, rather than closing outright
+// and making the user find New Project again.
+function backToProjectKind(): void {
+    closeModal();
+    showModal('new-project-modal');
+    showProjectKindStep();
 }
 
 
@@ -1316,9 +1363,9 @@ async function createNewProject(): Promise<void> {
     console.log('DEBUG: createNewProject called');
 
     showModal('new-project-modal');
-    // The header button and the empty-state button are separate entry points;
-    // both need the catalogue built before the form is usable.
-    await loadFrameworkCatalog();
+    // The catalogue is loaded when the framework path is chosen, not here —
+    // someone heading for the app installer should not wait on it.
+    showProjectKindStep();
 }
 
 // Make this function available globally immediately
@@ -2453,10 +2500,13 @@ function setInstallView(view: 'picker' | 'progress'): void {
     const progress = document.getElementById('install-progress');
     const submit = document.getElementById('install-submit-btn') as HTMLButtonElement;
     const cancel = document.getElementById('install-cancel-btn') as HTMLButtonElement;
+    const back = document.getElementById('install-back-btn') as HTMLButtonElement;
 
     if (picker) picker.style.display = view === 'picker' ? 'block' : 'none';
     if (progress) progress.style.display = view === 'progress' ? 'block' : 'none';
     if (submit) submit.style.display = view === 'picker' ? '' : 'none';
+    // Going "back" mid-install would hide a running install behind a form.
+    if (back) back.style.display = view === 'picker' ? '' : 'none';
     if (cancel) cancel.textContent = view === 'picker' ? 'Cancel' : 'Close';
 }
 
@@ -3261,6 +3311,9 @@ async function submitEditProject(): Promise<void> {
 };
 (window as any).modifyWithAI = modifyWithAI;
 (window as any).showInstallApp = showInstallApp;
+(window as any).showProjectKindStep = showProjectKindStep;
+(window as any).chooseProjectKind = chooseProjectKind;
+(window as any).backToProjectKind = backToProjectKind;
 (window as any).renderAppCatalog = renderAppCatalog;
 (window as any).selectApp = selectApp;
 (window as any).handleInstallApp = handleInstallApp;

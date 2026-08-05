@@ -37,7 +37,6 @@
                     <button class="btn btn-warning" onclick="stopAllProjects()" data-testid="stop-all">Stop All</button>
                     <button class="btn btn-primary" onclick="createNewProject()" data-testid="new-project">+ New Project</button>
                     <button class="btn btn-primary" onclick="cloneProject()" data-testid="clone-project">📥 Clone</button>
-                    <button class="btn btn-primary" onclick="showInstallApp()" data-testid="install-app">📦 Install App</button>
                     <!-- Only appears while sessions are alive, so they can be
                          reopened after the window is hidden. -->
                     <button class="btn btn-secondary" onclick="showTerminals()" id="terminals-button"
@@ -104,7 +103,30 @@
                     <button class="modal-close" onclick="closeModal()">&times;</button>
                 </div>
                 <div class="modal-body">
-                    <form id="new-project-form">
+                    <!--
+                        Step one is what kind of project this is. Scaffolding a
+                        framework and installing finished software are genuinely
+                        different flows, and asking here is what lets the header
+                        drop its separate Install App button.
+                    -->
+                    <div id="new-project-choice" class="kind-choice" data-testid="new-project-choice">
+                        <button type="button" class="kind-option" onclick="chooseProjectKind('framework')"
+                                data-testid="kind-framework">
+                            <span class="kind-icon">🧱</span>
+                            <strong>Start from a framework</strong>
+                            <span class="kind-note">Scaffold an empty project you write yourself — Laravel,
+                                WordPress, Drupal and the rest of the catalogue.</span>
+                        </button>
+                        <button type="button" class="kind-option" onclick="chooseProjectKind('app')"
+                                data-testid="kind-app">
+                            <span class="kind-icon">📦</span>
+                            <strong>Install a ready-made app</strong>
+                            <span class="kind-note">Deploy finished software someone else wrote, already
+                                configured and ready to log into.</span>
+                        </button>
+                    </div>
+
+                    <form id="new-project-form" style="display: none;">
                         <div class="form-group">
                             <label>Project Name</label>
                             <input type="text" id="project-name" data-testid="project-name" placeholder="My Awesome Project" required>
@@ -188,7 +210,8 @@
                         </div>
                     </form>
                 </div>
-                <div class="modal-footer">
+                <div class="modal-footer" id="new-project-footer" style="display: none;">
+                    <button class="btn btn-secondary" onclick="showProjectKindStep()" data-testid="new-project-back">← Back</button>
                     <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
                     <button class="btn btn-primary" onclick="handleCreateProject()" data-testid="create-project-submit">Create Project</button>
                 </div>
@@ -583,6 +606,10 @@
                     </div>
                 </div>
                 <div class="form-actions">
+                    <!-- Install is reached through New Project now, so picking
+                         the wrong kind has to be one click to undo. -->
+                    <button class="btn btn-secondary" onclick="backToProjectKind()" id="install-back-btn"
+                            data-testid="install-back">← Back</button>
                     <button class="btn btn-secondary" onclick="closeModal()" id="install-cancel-btn" data-testid="install-cancel">Cancel</button>
                     <button class="btn btn-primary" onclick="handleInstallApp()" id="install-submit-btn"
                             data-testid="install-submit" disabled>Install</button>

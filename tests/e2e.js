@@ -96,6 +96,12 @@ async function run() {
     // clean box as well as a populated one.
     const expectedProjects = (statusJson?.projects || []).length;
 
+    // Tile filters persist to localStorage, and the suite runs against the real
+    // user data dir — so a filter left on by hand makes "renders every project"
+    // fail for a reason that is not a regression. Start from a known state.
+    // (The filters get their own assertions further down.)
+    await win.evaluate(() => window.resetFilters && window.resetFilters());
+
     if (expectedProjects > 0) {
       await win.waitForFunction(
         () => document.querySelectorAll('#projects-grid .project-card:not(.placeholder)').length > 0,
@@ -107,9 +113,13 @@ async function run() {
     // The splash fades over 0.5s; let it finish so the capture is the dashboard.
     await win.waitForTimeout(600);
     await screenshot(win, '01-dashboard');
-    for (const id of ['create-ai', 'start-all', 'stop-all', 'new-project', 'clone-project', 'install-app']) {
+    for (const id of ['create-ai', 'start-all', 'stop-all', 'new-project', 'clone-project']) {
       check(`header action "${id}" present`, await win.locator(t(id)).count() === 1);
     }
+    // Install App folded into New Project's first step; a stray button here
+    // would mean two entry points into the same flow again.
+    check('install app is no longer a separate header action',
+      await win.locator(t('install-app')).count() === 0);
 
     // Help/Patreon/Donate moved out of the header into the footer, alongside a
     // link to the CLI the GUI is a front end for.
@@ -203,6 +213,51 @@ async function run() {
         wrong.length === 0, wrong.join('; '));
     }
 
+    // --- Tile filters ----------------------------------------------------
+    if (expectedProjects > 0) {
+      console.log('\nfilters');
+      const tiles = () => win.locator('#projects-grid .project-card:not(.placeholder)').count();
+      const allTiles = await tiles();
+
+      await win.evaluate(() => window.setRunFilter('running'));
+      const runningTiles = await tiles();
+      await win.evaluate(() => window.setRunFilter('stopped'));
+      const stoppedTiles = await tiles();
+      // Every project is one or the other, so the two halves must account for
+      // the whole — a tile lost by both filters would be invisible everywhere.
+      check('running and stopped partition the project list',
+        runningTiles + stoppedTiles === allTiles,
+        `${runningTiles} + ${stoppedTiles} != ${allTiles}`);
+      check('running filter matches what the CLI reports running',
+        runningTiles === running.length, `${runningTiles} vs ${running.length}`);
+
+      await win.evaluate(() => window.setRunFilter('all'));
+
+      // Each emoji chip's count must equal the tiles it leaves on screen.
+      const chips = await win.locator('#project-filters .emoji-chip').evaluateAll((els) =>
+        els.map((e) => ({
+          emoji: e.getAttribute('data-testid').replace('emoji-filter-', ''),
+          count: Number(e.querySelector('.emoji-count')?.textContent || 0),
+        })));
+      check('emoji chips are rendered', chips.length > 0, `${chips.length} chips`);
+      for (const { emoji, count } of chips) {
+        await win.evaluate((e) => window.toggleEmojiFilter(e), emoji);
+        const shown = await tiles();
+        check(`emoji ${emoji} count matches the tiles it shows`,
+          shown === count, `chip says ${count}, grid shows ${shown}`);
+        await win.evaluate((e) => window.toggleEmojiFilter(e), emoji);
+      }
+
+      // A filter that empties the grid must say so. Falling through to the
+      // "create your first project" placeholder reads as data loss.
+      await win.evaluate(() => { window.setRunFilter('running'); window.toggleEmojiFilter('⛔'); });
+      check('an empty result explains itself instead of looking empty',
+        await win.locator(t('no-matches')).count() === 1);
+
+      await win.evaluate(() => window.resetFilters());
+      check('reset restores every tile', await tiles() === allTiles);
+    }
+
     // Optional services (minio, meilisearch) must not appear as red "Stopped"
     // cards on a machine that never enabled them — that reads as a broken
     // service rather than an unused feature.
@@ -218,10 +273,26 @@ async function run() {
     }
 
     // --- Install-an-app modal (the step 2 feature) ----------------------
+    // Reached through New Project now, so the test walks the same path a user
+    // does rather than calling the modal directly.
     console.log('\ninstall app');
-    await win.click(t('install-app'));
+    await win.click(t('new-project'));
+    await win.waitForSelector('#new-project-modal.show', { timeout: 5000 });
+    check('new project opens on the kind choice, not the form',
+      await win.isVisible(t('new-project-choice')) &&
+      !(await win.isVisible('#new-project-form')));
+    await win.click(t('kind-app'));
     await win.waitForSelector('#install-app-modal.show', { timeout: 5000 });
     check('install modal opens', await win.isVisible('#install-app-modal'));
+    check('new project modal closed behind it',
+      !(await win.isVisible('#new-project-modal')));
+
+    // Back returns to the choice instead of dumping the user at the dashboard.
+    await win.click(t('install-back'));
+    await win.waitForSelector('#new-project-modal.show', { timeout: 5000 });
+    check('back returns to the kind choice', await win.isVisible(t('new-project-choice')));
+    await win.click(t('kind-app'));
+    await win.waitForSelector('#install-app-modal.show', { timeout: 5000 });
 
     // Catalogue is read from the CLI's apps.json at runtime.
     await win.waitForFunction(
@@ -415,6 +486,9 @@ async function run() {
     await win.click(t('new-project'));
     await win.waitForSelector('#new-project-modal.show', { timeout: 5000 });
     check('new project modal opens', await win.isVisible('#new-project-modal'));
+    await win.click(t('kind-framework'));
+    check('choosing a framework reveals the form and its footer',
+      await win.isVisible('#new-project-form') && await win.isVisible('#new-project-footer'));
 
     // Assert against the CLI's catalogue, not a list copied into the test —
     // a hardcoded list here would drift exactly the way the form used to.
