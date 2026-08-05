@@ -1308,6 +1308,14 @@ interface ProjectMetadata {
   display_name: string;
   description: string;
   emoji: string;
+  // Written by the CLI, never by the GUI. ISO-8601 UTC, stamped on both start
+  // and stop so it means "last time this was up" rather than "last time
+  // somebody started it" — the latter sorts a project that ran for a week and
+  // stopped yesterday into the wrong place. Absent on projects that have not
+  // been started or stopped since the CLI began writing it; there is no
+  // backfill, and inventing a timestamp would be worse than an absent one.
+  // Optional because the GUI's write path never supplies it.
+  last_on?: string;
 }
 
 // Resolve the projects directory from Podium's own config rather than guessing
@@ -1399,7 +1407,8 @@ ipcMain.handle('get-project-metadata', async (event: IpcMainInvokeEvent, project
     return {
       display_name: read('name'),
       description: read('description'),
-      emoji: read('emoji')
+      emoji: read('emoji'),
+      last_on: read('last_on')
     };
   } catch (error) {
     debugLog('Error reading project metadata', { projectName, error: (error as Error).message });

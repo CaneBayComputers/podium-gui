@@ -254,6 +254,52 @@ async function run() {
       check('an empty result explains itself instead of looking empty',
         await win.locator(t('no-matches')).count() === 1);
 
+      // Sort by last-on. The CLI stamps `last_on` into x-metadata on both start
+      // and stop, so it means "last time this was up". Projects predating that
+      // have no value and must sort LAST — an absent timestamp is "unknown",
+      // not 1970.
+      // Clear the filter the previous check left on, or this reads an empty
+      // list and "no project carries last_on" is true for the wrong reason.
+      await win.evaluate(() => window.resetFilters());
+      await win.evaluate(() => window.setSortKey('last-on'));
+      await win.waitForTimeout(200);
+      const lastOnOrder = await win.evaluate(() =>
+        window.__visibleProjects().map((p) => ({ name: p.name, last_on: p.last_on || '' })));
+      const withStamp = lastOnOrder.filter((p) => p.last_on);
+      const firstBlank = lastOnOrder.findIndex((p) => !p.last_on);
+
+      // How many projects SHOULD have one is a fact about the compose files, so
+      // read it from the main process. Without this the "skipping" branch below
+      // is indistinguishable from the metadata path being broken.
+      const stampedOnDisk = await app.evaluate(async ({ ipcMain }, names) => {
+        const handler = ipcMain._invokeHandlers.get('get-project-metadata');
+        const out = [];
+        for (const name of names) {
+          const md = await handler({}, name);
+          if (md?.last_on) out.push(name);
+        }
+        return out;
+      }, (statusJson.projects || []).map((p) => p.name));
+
+      check('every last_on on disk reaches the project list',
+        withStamp.length === stampedOnDisk.length,
+        `${stampedOnDisk.length} on disk, ${withStamp.length} in the list`);
+
+      if (withStamp.length > 0) {
+        check('projects with a last_on sort ahead of those without',
+          firstBlank === -1 || firstBlank >= withStamp.length,
+          `${withStamp.length} stamped, first blank at ${firstBlank}`);
+        const stamps = withStamp.map((p) => p.last_on);
+        check('last_on sorts most-recent first',
+          stamps.every((v, i) => i === 0 || stamps[i - 1] >= v), stamps.join(' '));
+        // ISO-8601 UTC was agreed precisely so lexical order is chronological.
+        check('last_on is the agreed ISO-8601 UTC shape',
+          stamps.every((v) => /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(v)),
+          stamps[0]);
+      } else {
+        console.log('  – no project carries last_on yet; skipping order check');
+      }
+
       await win.evaluate(() => window.resetFilters());
       check('reset restores every tile', await tiles() === allTiles);
     }
@@ -1299,6 +1345,19 @@ async function run() {
       check(`${file} keeps every hard-won guard`, missing.length === 0, missing.join('; '));
     }
 
+    // The GUI and the CLI now both write into the same x-metadata block: the
+    // GUI owns emoji/name/description, the CLI owns last_on. The GUI's writer
+    // must replace only its own three keys — rewriting the block would silently
+    // drop the CLI's timestamp on every rename, and the loss would only show up
+    // as a sort order that quietly stopped working.
+    const mainBody = fsMod.readFileSync(pathMod.join(ROOT, 'src/main.ts'), 'utf8');
+    const writer = mainBody.slice(mainBody.indexOf("ipcMain.handle('update-project-metadata'"));
+    const replaced = [...writer.slice(0, writer.indexOf('} else {')).matchAll(/\\s\*(\w+):\\s\*/g)]
+      .map((m) => m[1]);
+    check('metadata writer replaces only the keys the GUI owns',
+      replaced.length === 3 && ['emoji', 'name', 'description'].every((k) => replaced.includes(k)),
+      replaced.join(','));
+
     // The source launcher travels with the repo, so the other machines get it
     // by pulling rather than by having a copy installed alongside them.
     const launcher = pathMod.join(ROOT, 'scripts/podium-gui-dev.sh');
@@ -1317,6 +1376,32 @@ async function run() {
     // A .desktop launch never sources .bashrc, so npm is missing from the menu
     // even though it works fine from a terminal.
     check('source launcher recovers npm from nvm', /NVM_DIR/.test(launcherBody));
+
+    // The sync script also ships in the repo, which is what puts it on the
+    // workstation — where running it would hard-reset the source of truth.
+    const sync = pathMod.join(ROOT, 'scripts/podium-sync.sh');
+    check('sync script exists and is executable',
+      fsMod.existsSync(sync) && (fsMod.statSync(sync).mode & 0o111) !== 0);
+    let syncOk = true;
+    try { execSync(`bash -n ${JSON.stringify(sync)}`, { stdio: 'pipe' }); }
+    catch (error) { syncOk = false; }
+    check('sync script parses', syncOk);
+
+    const syncBody = fsMod.readFileSync(sync, 'utf8');
+    for (const [label, re] of [
+      // Running it on the workstation would reset the source of truth to itself
+      // and discard uncommitted work.
+      ['refuses to sync the workstation to itself', /hostname.*=.*SRC_HOST|SRC_HOST.*=.*hostname/s],
+      // npm exiting 0 says nothing about node-pty matching Electron's ABI; a
+      // wrong build installs cleanly and only fails when a terminal is opened.
+      ['verifies node-pty by loading it under Electron', /ELECTRON_RUN_AS_NODE=1 npx electron/],
+      // Root-owned node_modules breaks the next interactive npm run.
+      ['builds as the user, not root', /su - shawn -c/],
+      // Otherwise every future change needs an SSH session to each machine.
+      ['installs its own next version', /SELF_SRC|SELF_DST/]
+    ]) {
+      check(`sync script ${label}`, re.test(syncBody));
+    }
 
     // Arch-only landmines, both from the CLI's installer.
     const archBody = fsMod.readFileSync(pathMod.join(ROOT, 'install-arch.sh'), 'utf8');
