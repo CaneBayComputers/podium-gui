@@ -1454,10 +1454,13 @@ function showDonateModal(): void {
 async function showSettings(tab: 'appearance' | 'ai' = 'appearance'): Promise<void> {
     renderThemePicker();
     switchSettingsTab(tab);
-    showModal('settings-modal');
-    // Loaded after the modal is up so opening Appearance is instant and does
-    // not wait on the CLI capability probe.
+    // Populate BEFORE showing. Loading afterwards made Appearance open a beat
+    // sooner, but it also meant the form finished loading after the panel was
+    // interactive and reset #ai-agent to the stored value — silently discarding
+    // an agent the user had just picked. A snappier open is not worth a control
+    // that undoes your input.
     await loadAiSettingsForm();
+    showModal('settings-modal');
 }
 
 async function showAiSettings(): Promise<void> {
