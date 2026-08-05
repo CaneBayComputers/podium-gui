@@ -47,17 +47,22 @@
     --tint-strength: 1;
     --term-bg: #0f0f23;
     --term-fg: #f8fafc;
+
+    --header-bg: rgba(0, 0, 0, 0.8);
+    --modal-header-fg: #ffffff;
 }
 
-/* DARK — neutral slate. The same structure as Retro with the neon pulled out,
-   for people who want this thing to look like an ordinary IDE. */
+/* DARK — a plain, run-of-the-mill dark theme. Retro and Podium are the ones
+   with personality; this is the one for people who want the app to get out of
+   the way. Accents are muted rather than removed: still coloured, not luminous,
+   and close enough in hue that nothing shouts. */
 :root[data-theme="dark"] {
-    --neon-pink: #f472b6;
-    --neon-cyan: #22d3ee;
-    --neon-purple: #818cf8;
-    --neon-orange: #fb923c;
-    --accent-blue: #60a5fa;
-    --accent-green: #34d399;
+    --neon-pink: #b06a8f;
+    --neon-cyan: #4f8fa6;
+    --neon-purple: #7b82b8;
+    --neon-orange: #b3814f;
+    --accent-blue: #5b8db8;
+    --accent-green: #5f9e78;
 
     --bg-primary: #0d1117;
     --bg-secondary: #161b22;
@@ -78,6 +83,9 @@
     --tint-strength: 1;
     --term-bg: #0d1117;
     --term-fg: #e6edf3;
+
+    --header-bg: rgba(0, 0, 0, 0.55);
+    --modal-header-fg: #ffffff;
 }
 
 /* LIGHT — the awkward one, as predicted. Accents are darkened rather than
@@ -112,6 +120,9 @@
     --tint-strength: 0.45;
     --term-bg: #ffffff;
     --term-fg: #1f2328;
+
+    --header-bg: rgba(246, 248, 250, 0.92);
+    --modal-header-fg: #ffffff;
 }
 
 /* MATRIX — monochrome green on black. */
@@ -142,6 +153,9 @@
     --tint-strength: 1;
     --term-bg: #000600;
     --term-fg: #39ff14;
+
+    --header-bg: rgba(0, 0, 0, 0.8);
+    --modal-header-fg: #0b1f0b;
 }
 
 /* PODIUM — podiumcli.com. Values are the site's own custom properties from
@@ -173,6 +187,9 @@
     --tint-strength: 1;
     --term-bg: #04081d;
     --term-fg: #e6edff;
+
+    --header-bg: rgba(2, 5, 15, 0.85);
+    --modal-header-fg: #12203d;
 }
 
 * {
@@ -264,9 +281,11 @@ body::before {
 
 /* Header */
 .header {
-    background: rgba(var(--shadow-rgb), calc(0.8 * var(--tint-strength)));
+    background: var(--header-bg);
     backdrop-filter: blur(20px);
-    padding: 1.5rem 2rem;
+    /* Tightened from 1.5rem: the header carried more vertical space than its
+       content needed once the tagline was removed. */
+    padding: 0.75rem 2rem;
     border-bottom: 1px solid var(--border-subtle);
     position: relative;
     z-index: 10;
@@ -935,6 +954,7 @@ span.status-indicator {
 
 .modal-header {
     background: linear-gradient(45deg, var(--neon-pink), var(--neon-cyan));
+    color: var(--modal-header-fg);
     padding: 1rem 1.5rem;
     display: flex;
     justify-content: space-between;
@@ -2265,3 +2285,13 @@ label > .form-help {
 /* The terminal surface follows the theme too. xterm paints its own canvas from
    the palette in renderer.ts; this is the chrome around it. */
 .terminal-pane { background: var(--term-bg); }
+
+/* Donate: one column so the four destinations read as a list of equals rather
+   than a grid implying a preferred option. */
+.donate-links {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+}
+.donate-links .btn { justify-content: flex-start; text-align: left; }

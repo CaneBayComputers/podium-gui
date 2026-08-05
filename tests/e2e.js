@@ -113,8 +113,13 @@ async function run() {
 
     // Help/Patreon/Donate moved out of the header into the footer, alongside a
     // link to the CLI the GUI is a front end for.
-    for (const id of ['help-modal-open', 'github-cli', 'patreon', 'donate']) {
+    // Help is gone, GitHub now points at the GUI repo, and Settings/Donate
+    // moved into the top nav. The footer carries GitHub plus the licence line.
+    for (const id of ['github-gui']) {
       check(`footer link "${id}" present`, await win.locator(`.app-footer ${t(id)}`).count() === 1);
+    }
+    for (const id of ['settings-open', 'donate']) {
+      check(`nav button "${id}" present`, await win.locator(`.header-actions ${t(id)}`).count() === 1);
     }
     check('header no longer carries the secondary links',
       await win.locator(`.header-actions ${t('help-modal-open')}`).count() === 0);

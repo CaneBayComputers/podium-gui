@@ -27,7 +27,6 @@
             <div class="header-content">
                 <div class="logo">
                     <h1>Podium CLI</h1>
-                    <span class="tagline">Podium, without the terminal</span>
                     <span id="debug-indicator" class="debug-indicator" style="display: none;">DEBUG MODE - F5 to refresh</span>
                 </div>
                 <!-- Actions only. Help/Patreon/Donate live in the footer so the
@@ -43,6 +42,8 @@
                          reopened after the window is hidden. -->
                     <button class="btn btn-secondary" onclick="showTerminals()" id="terminals-button"
                             data-testid="terminals-button" style="display: none;">🖥️ Terminals</button>
+                    <button class="btn btn-secondary" onclick="showSettings('appearance')" data-testid="settings-open" title="Theme and AI agent settings">⚙️ Settings</button>
+                    <button class="btn btn-secondary" onclick="showDonateModal()" data-testid="donate" title="Support Podium">💳 Donate</button>
                 </div>
             </div>
         </header>
@@ -84,16 +85,11 @@
             <!-- Secondary links, moved out of the header -->
             <footer class="app-footer">
                 <div class="footer-links">
-                    <button class="btn btn-secondary btn-small" onclick="showSettings('appearance')" data-testid="settings-open" title="Theme and AI agent settings">⚙️ Settings</button>
-                    <button class="btn btn-secondary btn-small" onclick="showHelpModal()" data-testid="help-modal-open" title="Help & CLI Commands">❓ Help</button>
-                    <button class="btn btn-secondary btn-small" onclick="openUrl('https://github.com/CaneBayComputers/podium-cli')" data-testid="github-cli" title="Podium CLI on GitHub">🐙 Podium CLI on GitHub</button>
-                    <button class="btn btn-secondary btn-small" onclick="openUrl('https://patreon.com/canebaycomputers')" data-testid="patreon" title="Support on Patreon">❤️ Patreon</button>
-                    <button class="btn btn-secondary btn-small" onclick="openUrl('https://securelink-prod.valorpaytech.com:4430/?redirect=1&uid=6e840752-8751-11f0-a74f-12a0879a85b1')" data-testid="donate" title="Donate">💳 Donate</button>
+                    <button class="btn btn-secondary btn-small" onclick="openUrl('https://github.com/CaneBayComputers/podium-gui')" data-testid="github-gui" title="Podium GUI on GitHub">🐙 GitHub</button>
                 </div>
                 <p class="footer-note">
-                    A desktop front end for
-                    <a href="#" onclick="event.preventDefault(); openUrl('https://github.com/CaneBayComputers/podium-cli')">Podium CLI</a>.
-                    The CLI does the work; this makes it visible and clickable.
+                    <a href="#" data-testid="mit-license" onclick="event.preventDefault(); openUrl('https://github.com/CaneBayComputers/podium-gui/blob/master/LICENSE')">MIT License</a>
+                    &nbsp;·&nbsp; © Shawn Welch
                 </p>
             </footer>
         </main>
@@ -309,6 +305,28 @@
             (ensure_ai_agent_installed: npm -g for codex/gemini, curl installers
             for claude/aider), so saving here can take a while and streams.
         -->
+        <div id="donate-modal" class="modal">
+            <div class="modal-content" style="max-width: 460px;">
+                <div class="modal-header">
+                    <h3>💳 Support Podium</h3>
+                    <button class="modal-close" onclick="closeModal()">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <p class="stage-intro">Podium is MIT licensed and free. If it saves you time, any of these help.</p>
+                    <div class="donate-links">
+                        <button class="btn btn-secondary" data-testid="donate-patreon"
+                                onclick="openUrl('https://patreon.com/canebaycomputers')">❤️ Patreon</button>
+                        <button class="btn btn-secondary" data-testid="donate-kofi"
+                                onclick="openUrl('https://ko-fi.com/canebaycomputers')">☕ Ko-fi</button>
+                        <button class="btn btn-secondary" data-testid="donate-sponsors"
+                                onclick="openUrl('https://github.com/sponsors/shrimpwagon')">🐙 GitHub Sponsors</button>
+                        <button class="btn btn-secondary" data-testid="donate-valorpay"
+                                onclick="openUrl('https://donate.podiumcli.com')">💳 Credit card</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <div id="settings-modal" class="modal">
             <div class="modal-content">
                 <div class="modal-header">
@@ -670,7 +688,7 @@
                     <button class="btn btn-secondary" onclick="openUrl('https://patreon.com/canebaycomputers')">
                         ❤️ Support on Patreon
                     </button>
-                    <button class="btn btn-secondary" onclick="openUrl('https://securelink-prod.valorpaytech.com:4430/?redirect=1&uid=6e840752-8751-11f0-a74f-12a0879a85b1')">
+                    <button class="btn btn-secondary" onclick="openUrl('https://donate.podiumcli.com')">
                         💳 Donate
                     </button>
                 </div>

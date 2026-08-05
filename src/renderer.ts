@@ -1447,13 +1447,20 @@ let cliCaps: { qwen: boolean; clearableEndpoint: boolean } = { qwen: true, clear
 // `showAiSettings()` is kept as an alias rather than removed — it is referenced
 // from the first-run prompt and from tests, and there is no reason to break
 // those to rename a button.
+function showDonateModal(): void {
+    showModal('donate-modal');
+}
+
 async function showSettings(tab: 'appearance' | 'ai' = 'appearance'): Promise<void> {
     renderThemePicker();
     switchSettingsTab(tab);
-    showModal('settings-modal');
-    // Loaded after the modal is up so opening Appearance is instant and does
-    // not wait on the CLI capability probe.
+    // Populate BEFORE showing. Loading afterwards made Appearance open a beat
+    // sooner, but it also meant the form finished loading after the panel was
+    // interactive and reset #ai-agent to the stored value — silently discarding
+    // an agent the user had just picked. A snappier open is not worth a control
+    // that undoes your input.
     await loadAiSettingsForm();
+    showModal('settings-modal');
 }
 
 async function showAiSettings(): Promise<void> {
@@ -3073,6 +3080,7 @@ async function submitEditProject(): Promise<void> {
 };
 (window as any).showAiSettings = showAiSettings;
 (window as any).showSettings = showSettings;
+(window as any).showDonateModal = showDonateModal;
 (window as any).selectTheme = selectTheme;
 (window as any).switchSettingsTab = switchSettingsTab;
 (window as any).onAiAgentChange = onAiAgentChange;
