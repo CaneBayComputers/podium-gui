@@ -191,7 +191,7 @@ function createWindow(): void {
         {
           label: 'Donate',
           click: () => {
-            shell.openExternal('https://securelink-prod.valorpaytech.com:4430/?redirect=1&uid=6e840752-8751-11f0-a74f-12a0879a85b1');
+            shell.openExternal('https://donate.podiumcli.com');
           }
         }
       ]
