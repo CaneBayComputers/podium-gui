@@ -1211,7 +1211,7 @@ function hideNotification(): void {
     }
 }
 
-function showNotification(message: string, type: 'success' | 'error' | 'info' | 'loading' = 'info', duration: number = 5000): HTMLElement {
+function showNotification(message: string, type: 'success' | 'error' | 'warning' | 'info' | 'loading' = 'info', duration: number = 5000): HTMLElement {
     hideNotification();
 
     const notification: HTMLElement = document.createElement('div');
@@ -2996,7 +2996,10 @@ async function handleInstallApp(): Promise<void> {
     setInstallView('progress');
 
     const title = document.getElementById('install-progress-title');
-    if (title) title.textContent = `Installing ${app.display} as "${target}"… this can take several minutes.`;
+    // A slow app goes quiet for a full minute during its readiness retries —
+    // measured at 60s on mautic. A static pane and a static line are
+    // indistinguishable from a hang, so keep something visibly moving.
+    startInstallClock(app.display, target);
 
     // Deliberately NOT --json-output: it suppresses all human-readable output,
     // including the URL, credentials and notes printed at the end, and would
@@ -3010,14 +3013,34 @@ async function handleInstallApp(): Promise<void> {
         const result = await ipcRenderer.invoke('execute-command-stream', 'podium', args);
 
         installInProgress = false;
+        stopInstallClock();
         // The result carries the complete captured output, so use it to close
         // any gap the stream left. Belt and braces with the flag change above:
         // the summary block is the whole point of not passing --json-output.
         reconcileInstallOutput(result);
 
         if (result.code === 0) {
-            showSuccess(`${app.display} installed at http://${target}/`);
-            if (title) title.textContent = `${app.display} is installed — http://${target}/`;
+            // Exit 0 is not "it works". `podium install` exits 0 after its
+            // readiness retries are exhausted, printing "returned HTTP 000 — it
+            // may still be initializing". Reporting that as success gave a green
+            // toast and a URL for a crash-looping app. Ask the app instead —
+            // this runs after the CLI gave up, so it can only be more current.
+            const probe = await ipcRenderer.invoke('check-project-url', target);
+            const serving = probe.code >= 200 && probe.code < 400;
+
+            if (serving) {
+                showSuccess(`${app.display} installed at http://${target}/`);
+                if (title) title.textContent = `${app.display} is installed — http://${target}/`;
+            } else {
+                showNotification(
+                    `${app.display} installed, but http://${target}/ is not responding yet.`,
+                    'warning', 8000);
+                if (title) {
+                    title.textContent = `${app.display} is installed but not responding yet `
+                        + `(HTTP ${probe.code || 'no response'}) — it may still be starting. `
+                        + `Check: podium logs ${target}`;
+                }
+            }
         } else {
             showError(`Install failed (exit ${result.code}). See the output above.`);
             if (title) title.textContent = `Install of ${app.display} failed (exit ${result.code}).`;
@@ -3027,7 +3050,36 @@ async function handleInstallApp(): Promise<void> {
         loadServices();
     } catch (error) {
         installInProgress = false;
+        stopInstallClock();
         showError('Error installing app: ' + (error as Error).message);
+    }
+}
+
+// Elapsed-time counter for the install progress line.
+let installClock: ReturnType<typeof setInterval> | null = null;
+
+function startInstallClock(display: string, target: string): void {
+    stopInstallClock();
+    const started = Date.now();
+
+    const tick = () => {
+        const title = document.getElementById('install-progress-title');
+        if (!title) return;
+        const secs = Math.floor((Date.now() - started) / 1000);
+        const mins = Math.floor(secs / 60);
+        const elapsed = mins > 0 ? `${mins}m ${secs % 60}s` : `${secs}s`;
+        title.textContent =
+            `Installing ${display} as "${target}"… ${elapsed} elapsed. Some apps take several minutes.`;
+    };
+
+    tick();
+    installClock = setInterval(tick, 1000);
+}
+
+function stopInstallClock(): void {
+    if (installClock) {
+        clearInterval(installClock);
+        installClock = null;
     }
 }
 
@@ -3752,6 +3804,7 @@ async function submitEditProject(): Promise<void> {
 (window as any).selectApp = selectApp;
 (window as any).handleInstallApp = handleInstallApp;
 (window as any).reconcileInstallOutput = reconcileInstallOutput;
+(window as any).showNotification = showNotification;
 (window as any).refreshProjects = refreshProjects;
 (window as any).manualRefresh = manualRefresh;
 (window as any).startAutoRefresh = startAutoRefresh;

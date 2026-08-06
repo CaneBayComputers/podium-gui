@@ -682,6 +682,30 @@ ipcMain.handle('get-cli-capabilities', async (): Promise<{ qwen: boolean; cleara
   return cliCapabilities;
 });
 
+// Does a freshly installed project actually serve anything?
+//
+// `podium install` exits 0 even when its readiness retries are exhausted — it
+// prints "returned HTTP 000 — it may still be initializing" and gives up, which
+// is the right call for a CLI that cannot wait forever. The GUI was reading only
+// the exit code, so a crash-looping app produced a green "installed" toast and a
+// URL that had never served a request. Ask the app directly instead.
+ipcMain.handle('check-project-url', async (
+  _event: IpcMainInvokeEvent,
+  projectName: string
+): Promise<{ code: number }> => {
+  return new Promise((resolve) => {
+    const request = http.get(`http://${projectName}/`, { timeout: 6000 }, (res) => {
+      // Any response at all is the answer; the body is irrelevant.
+      res.resume();
+      resolve({ code: res.statusCode ?? 0 });
+    });
+
+    // 0 mirrors curl's "no response" convention, which is what the CLI prints.
+    request.on('error', () => resolve({ code: 0 }));
+    request.on('timeout', () => { request.destroy(); resolve({ code: 0 }); });
+  });
+});
+
 // Ollama exposes what the user has actually pulled. Turning the hardest step of
 // a local setup — "type the exact model tag" — into a picker is most of the value
 // of the local presets. Fails quietly to free text when Ollama is not running.

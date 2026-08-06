@@ -360,6 +360,23 @@ async function run() {
     check('a truncated install pane is repaired from the captured output',
       repaired.restored, JSON.stringify(repaired.after));
 
+    // A notification's type must actually reach its styling. showNotification
+    // sets `notification-<type>` while the CSS only matched `.notification.
+    // <type>`, so every notification rendered identically — a success and a
+    // failure were the same colour and nobody noticed.
+    const notifStyles = await win.evaluate(() => {
+      const seen = {};
+      for (const type of ['success', 'error', 'warning']) {
+        const n = window.showNotification(`probe ${type}`, type, 0);
+        seen[type] = getComputedStyle(n).borderTopColor;
+        n.remove();
+      }
+      return seen;
+    });
+    const distinct = new Set(Object.values(notifStyles));
+    check('notification types are visually distinct',
+      distinct.size === 3, JSON.stringify(notifStyles));
+
     // Repairing must not duplicate what already arrived.
     const idempotent = await win.evaluate(() => {
       const pane = document.getElementById('install-output');
