@@ -1387,14 +1387,30 @@ span.status-indicator {
     }
 }
 
-.notification.success {
+/*
+ * Both spellings. showNotification() sets `notification-<type>`, while these
+ * rules only ever matched `.notification.<type>` — so the type never reached
+ * the styling and every notification rendered identically, success and error
+ * alike. Matching both keeps any existing selector working.
+ */
+.notification.success,
+.notification-success {
     border-color: var(--neon-green);
     color: var(--neon-green);
 }
 
-.notification.error {
+.notification.error,
+.notification-error {
     border-color: var(--neon-pink);
     color: var(--neon-pink);
+}
+
+/* "It installed, but it is not answering yet" is neither a success nor a
+   failure, and reporting it as either one would be a lie. */
+.notification.warning,
+.notification-warning {
+    border-color: var(--neon-orange);
+    color: var(--neon-orange);
 }
 
 /* Management modal specific styles */
