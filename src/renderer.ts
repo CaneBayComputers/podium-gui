@@ -1772,7 +1772,8 @@ function debugAiState(state: any): void {
 }
 
 // Cached per session; the installed CLI does not change underneath us.
-let cliCaps: { qwen: boolean; clearableEndpoint: boolean } = { qwen: true, clearableEndpoint: true };
+let cliCaps: { qwen: boolean; clearableEndpoint: boolean; unattended: boolean } =
+    { qwen: true, clearableEndpoint: true, unattended: false };
 
 // Settings is now the single entry point; the AI form is one tab inside it.
 // `showAiSettings()` is kept as an alias rather than removed — it is referenced
@@ -1831,6 +1832,27 @@ async function loadAiSettingsForm(): Promise<void> {
     (document.getElementById('ai-api-base') as HTMLInputElement).value = current.api_base || '';
     (document.getElementById('ai-api-key') as HTMLInputElement).value = '';
 
+    // Autonomy reflects what is actually stored in the AGENT's own config, which
+    // the CLI reports as "true"/"false"/"unknown". Anything but an explicit
+    // "true" shows unchecked: this is the setting where guessing in the
+    // permissive direction is the one mistake that matters.
+    const unattendedBox = document.getElementById('ai-unattended') as HTMLInputElement;
+    const unattendedGroup = document.getElementById('ai-unattended-group');
+    const unattendedHelp = document.getElementById('ai-unattended-help');
+    if (unattendedBox) unattendedBox.checked = current.unattended === 'true';
+    if (unattendedGroup) unattendedGroup.style.display = cliCaps.unattended ? 'block' : 'none';
+    if (unattendedHelp) {
+        unattendedHelp.textContent = current.unattended === 'unknown'
+            ? 'Podium could not read this from the agent\'s config; shown as off.'
+            : 'Stored in the agent\'s own config file, so it can be undone outside Podium.';
+    }
+    // Deliberately NOT through onUnattendedChange(): that asks for confirmation,
+    // and merely opening Settings must never put a dialog in front of someone
+    // who did not touch the control. Worse, dismissing that dialog turned the
+    // setting off on screen while it was still on in the agent's config — the
+    // panel would have been lying about a safety setting.
+    syncUnattendedWarning();
+
     const note = document.getElementById('ai-key-note');
     if (note) {
         note.textContent = current.has_api_key
@@ -1849,6 +1871,36 @@ async function loadAiSettingsForm(): Promise<void> {
     apiBaseRevealed = false;
 
     await onAiAgentChange();
+}
+
+// Turning autonomy ON is a deliberate act, so it asks. Turning it off is not
+// confirmed — making the safe direction harder than the unsafe one is exactly
+// the mistake the removal dialog had.
+function onUnattendedChange(): void {
+    const box = document.getElementById('ai-unattended') as HTMLInputElement;
+    if (!box) return;
+
+    // Only ticking it ON asks. Turning it off is never confirmed — making the
+    // safe direction harder than the unsafe one is the mistake the project
+    // removal dialog used to have.
+    if (box.checked) {
+        const ok = confirm(
+            'Let the AI agent act without asking permission?\n\n'
+            + 'It will edit files, run commands and install packages in your projects '
+            + 'without stopping for approval each time.\n\n'
+            + 'This is stored in the agent\'s own config and applies wherever you run it, '
+            + 'not just inside Podium.');
+        if (!ok) box.checked = false;
+    }
+
+    syncUnattendedWarning();
+}
+
+// Display only. Used by the load path, which must not ask anything.
+function syncUnattendedWarning(): void {
+    const box = document.getElementById('ai-unattended') as HTMLInputElement;
+    const warning = document.getElementById('ai-unattended-warning');
+    if (warning) warning.style.display = box?.checked ? 'block' : 'none';
 }
 
 // Set when the user asks to see an endpoint field that is folded away by
@@ -1992,6 +2044,14 @@ async function saveAiSettings(): Promise<void> {
         args.push('--api-base', endpoint);
     } else if (cliCaps.clearableEndpoint) {
         args.push('--api-base', 'none');
+    }
+
+    // Autonomy is sent EVERY time, in whichever direction the box is in. Sending
+    // it only when enabling would make the checkbox one-way: unticking it would
+    // silently leave the agent unattended.
+    if (cliCaps.unattended) {
+        const unattended = (document.getElementById('ai-unattended') as HTMLInputElement)?.checked;
+        args.push(unattended ? '--allow-unattended' : '--no-allow-unattended');
     }
 
     // The key is write-only — blank means "keep what is stored", because the
@@ -3780,6 +3840,7 @@ async function submitEditProject(): Promise<void> {
 (window as any).selectTheme = selectTheme;
 (window as any).switchSettingsTab = switchSettingsTab;
 (window as any).onAiAgentChange = onAiAgentChange;
+(window as any).onUnattendedChange = onUnattendedChange;
 (window as any).applyEndpoint = applyEndpoint;
 (window as any).revealApiBase = revealApiBase;
 (window as any).saveAiSettings = saveAiSettings;

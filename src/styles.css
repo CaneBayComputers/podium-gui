@@ -1863,6 +1863,21 @@ span.status-indicator {
     color: var(--text-muted);
 }
 
+/* A setting that removes a safety check should not look like the ones that do
+   not. Enough to make someone pause; not so much that it reads as an error. */
+.danger-group {
+    padding: 0.75rem 0.9rem;
+    margin-top: 0.5rem;
+    border: 1px solid var(--neon-orange);
+    border-radius: 6px;
+    background: rgba(255, 140, 0, 0.06);
+}
+
+.danger-group > label {
+    color: var(--neon-orange);
+    font-weight: 600;
+}
+
 /* Reveal for options that are folded away by default. */
 .link-button {
     display: inline-block;
