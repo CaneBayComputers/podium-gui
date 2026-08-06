@@ -938,8 +938,23 @@ async function removeProject(projectName: string): Promise<void> {
         return;
     }
 
-    // Database preservation confirmation
-    const preserveDatabase = confirm(`Do you want to keep the database for "${projectName}"?\n\nClick OK to keep the database, Cancel to delete it.`);
+    // Asked so that OK is the DESTRUCTIVE answer, not the safe one.
+    //
+    // This used to ask "keep the database?" with OK = keep. confirm() returns
+    // false when the dialog is dismissed, so Escape or the window X deleted the
+    // data — the destructive path was what you got for not answering. Now
+    // dismissing keeps everything and destroying requires a deliberate OK.
+    //
+    // The wording names the volumes too: --force-db-delete now removes the
+    // project's named volumes as well as its database (CLI 77484a0), which for
+    // most apps is uploads, config and media. Saying only "database" would
+    // promise less than the flag destroys.
+    const deleteData = confirm(
+        `Also delete the stored data for "${projectName}"?\n\n`
+        + `This drops its database AND its Docker volumes — uploads, configuration `
+        + `and media are destroyed and cannot be recovered.\n\n`
+        + `OK to delete everything. Cancel to keep the data.`);
+    const preserveDatabase = !deleteData;
 
     try {
         showLoadingOverlay('Removing Project', `Removing project ${projectName}...`);
@@ -956,7 +971,9 @@ async function removeProject(projectName: string): Promise<void> {
         hideLoadingOverlay();
         
         if (result.code === 0) {
-            const dbMessage = preserveDatabase ? ' (database preserved)' : ' (database deleted)';
+            const dbMessage = preserveDatabase
+                ? ' (database and stored data kept)'
+                : ' (database and stored data deleted)';
             showSuccess(`Project ${projectName} removed successfully${dbMessage}`);
         } else {
             showError(`Failed to remove project: ${result.stderr || result.stdout}`);
