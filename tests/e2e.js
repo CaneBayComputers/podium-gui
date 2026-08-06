@@ -757,21 +757,49 @@ async function run() {
     // --- Modal wiring ---------------------------------------------------
     console.log('\nmodal wiring');
 
-    // The Help modal was nested INSIDE the About modal, so adding .show to it
-    // could never make it visible — its parent is display:none. The button had
-    // never worked. Assert the structural fact, not just the symptom.
-    const nesting = await win.evaluate(() => {
-      const help = document.getElementById('help-modal');
-      const about = document.getElementById('about-modal');
-      return {
-        exists: !!help,
-        nestedInAnotherModal: !!help && !!help.closest('.modal:not(#help-modal)'),
-        insideAbout: !!(about && help && about.contains(help))
-      };
+    // The Help modal is gone, along with the functions that opened it. It had
+    // already lost its button; leaving the markup and a window.showHelpModal
+    // behind meant a help screen that was still reachable but unreferenced.
+    const helpGone = await win.evaluate(() => ({
+      markup: !!document.getElementById('help-modal'),
+      opener: typeof window.showHelpModal === 'function',
+      cliHelp: typeof window.showCliHelp === 'function'
+    }));
+    check('the help screen is gone, markup and openers alike',
+      !helpGone.markup && !helpGone.opener && !helpGone.cliHelp,
+      JSON.stringify(helpGone));
+
+    // Action buttons must not sit flush against the modal's edges. .form-actions
+    // carried only padding-top, so the modals using it had their buttons butted
+    // against the bottom and right while the .modal-footer ones looked fine —
+    // which is why it read as "some modals" rather than all of them.
+    //
+    // Measure the BUTTONS, not the row: the row's padding is inside it, so a row
+    // flush with the modal edge can still hold buttons with plenty of clearance.
+    const actionGaps = await win.evaluate(() => {
+      const out = [];
+      for (const m of document.querySelectorAll('.modal')) {
+        const row = m.querySelector('.form-actions, .modal-footer');
+        if (!row) continue;
+        m.classList.add('show');
+        const content = m.querySelector('.modal-content').getBoundingClientRect();
+        const btns = [...row.querySelectorAll('button')]
+          .filter((b) => b.getBoundingClientRect().width > 0);
+        if (btns.length) {
+          out.push({
+            id: m.id,
+            bottom: Math.round(content.bottom - Math.max(...btns.map((b) => b.getBoundingClientRect().bottom))),
+            right: Math.round(content.right - Math.max(...btns.map((b) => b.getBoundingClientRect().right)))
+          });
+        }
+        m.classList.remove('show');
+      }
+      return out;
     });
-    check('help modal is not nested inside another modal',
-      nesting.exists && !nesting.nestedInAnotherModal && !nesting.insideAbout,
-      JSON.stringify(nesting));
+    const butted = actionGaps.filter((g) => g.bottom < 8 || g.right < 8);
+    check('modal action buttons clear the modal edges',
+      actionGaps.length > 0 && butted.length === 0,
+      butted.length ? JSON.stringify(butted) : `${actionGaps.length} action rows checked`);
 
     // Every modal must be a top-level element for the same reason.
     const badlyNested = await win.evaluate(() =>
@@ -780,7 +808,7 @@ async function run() {
         .map((m) => m.id));
     check('no modal is nested inside another', badlyNested.length === 0, badlyNested.join(','));
 
-    for (const id of ['help-modal', 'about-modal']) {
+    for (const id of ['about-modal']) {
       await win.evaluate((m) => window.showModal(m), id);
       await win.waitForTimeout(400);
       check(`${id} actually becomes visible`, await win.isVisible(`#${id}`));

@@ -490,7 +490,9 @@ body::before {
     display: flex;
     flex-wrap: wrap;
     gap: 1rem;
-    margin: 2rem 1rem 1rem 1rem;
+    /* The filter bar above supplies the gap from the header now; keeping 2rem
+       here as well stacked the two into a large empty band. */
+    margin: 0 1rem 1rem 1rem;
     justify-content: flex-start;
 }
 
@@ -1213,12 +1215,17 @@ span.status-indicator {
 }
 
 /* Form action buttons */
+/*
+ * Padding on every side, not just the top. With only padding-top the buttons
+ * sat flush against the bottom and right edges of the modal — .modal-footer
+ * has always had 1rem 1.5rem, and these two lay out the same row of buttons.
+ */
 .form-actions {
     display: flex;
     gap: 1rem;
     justify-content: flex-end;
     margin-top: 2rem;
-    padding-top: 1rem;
+    padding: 1rem 1.5rem;
     border-top: 1px solid var(--neon-purple);
 }
 
@@ -2525,12 +2532,18 @@ label > .form-help {
 .donate-links .btn { justify-content: flex-start; text-align: left; }
 
 /* Project filter bar */
+/*
+ * Centred on the page and clear of the header. It sat hard against the header
+ * and hugged the left edge, so it read as part of the header rather than as
+ * controls for the grid below it.
+ */
 .project-filters {
     display: flex;
     align-items: center;
+    justify-content: center;
     gap: 0.75rem;
     flex-wrap: wrap;
-    margin-bottom: 1rem;
+    margin: 1.75rem 1rem 1.25rem;
 }
 .project-filters .filter-group { display: flex; gap: 0.5rem; }
 .project-filters select {
