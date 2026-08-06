@@ -663,9 +663,9 @@ ipcMain.handle('get-framework-catalog', async (): Promise<{ frameworks: CatalogF
 // so a current install has no qwen and stores `--api-base none` as a literal
 // string. Offering qwen there produces an agent the CLI rejects. Rather than
 // couple the GUI's release to the CLI's, ask the CLI what it can do.
-let cliCapabilities: { qwen: boolean; clearableEndpoint: boolean } | null = null;
+let cliCapabilities: { qwen: boolean; clearableEndpoint: boolean; unattended: boolean } | null = null;
 
-ipcMain.handle('get-cli-capabilities', async (): Promise<{ qwen: boolean; clearableEndpoint: boolean }> => {
+ipcMain.handle('get-cli-capabilities', async (): Promise<{ qwen: boolean; clearableEndpoint: boolean; unattended: boolean }> => {
   if (cliCapabilities) return cliCapabilities;
 
   const help = await runPodium(['ai-set', '--help']);
@@ -675,7 +675,11 @@ ipcMain.handle('get-cli-capabilities', async (): Promise<{ qwen: boolean; cleara
     qwen: /\bqwen\b/.test(text),
     // Same commit added both, so qwen is a reliable proxy for "endpoint clearing
     // works" — on older CLIs `none` is stored verbatim.
-    clearableEndpoint: /\bqwen\b/.test(text)
+    clearableEndpoint: /\bqwen\b/.test(text),
+    // Offering a control the installed CLI cannot honour would silently do
+    // nothing — worse here than elsewhere, since the user would believe they
+    // had changed how much the agent is allowed to do on its own.
+    unattended: /--allow-unattended/.test(text)
   };
 
   debugLog('CLI capabilities', cliCapabilities);

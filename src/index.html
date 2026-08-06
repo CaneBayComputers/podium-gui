@@ -463,6 +463,26 @@
                         <span class="form-help" id="ai-api-base-help"></span>
                     </div>
 
+                    <!--
+                        Autonomy. This removes the approval prompt in front of
+                        every action the agent takes, so it is deliberately not
+                        styled like the other checkboxes and enabling it asks
+                        for confirmation.
+                    -->
+                    <div class="form-group danger-group" id="ai-unattended-group" style="display: none;">
+                        <label>
+                            <input type="checkbox" id="ai-unattended" data-testid="ai-unattended"
+                                   onchange="onUnattendedChange()" />
+                            Let the agent act without asking permission
+                        </label>
+                        <span class="form-help" id="ai-unattended-help"></span>
+                        <div class="agent-warning" id="ai-unattended-warning" style="display: none;">
+                            The agent will edit files, run commands and install packages in your
+                            projects without stopping to ask. Only worth it if you would have
+                            approved everything anyway.
+                        </div>
+                    </div>
+
                     <div class="form-group" id="ai-clear-key-group" style="display: none;">
                         <label>
                             <input type="checkbox" id="ai-clear-key" data-testid="ai-clear-key" />

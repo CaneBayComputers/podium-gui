@@ -969,6 +969,91 @@ async function run() {
     check('a remote endpoint chip fills the URL', /openrouter/.test(remote.base), remote.base);
     check('a remote endpoint hides the VRAM warning', remote.warning === 'none');
 
+    // --- AI autonomy ------------------------------------------------------
+    //
+    // This setting removes the approval prompt in front of every action the
+    // agent takes, so the failure that matters is enabling it by accident or
+    // failing to turn it back off.
+    const unattendedShown = await win.isVisible('#ai-unattended-group');
+    check('autonomy is offered exactly when the CLI supports it',
+      unattendedShown === caps.unattended,
+      `cli.unattended=${caps.unattended} shown=${unattendedShown}`);
+
+    if (caps.unattended) {
+      // The stored value is authoritative, and anything but an explicit "true"
+      // must read as off — "unknown" shown as on would be the one dangerous
+      // way to be wrong.
+      const stored = await app.evaluate(async ({ ipcMain }) =>
+        ipcMain._invokeHandlers.get('get-ai-agent-full')({}));
+      const boxState = await win.isChecked('#ai-unattended');
+      check('autonomy checkbox matches what the agent config actually stores',
+        boxState === (stored.unattended === 'true'),
+        `stored=${stored.unattended} checked=${boxState}`);
+
+      // Enabling asks first; declining must leave it off.
+      const declined = await win.evaluate(async () => {
+        const real = window.confirm;
+        window.confirm = () => false;
+        const box = document.getElementById('ai-unattended');
+        box.checked = true;
+        window.onUnattendedChange();
+        const after = box.checked;
+        window.confirm = real;
+        return after;
+      });
+      check('declining the autonomy prompt leaves it off', declined === false);
+
+      // Accepting shows the warning, so the consequence is on screen while it
+      // is on rather than only in the dialog that has since closed.
+      const accepted = await win.evaluate(async () => {
+        const real = window.confirm;
+        window.confirm = () => true;
+        const box = document.getElementById('ai-unattended');
+        box.checked = true;
+        window.onUnattendedChange();
+        const state = {
+          checked: box.checked,
+          warning: document.getElementById('ai-unattended-warning').style.display
+        };
+        box.checked = false;
+        window.onUnattendedChange();
+        state.warningAfterOff = document.getElementById('ai-unattended-warning').style.display;
+        window.confirm = real;
+        return state;
+      });
+      check('accepting turns it on and shows the consequence',
+        accepted.checked && accepted.warning === 'block', JSON.stringify(accepted));
+      check('turning it off hides the warning again',
+        accepted.warningAfterOff === 'none');
+
+      // The flag must be sent in BOTH directions. Sending it only when enabling
+      // would make the checkbox one-way — unticking it would silently leave the
+      // agent unattended, which is the failure nobody would notice.
+      const sent = await win.evaluate(async () => {
+        const ipc = require('electron').ipcRenderer;
+        const realInvoke = ipc.invoke.bind(ipc);
+        const runs = {};
+        for (const on of [true, false]) {
+          document.getElementById('ai-unattended').checked = on;
+          ipc.invoke = async (channel, cmd, args) => {
+            // saveAiSettings streams `podium ai-set ...`; args is the argv.
+            if (channel === 'execute-command-stream' && cmd === 'podium') {
+              runs[on ? 'on' : 'off'] = (args || []).slice();
+              return { code: 1, stdout: '', stderr: 'intercepted by test' };
+            }
+            return realInvoke(channel, cmd, args);
+          };
+          await window.saveAiSettings();
+        }
+        ipc.invoke = realInvoke;
+        return runs;
+      });
+      check('enabling sends --allow-unattended',
+        JSON.stringify(sent.on || []).includes('--allow-unattended'), JSON.stringify(sent.on));
+      check('disabling sends --no-allow-unattended, not silence',
+        JSON.stringify(sent.off || []).includes('--no-allow-unattended'), JSON.stringify(sent.off));
+    }
+
     // Switching agents must clear the previous agent's validation message —
     // "aider requires a model" sitting under a field marked (optional) was
     // visible in a screenshot while every assertion passed.
