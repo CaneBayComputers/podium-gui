@@ -360,6 +360,50 @@ async function run() {
     check('a truncated install pane is repaired from the captured output',
       repaired.restored, JSON.stringify(repaired.after));
 
+    // Removing a project must not destroy data because a dialog was dismissed.
+    //
+    // confirm() returns false when the user hits Escape or the window X. The
+    // question used to be "keep the database?" with OK = keep, so dismissing it
+    // took the destructive branch — and --force-db-delete now drops the
+    // project's volumes too, not just its database. The destructive answer has
+    // to require a deliberate OK.
+    const removeFlags = await win.evaluate(async () => {
+      const realConfirm = window.confirm;
+      const realInvoke = require('electron').ipcRenderer.invoke;
+      const runs = {};
+
+      for (const [label, answers] of [
+        ['dismissed', [true, false]],   // proceed with removal, then dismiss
+        ['accepted', [true, true]]      // proceed, then explicitly say delete
+      ]) {
+        let i = 0;
+        window.confirm = () => answers[i++];
+        require('electron').ipcRenderer.invoke = async (channel, cmd, args) => {
+          if (channel === 'execute-podium' && cmd === 'remove') {
+            runs[label] = args.slice();
+            return { code: 1, stdout: '', stderr: 'intercepted by test' };
+          }
+          return realInvoke(channel, cmd, args);
+        };
+        await window.removeProject('__test_never_exists__');
+      }
+
+      window.confirm = realConfirm;
+      require('electron').ipcRenderer.invoke = realInvoke;
+      return runs;
+    });
+
+    check('dismissing the data prompt preserves the database and volumes',
+      (removeFlags.dismissed || []).includes('--preserve-database'),
+      JSON.stringify(removeFlags.dismissed));
+    check('deleting data requires a deliberate confirmation',
+      (removeFlags.accepted || []).includes('--force-db-delete'),
+      JSON.stringify(removeFlags.accepted));
+    // --force is an undocumented alias for --force-db-delete, not "skip
+    // prompts". Passing it once deleted databases users had asked to keep.
+    check('remove never passes the legacy --force alias',
+      !JSON.stringify(removeFlags).includes('"--force"'), JSON.stringify(removeFlags));
+
     // A notification's type must actually reach its styling. showNotification
     // sets `notification-<type>` while the CSS only matched `.notification.
     // <type>`, so every notification rendered identically — a success and a
