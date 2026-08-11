@@ -793,6 +793,30 @@ ipcMain.handle('get-optional-services', async (): Promise<string[]> => {
     .filter((name) => name !== '');
 });
 
+// The CLI's own service listing, which it generates from the same catalogue it
+// validates against. Replaces a copy that lived in the GUI: the copy existed
+// only because `enable-service` had no machine-readable output, and it drifted
+// the moment the CLI grew from two services to nine.
+ipcMain.handle('get-service-catalog', async (): Promise<{
+  always_on: string[];
+  services: Array<{ slug: string; group: string; description: string; address: string; state: string }>;
+  error?: string;
+}> => {
+  const result = await runPodium(['enable-service', '--json-output']);
+
+  try {
+    const parsed = JSON.parse(result.stdout || '{}');
+    if (!Array.isArray(parsed.services)) {
+      // An older CLI prints usage text here rather than JSON. Say so instead of
+      // rendering an empty manager that looks like "no services exist".
+      return { always_on: [], services: [], error: 'This Podium CLI has no machine-readable service listing.' };
+    }
+    return { always_on: parsed.always_on || [], services: parsed.services };
+  } catch (error) {
+    return { always_on: [], services: [], error: 'Could not read the service listing from the CLI.' };
+  }
+});
+
 // Which shared services a project actually depends on.
 //
 // Disabling a database a project is using leaves it unable to connect, and

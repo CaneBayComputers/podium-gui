@@ -1747,35 +1747,42 @@ async function run() {
       check(`sync script ${label}`, re.test(syncBody));
     }
 
-    // --- Optional services: the GUI's list vs the CLI's ------------------
+    // --- Optional services -----------------------------------------------
     //
-    // A contract test. The GUI keeps its own catalogue because it needs labels
-    // and grouping the CLI does not provide — and because there is no
-    // machine-readable listing to read: `podium enable-service` with no
-    // argument prints usage text that currently names two of the nine.
-    //
-    // So assert the two lists agree. Offering a service the CLI would reject,
-    // or hiding one it supports, both fail here rather than on a user.
-    const enableScript = '/usr/local/share/podium-cli/src/scripts/enable_service.sh';
-    if (fsMod.existsSync(enableScript)) {
-      const cliList = (fsMod.readFileSync(enableScript, 'utf8')
-        .match(/AVAILABLE_OPTIONAL_SERVICES="([^"]*)"/) || [])[1];
-      const cliServices = (cliList || '').split(/\s+/).filter(Boolean).sort();
-      const guiServices = (await win.evaluate(() => window.__optionalServices())).sort();
+    // The GUI no longer keeps its own catalogue: the CLI publishes one via
+    // `podium enable-service --json-output`. This asserts the window renders
+    // exactly what the CLI declares — the earlier version of this test compared
+    // the GUI's hardcoded copy against the CLI's shell source, and existed only
+    // because that copy did.
+    const cliCatalog = await app.evaluate(async ({ ipcMain }) =>
+      ipcMain._invokeHandlers.get('get-service-catalog')({}));
 
-      check('the CLI still declares its optional service list where we read it',
-        cliServices.length > 0, enableScript);
-      check('GUI service catalogue matches the CLI exactly',
-        JSON.stringify(cliServices) === JSON.stringify(guiServices),
+    check('the CLI publishes a machine-readable service listing',
+      !cliCatalog.error && Array.isArray(cliCatalog.services) && cliCatalog.services.length > 0,
+      cliCatalog.error || `${cliCatalog.services?.length} services`);
+
+    if (!cliCatalog.error) {
+      const shaped = cliCatalog.services[0] || {};
+      check('listing entries carry slug/group/description/address/state',
+        ['slug', 'group', 'description', 'address', 'state'].every((k) => k in shaped),
+        JSON.stringify(shaped));
+
+      // Every state the CLI can report must map to something the window shows.
+      const states = [...new Set(cliCatalog.services.map((s) => s.state))];
+      check('every reported state is one the GUI understands',
+        states.every((st) => ['disabled', 'enabled_not_running', 'running'].includes(st)),
+        states.join(','));
+
+      const guiServices = (await win.evaluate(() => window.__optionalServices())).sort();
+      const cliServices = cliCatalog.services.map((s) => s.slug).sort();
+      check('the manager offers exactly the services the CLI declares',
+        JSON.stringify(guiServices) === JSON.stringify(cliServices),
         `cli=${cliServices.join(',')} gui=${guiServices.join(',')}`);
 
-      // The always-on trio must never appear as a toggle: they cannot be turned
-      // off, so a control for them could only confuse.
-      const offered = guiServices.filter((s) => ['redis', 'memcached', 'mailhog'].includes(s));
+      // Always-on services must never appear as toggles — they cannot move.
+      const offered = guiServices.filter((s) => (cliCatalog.always_on || []).includes(s));
       check('the always-on services are not offered as toggles',
         offered.length === 0, offered.join(','));
-    } else {
-      check('CLI enable_service.sh is where the contract test expects it', false, enableScript);
     }
 
     // Arch-only landmines, both from the CLI's installer.
