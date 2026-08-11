@@ -1344,6 +1344,11 @@ interface ProjectMetadata {
   // backfill, and inventing a timestamp would be worse than an absent one.
   // Optional because the GUI's write path never supplies it.
   last_on?: string;
+  // Parked, not deleted. Written by `podium disable` / `podium enable`.
+  // ONLY the exact string "disabled" disables — missing, empty or anything
+  // unrecognised means enabled, so a project can never become unusable
+  // because a read returned something unexpected.
+  status?: string;
 }
 
 // Resolve the projects directory from Podium's own config rather than guessing
@@ -1436,7 +1441,8 @@ ipcMain.handle('get-project-metadata', async (event: IpcMainInvokeEvent, project
       display_name: read('name'),
       description: read('description'),
       emoji: read('emoji'),
-      last_on: read('last_on')
+      last_on: read('last_on'),
+      status: read('status')
     };
   } catch (error) {
     debugLog('Error reading project metadata', { projectName, error: (error as Error).message });

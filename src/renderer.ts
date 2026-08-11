@@ -416,7 +416,7 @@ function parseProjectStatusJSON(statusOutput: string): void {
 // the project objects gets wiped by whichever call finishes last. Keeping
 // metadata in its own map makes it survive that.
 let projectMetadata: Record<string, {
-    display_name: string; description: string; emoji: string; last_on?: string;
+    display_name: string; description: string; emoji: string; last_on?: string; status?: string;
 }> = {};
 
 async function hydrateProjectMetadata(): Promise<void> {
@@ -445,6 +445,7 @@ function withMetadata(project: Project): Project {
     // up". Absent on projects not started or stopped since the CLI began
     // writing it — those sort last rather than to an invented epoch date.
     if (metadata.last_on) (merged as any).last_on = metadata.last_on;
+    if (metadata.status) (merged as any).status_meta = metadata.status;
 
     return merged;
 }
@@ -540,7 +541,7 @@ function setTerminalHost(value: string): void {
 // controls and the grid cannot disagree. Persisted, because a filter you have
 // to reapply on every launch is worse than no filter.
 // ---------------------------------------------------------------------------
-type RunFilter = 'all' | 'running' | 'stopped';
+type RunFilter = 'all' | 'running' | 'stopped' | 'disabled';
 type SortKey = 'name' | 'newest' | 'last-on';
 
 const FILTER_STORAGE_KEY = 'podium-gui-filters';
@@ -554,7 +555,7 @@ function loadFilterState(): void {
         const raw = localStorage.getItem(FILTER_STORAGE_KEY);
         if (!raw) return;
         const v = JSON.parse(raw);
-        if (['all', 'running', 'stopped'].includes(v.runFilter)) runFilter = v.runFilter;
+        if (['all', 'running', 'stopped', 'disabled'].includes(v.runFilter)) runFilter = v.runFilter;
         if (['name', 'newest', 'last-on'].includes(v.sortKey)) sortKey = v.sortKey;
         if (Array.isArray(v.emoji)) emojiFilter = new Set(v.emoji);
     } catch { /* corrupt or unavailable; defaults are fine */ }
@@ -566,6 +567,25 @@ function saveFilterState(): void {
             runFilter, sortKey, emoji: [...emojiFilter]
         }));
     } catch { /* private mode */ }
+}
+
+// Parked, not deleted.
+//
+// ONLY the exact string "disabled" disables. Missing, empty, or anything
+// unrecognised means enabled — the CLI asked for that rule explicitly and it is
+// the safe direction: a project must never become unusable because a metadata
+// read returned something unexpected. Every project predating the feature has
+// no `status` key at all.
+function isDisabled(p: Project): boolean {
+    return (withMetadata(p) as any).status_meta === 'disabled';
+}
+
+// A disabled project's container does not exist, so docker sees it exactly as
+// it sees a stopped one. The metadata is the only thing that tells them apart,
+// which is why "stopped" has to exclude disabled explicitly rather than just
+// meaning "not running".
+function isStopped(p: Project): boolean {
+    return !p.dockerRunning && !isDisabled(p);
 }
 
 // The emoji shown on a tile, resolved the same way renderProjects does it —
@@ -583,10 +603,20 @@ function visibleProjects(): Project[] {
     // filter would look like it had killed the agent.
     const pinned = (p: Project) => hasTileTerminal(p.name);
 
-    if (runFilter === 'running') list = list.filter(p => p.dockerRunning || pinned(p));
-    else if (runFilter === 'stopped') list = list.filter(p => !p.dockerRunning || pinned(p));
+    if (runFilter === 'disabled') {
+        // The only view that shows them, and therefore the only route back to a
+        // parked project. Nothing else may filter this list further.
+        list = list.filter(isDisabled);
+    } else {
+        // Disabled projects are hidden from every other view, including "All" —
+        // that is what parking means.
+        list = list.filter(p => !isDisabled(p) || pinned(p));
 
-    if (emojiFilter.size) list = list.filter(p => emojiFilter.has(projectEmoji(p)) || pinned(p));
+        if (runFilter === 'running') list = list.filter(p => p.dockerRunning || pinned(p));
+        else if (runFilter === 'stopped') list = list.filter(p => isStopped(p) || pinned(p));
+
+        if (emojiFilter.size) list = list.filter(p => emojiFilter.has(projectEmoji(p)) || pinned(p));
+    }
 
     const nameOf = (p: Project) => (withMetadata(p).display_name || p.name).toLowerCase();
     list.sort((a, b) => {
@@ -613,8 +643,11 @@ function renderFilterBar(): void {
     const host = document.getElementById('project-filters');
     if (!host) return;
 
+    // Counts exclude disabled projects, matching what the other views show —
+    // an emoji chip saying 3 that yields 2 tiles is worse than no chip.
+    const active = projects.filter(p => !isDisabled(p));
     const counts = new Map<string, number>();
-    for (const p of projects) {
+    for (const p of active) {
         const e = projectEmoji(p);
         counts.set(e, (counts.get(e) || 0) + 1);
     }
@@ -625,13 +658,21 @@ function renderFilterBar(): void {
               title="${n} project${n === 1 ? '' : 's'}">${e}<span class="emoji-count">${n}</span></button>`)
         .join('');
 
-    const running = projects.filter(p => p.dockerRunning).length;
+    const running = active.filter(p => p.dockerRunning).length;
+    const stopped = active.length - running;
+    const disabled = projects.length - active.length;
+
+    // The Disabled option is ALWAYS offered, even at zero. It is the only route
+    // back to a parked project, so hiding it when the count is zero would mean
+    // disabling the last visible project made it unreachable — the count is
+    // read from the same render that just hid it.
     host.innerHTML = `
         <div class="filter-group">
             <select data-testid="filter-run" onchange="setRunFilter(this.value)">
-                <option value="all"${runFilter === 'all' ? ' selected' : ''}>All (${projects.length})</option>
+                <option value="all"${runFilter === 'all' ? ' selected' : ''}>All (${active.length})</option>
                 <option value="running"${runFilter === 'running' ? ' selected' : ''}>Running (${running})</option>
-                <option value="stopped"${runFilter === 'stopped' ? ' selected' : ''}>Stopped (${projects.length - running})</option>
+                <option value="stopped"${runFilter === 'stopped' ? ' selected' : ''}>Stopped (${stopped})</option>
+                <option value="disabled"${runFilter === 'disabled' ? ' selected' : ''}>Disabled (${disabled})</option>
             </select>
             <select data-testid="filter-sort" onchange="setSortKey(this.value)">
                 <option value="name"${sortKey === 'name' ? ' selected' : ''}>Sort: Name</option>
@@ -650,7 +691,11 @@ function resetFilters(): void {
 }
 
 function setRunFilter(v: string): void {
-    runFilter = (['all', 'running', 'stopped'].includes(v) ? v : 'all') as RunFilter;
+    // Keep this list in step with RunFilter. It silently fell back to 'all'
+    // for 'disabled', so selecting the Disabled filter showed everything except
+    // the disabled projects it was meant to reveal — the one view that must
+    // work, because it is the only route back to a parked project.
+    runFilter = (['all', 'running', 'stopped', 'disabled'].includes(v) ? v : 'all') as RunFilter;
     saveFilterState(); renderProjects(); renderFilterBar();
 }
 
@@ -728,12 +773,17 @@ function renderProjects(): void {
         const emojiClass = getEmojiClass(projectIcon);
         
         // Status dot emoji (red for stopped, green for running)
-        const statusDot = project.status === 'running' ? '🟢' : '🔴';
-        const statusClass = project.status === 'running' ? 'running' : 'stopped';
-        
+        // Disabled is its own state, not a third kind of stopped: its container
+        // does not exist, so docker cannot tell it from stopped and the dot has
+        // to come from the metadata.
+        const disabled = isDisabled(parsed);
+        const statusDot = disabled ? '⏸️' : project.status === 'running' ? '🟢' : '🔴';
+        const statusClass = disabled ? 'disabled' : project.status === 'running' ? 'running' : 'stopped';
+
         return `
-            <div class="project-card ${emojiClass}">
-                <div class="project-status-dot ${statusClass}">${statusDot}</div>
+            <div class="project-card ${emojiClass}${disabled ? ' project-disabled' : ''}"
+                 ${disabled ? 'data-testid="disabled-card"' : ''}>
+                <div class="project-status-dot ${statusClass}" title="${disabled ? 'Disabled — parked, not deleted' : ''}">${statusDot}</div>
                 <div class="project-header">
                     <div class="project-icon">${projectIcon}</div>
                     <h3>${displayName}</h3>
@@ -745,13 +795,30 @@ function renderProjects(): void {
                         ${project.status !== 'stopped' && project.portMapped && project.lanUrl ? `<a href="#" class="url-link" onclick="event.preventDefault(); openUrl('${project.lanUrl}'); return false;">${project.lanUrl}</a>` : ''}
                     </div>
                     <div class="project-actions">
+                        ${disabled ? `
+                        <!--
+                            Parked. Start, Modify with AI and Edit are gone rather
+                            than greyed: the CLI refuses startup on a disabled
+                            project outright, so offering the button would only
+                            produce an error. Trash stays — parking is often the
+                            step before deleting, and the CLI still allows remove.
+                        -->
+                        <button class="btn btn-success btn-sm" data-testid="enable-${project.name}"
+                                onclick="enableProject('${project.name}')"
+                                title="Lift the block. Does not start it.">Enable</button>
+                        <button class="btn btn-danger btn-sm" onclick="showRemoveProjectModal('${project.name}')">Trash</button>
+                        ` : `
                         ${project.status !== 'stopped' ?
                             `<button class="btn btn-warning btn-sm" onclick="stopProject('${project.name}')">Stop</button>` :
                             `<button class="btn btn-success btn-sm" onclick="startProject('${project.name}')">Start</button>`
                         }
                         <button class="btn btn-create btn-sm" onclick="modifyWithAI('${project.name}')" title="Continue the AI session in this project">✨ Modify with AI</button>
                         <button class="btn btn-secondary btn-sm" onclick="editProject('${project.name}')">Edit</button>
+                        <button class="btn btn-secondary btn-sm" data-testid="disable-${project.name}"
+                                onclick="disableProject('${project.name}')"
+                                title="Park it: stops it and hides it, keeping files, database and volumes">Disable</button>
                         <button class="btn btn-danger btn-sm" onclick="showRemoveProjectModal('${project.name}')">Trash</button>
+                        `}
                     </div>
                     <!-- Where an agent session lands. Empty until one is open;
                          the pane is moved in rather than rebuilt, because
@@ -884,6 +951,16 @@ function renderServices(): void {
 }
 
 // Project management functions
+// The CLI returns a machine-readable code for a refused startup. Parsing is
+// best-effort: a non-JSON body just means "not that case".
+function startupErrorCode(stdout: string): string {
+    try {
+        return JSON.parse(stdout || '{}').error || '';
+    } catch {
+        return '';
+    }
+}
+
 async function startProject(projectName: string): Promise<void> {
     try {
         showLoadingOverlay('Starting Project', `Starting ${projectName}...`);
@@ -893,6 +970,12 @@ async function startProject(projectName: string): Promise<void> {
         
         if (result.code === 0) {
             showSuccess(`Project ${projectName} started successfully`);
+        } else if (startupErrorCode(result.stdout) === 'project_disabled') {
+            // Key on the error CODE, not the message text, as the CLI asked.
+            // Reaching this means the grid was stale rather than that the user
+            // did something wrong, so say what to do instead of showing a
+            // failure they cannot act on.
+            showError(`${projectName} is disabled. Enable it first — it is under the "Disabled" filter.`);
         } else {
             showError(`Failed to start project: ${result.stderr || result.stdout}`);
         }
@@ -988,6 +1071,41 @@ async function removeProject(projectName: string): Promise<void> {
         hideLoadingOverlay();
         showError('Error removing project: ' + (error as Error).message);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Disable / enable — parking a project rather than deleting it
+// ---------------------------------------------------------------------------
+
+async function disableProject(projectName: string): Promise<void> {
+    if (!confirm(`Disable "${projectName}"?\n\n`
+        + `It stops, disappears from the project list, and cannot be started or `
+        + `edited until you enable it again.\n\n`
+        + `Files, database and volumes are all kept — nothing is deleted.\n\n`
+        + `Find it again with the "Disabled" filter.`)) return;
+
+    const result = await ipcRenderer.invoke('execute-podium', 'disable', [projectName, '--json-output']);
+    if (result.code === 0) {
+        // Say where it went. A project vanishing from the grid with only a
+        // "done" toast is indistinguishable from having deleted it.
+        showSuccess(`${projectName} disabled — find it under the "Disabled" filter.`);
+    } else {
+        showError(`Could not disable ${projectName}: ${result.stderr || result.stdout}`);
+    }
+    await loadProjects();
+    renderFilterBar();
+}
+
+async function enableProject(projectName: string): Promise<void> {
+    const result = await ipcRenderer.invoke('execute-podium', 'enable', [projectName, '--json-output']);
+    if (result.code === 0) {
+        // enable deliberately does not start it, so do not imply that it did.
+        showSuccess(`${projectName} enabled. Start it when you are ready.`);
+    } else {
+        showError(`Could not enable ${projectName}: ${result.stderr || result.stdout}`);
+    }
+    await loadProjects();
+    renderFilterBar();
 }
 
 function refreshProjects(): void {
@@ -3870,6 +3988,17 @@ async function submitEditProject(): Promise<void> {
 // this, and there is no way to observe it from the DOM.
 (window as any).__terminalRows = () => [...terminalSessions.values()][0]?.term?.rows ?? 0;
 (window as any).renderProjects = renderProjects;
+(window as any).disableProject = disableProject;
+(window as any).enableProject = enableProject;
+(window as any).isDisabled = isDisabled;
+// Test hook: drive the disabled state without shelling out to the CLI and
+// mutating a real project's compose file.
+(window as any).__setMetaStatus = (name: string, value: any) => {
+    projectMetadata[name] = projectMetadata[name]
+        || { display_name: '', description: '', emoji: '' };
+    if (value === undefined || value === null) delete projectMetadata[name].status;
+    else projectMetadata[name].status = value;
+};
 // The filtered+sorted list the grid is built from, so the suite can assert on
 // the ordering rather than on tile text.
 (window as any).__visibleProjects = () => visibleProjects().map(withMetadata);

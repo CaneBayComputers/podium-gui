@@ -193,7 +193,13 @@ async function run() {
     // no published host port — reachable only by hostname) as stopped.
     const running = (statusJson?.projects || []).filter((p) => p.docker_running);
     if (running.length > 0) {
-      const wrong = await win.evaluate((names) => {
+      // Pass which projects the CLI says have a URL. A running container can
+      // still have a broken hosts entry — the CLI then reports local_url: null
+      // and ping_status: failed, and the GUI has nothing to show. Requiring a
+      // URL for every running project asserted something the CLI does not
+      // promise, and failed on three projects whose host entries are broken.
+      const withUrl = running.filter((p) => p.local_url).map((p) => p.name);
+      const wrong = await win.evaluate(({ names, withUrl }) => {
         const bad = [];
         for (const name of names) {
           const card = [...document.querySelectorAll('#projects-grid .project-card')]
@@ -204,10 +210,12 @@ async function run() {
           if (!buttons.includes('Stop')) bad.push(`${name}: offers "${buttons[0]}" not "Stop"`);
           if (!buttons.some((b) => /Modify with AI/.test(b))) bad.push(`${name}: no "Modify with AI"`);
           if (!buttons.includes('Trash')) bad.push(`${name}: destructive button is not labelled "Trash"`);
-          if (!card.querySelector('.url-link')) bad.push(`${name}: no URL shown`);
+          if (withUrl.includes(name) && !card.querySelector('.url-link')) {
+            bad.push(`${name}: CLI reports a URL but the tile shows none`);
+          }
         }
         return bad;
-      }, running.map((p) => p.name));
+      }, { names: running.map((p) => p.name), withUrl });
 
       check(`running projects render as running (${running.length} checked)`,
         wrong.length === 0, wrong.join('; '));
@@ -258,6 +266,82 @@ async function run() {
       // and stop, so it means "last time this was up". Projects predating that
       // have no value and must sort LAST — an absent timestamp is "unknown",
       // not 1970.
+      // --- Disabled projects ---------------------------------------------
+      //
+      // A disabled project is parked, not deleted. It is hidden everywhere
+      // except its own filter, which makes that filter the ONLY route back —
+      // so the ways this can go wrong are all "the project is unreachable".
+      console.log('\ndisabled projects');
+      await win.evaluate(() => window.resetFilters());
+
+      const disabledRules = await win.evaluate(() => {
+        const name = window.__visibleProjects()[0]?.name;
+        const before = window.isDisabled({ name });
+        // Only the exact string disables. Everything else means enabled —
+        // a project must never be parked because a read returned junk.
+        const readings = {};
+        for (const v of ['disabled', 'DISABLED', 'enabled', 'paused', '', undefined, null, 'disable']) {
+          window.__setMetaStatus(name, v);
+          readings[String(v)] = window.isDisabled({ name });
+        }
+        window.__setMetaStatus(name, undefined);
+        return { before, readings };
+      });
+      check('only the exact string "disabled" disables a project',
+        disabledRules.readings['disabled'] === true &&
+        ['DISABLED', 'enabled', 'paused', '', 'undefined', 'null', 'disable']
+          .every((k) => disabledRules.readings[k] === false),
+        JSON.stringify(disabledRules.readings));
+
+      // The Disabled option must exist even at zero. Offering it only when the
+      // count is non-zero means disabling your last project hides the control
+      // that would bring it back, in the same render that hid the project.
+      const runOptions = await win.locator('[data-testid="filter-run"] option')
+        .evaluateAll((els) => els.map((e) => e.value));
+      check('the Disabled filter is always offered, even at zero',
+        runOptions.includes('disabled'), runOptions.join(','));
+
+      // Simulate one being disabled and assert it leaves every other view.
+      const hiding = await win.evaluate(() => {
+        const all = window.__visibleProjects();
+        const name = all[0].name;
+        window.__setMetaStatus(name, 'disabled');
+        const seenIn = {};
+        for (const f of ['all', 'running', 'stopped', 'disabled']) {
+          window.setRunFilter(f);
+          seenIn[f] = window.__visibleProjects().some((p) => p.name === name);
+        }
+        window.__setMetaStatus(name, undefined);
+        window.resetFilters();
+        return { name, seenIn };
+      });
+      check('a disabled project is hidden from All, Running and Stopped',
+        !hiding.seenIn.all && !hiding.seenIn.running && !hiding.seenIn.stopped,
+        JSON.stringify(hiding.seenIn));
+      check('a disabled project IS visible under the Disabled filter',
+        hiding.seenIn.disabled, JSON.stringify(hiding.seenIn));
+
+      // Its tile must not offer actions the CLI will refuse, but must keep the
+      // two that work: Enable, and Trash.
+      const tileActions = await win.evaluate(async () => {
+        const name = window.__visibleProjects()[0].name;
+        window.__setMetaStatus(name, 'disabled');
+        window.setRunFilter('disabled');
+        window.renderProjects();
+        await new Promise((r) => setTimeout(r, 200));
+        const card = document.querySelector('[data-testid="disabled-card"]');
+        const buttons = card ? [...card.querySelectorAll('button')].map((b) => b.textContent.trim()) : [];
+        window.__setMetaStatus(name, undefined);
+        window.resetFilters();
+        window.renderProjects();
+        return buttons;
+      });
+      check('a disabled tile offers no Start, Modify with AI or Edit',
+        !tileActions.some((b) => /Start|Modify with AI|^Edit$/.test(b)), tileActions.join('|'));
+      check('a disabled tile keeps Enable and Trash',
+        tileActions.includes('Enable') && tileActions.includes('Trash'),
+        tileActions.join('|'));
+
       // Clear the filter the previous check left on, or this reads an empty
       // list and "no project carries last_on" is true for the wrong reason.
       await win.evaluate(() => window.resetFilters());
