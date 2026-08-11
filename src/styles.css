@@ -1870,6 +1870,21 @@ span.status-indicator {
     color: var(--text-muted);
 }
 
+/* Parked, not broken. Muted rather than alarming — a disabled project is in the
+   state the user asked for, so it should read as inactive, not as a failure. */
+.project-card.project-disabled {
+    opacity: 0.72;
+    border-style: dashed;
+}
+
+.project-card.project-disabled h3 {
+    color: var(--text-muted);
+}
+
+.project-status-dot.disabled {
+    filter: grayscale(1);
+}
+
 /* A setting that removes a safety check should not look like the ones that do
    not. Enough to make someone pause; not so much that it reads as an error. */
 .danger-group {
