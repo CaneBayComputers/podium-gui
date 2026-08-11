@@ -793,6 +793,48 @@ ipcMain.handle('get-optional-services', async (): Promise<string[]> => {
     .filter((name) => name !== '');
 });
 
+// Which shared services a project actually depends on.
+//
+// Disabling a database a project is using leaves it unable to connect, and
+// nothing in the CLI stops that today. The compose files name the service
+// hostnames directly (DB_HOST: podium-mariadb and friends), so ask them rather
+// than inferring from the framework or trusting metadata.
+ipcMain.handle('get-services-in-use', async (): Promise<Record<string, string[]>> => {
+  const inUse: Record<string, string[]> = {};
+  const hosts: Record<string, string> = {
+    mysql: 'podium-mariadb',
+    postgres: 'podium-postgres',
+    mongo: 'podium-mongo',
+    minio: 'podium-minio',
+    meilisearch: 'podium-meilisearch'
+  };
+
+  try {
+    const dir = getProjectsDir();
+    if (!fs.existsSync(dir)) return inUse;
+
+    for (const project of fs.readdirSync(dir)) {
+      const compose = composePathFor(project);
+      if (!compose) continue;
+
+      let body = '';
+      try {
+        body = fs.readFileSync(compose, 'utf8');
+      } catch {
+        continue;
+      }
+
+      for (const [service, host] of Object.entries(hosts)) {
+        if (body.includes(host)) (inUse[service] ||= []).push(project);
+      }
+    }
+  } catch (error) {
+    debugLog('Could not scan projects for service use', error);
+  }
+
+  return inUse;
+});
+
 // ---------------------------------------------------------------------------
 // Embedded terminal (phase 3 of create)
 //
