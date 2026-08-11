@@ -1870,6 +1870,64 @@ span.status-indicator {
     color: var(--text-muted);
 }
 
+/* The LIST scrolls, not the modal. Letting .modal-content scroll instead put
+   the Close button below the fold on a nine-service list — the same trap the
+   install catalogue already solved this way. */
+/* Body scrolls, footer pinned. Capping the list alone still let the header,
+   intro and footnote push the Close button past the modal's own max-height —
+   it went from 647px below the fold to 10px, which is still below it. */
+#service-manager-modal .modal-content {
+    display: flex;
+    flex-direction: column;
+}
+
+#service-manager-modal .modal-body {
+    overflow-y: auto;
+    min-height: 0;
+}
+
+#service-manager-modal .form-actions {
+    flex: 0 0 auto;
+}
+
+.service-links { display: inline-flex; gap: 0.5rem; }
+
+.service-group { margin-bottom: 1.25rem; }
+.service-group h4 {
+    margin: 0 0 0.5rem;
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+.service-row {
+    padding: 0.7rem 0.9rem;
+    margin-bottom: 0.5rem;
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    background: var(--bg-tertiary);
+}
+
+.service-row-main { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+.service-note { margin: 0.35rem 0 0.6rem; color: var(--text-muted); font-size: 0.82rem; }
+
+.service-state {
+    margin-left: auto;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+.service-state.on { color: var(--accent-green); }
+.service-state.off { color: var(--text-muted); }
+/* Configured on, but nothing running — the CLI records a service as enabled
+   even when starting it fails. */
+.service-state.stale { color: var(--neon-orange); }
+
+/* A database another project depends on cannot be turned off from here. */
+.service-row.locked { border-color: var(--neon-orange); }
+.service-locked-note { color: var(--neon-orange); }
+
 /* Parked, not broken. Muted rather than alarming — a disabled project is in the
    state the user asked for, so it should read as inactive, not as a failure. */
 .project-card.project-disabled {

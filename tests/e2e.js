@@ -150,9 +150,14 @@ async function run() {
       check('empty machine shows the create-first-project placeholder', placeholder === 1,
         `${placeholder} placeholders, ${realCards} project cards`);
     } else {
-      check('dashboard renders every project podium status reports',
-        realCards === expectedProjects,
-        `rendered ${realCards}, CLI reported ${expectedProjects}`);
+      // Disabled projects are deliberately hidden from the default view, so the
+      // expected count is the projects that are NOT parked — asking for all of
+      // them would fail on a machine where anything has been disabled.
+      const parked = await win.evaluate(() =>
+        window.__allProjects().filter((p) => window.isDisabled(p)).length);
+      check('dashboard renders every project that is not disabled',
+        realCards === expectedProjects - parked,
+        `rendered ${realCards}, CLI reported ${expectedProjects}, ${parked} disabled`);
     }
 
     // Display metadata is GUI-owned (read from each project's compose file),
@@ -170,7 +175,10 @@ async function run() {
       const getMeta = ipcMain._invokeHandlers.get('get-project-metadata');
       for (const name of names) {
         const meta = await getMeta({}, name);
-        if (meta && meta.display_name) return { name, ...meta };
+        // Skip parked projects: they are deliberately absent from the grid, so
+        // looking for their metadata there would assert against a view that is
+        // correctly hiding them.
+        if (meta && meta.display_name && meta.status !== 'disabled') return { name, ...meta };
       }
       return null;
     });
@@ -360,7 +368,9 @@ async function run() {
         const out = [];
         for (const name of names) {
           const md = await handler({}, name);
-          if (md?.last_on) out.push(name);
+          // Disabled projects are not in the visible list by design, so counting
+          // their timestamps against it compares two different populations.
+          if (md?.last_on && md.status !== 'disabled') out.push(name);
         }
         return out;
       }, (statusJson.projects || []).map((p) => p.name));
@@ -387,6 +397,43 @@ async function run() {
       await win.evaluate(() => window.resetFilters());
       check('reset restores every tile', await tiles() === allTiles);
     }
+
+    // --- Service manager -------------------------------------------------
+    console.log('\nservice manager');
+    await win.click(t('manage-services'));
+    await win.waitForSelector('#service-manager-modal.show', { timeout: 8000 });
+    await win.waitForTimeout(800);
+
+    const managerRows = await win.evaluate(() =>
+      [...document.querySelectorAll('#service-manager-list .service-row')]
+        .map((r) => r.getAttribute('data-testid').replace('service-row-', '')));
+    check('the manager lists every optional service',
+      managerRows.length === 9, `${managerRows.length}: ${managerRows.join(',')}`);
+    check('the manager omits the always-on services',
+      !managerRows.some((n) => ['redis', 'memcached', 'mailhog'].includes(n)),
+      managerRows.join(','));
+
+    // A database another project points at must not be disableable — nothing in
+    // the CLI stops it, and the project simply fails to connect afterwards.
+    const guard = await win.evaluate(async () => {
+      const inUse = await require('electron').ipcRenderer.invoke('get-services-in-use');
+      const locked = [...document.querySelectorAll('#service-manager-list .service-row.locked')]
+        .map((r) => r.getAttribute('data-testid').replace('service-row-', ''));
+      const disabledButtons = [...document.querySelectorAll('#service-manager-list button[disabled]')]
+        .map((b) => b.getAttribute('data-testid'));
+      return { inUse, locked, disabledButtons };
+    });
+    // Every service reported in use AND currently enabled must be locked.
+    const enabledNow = await win.evaluate(() =>
+      [...document.querySelectorAll('#service-manager-list .service-state.on')]
+        .map((e) => e.closest('.service-row').getAttribute('data-testid').replace('service-row-', '')));
+    const shouldLock = Object.keys(guard.inUse || {}).filter((s) => enabledNow.includes(s));
+    check('a service a project depends on cannot be disabled from here',
+      shouldLock.every((s) => guard.locked.includes(s)),
+      `in use+enabled=${shouldLock.join(',')} locked=${guard.locked.join(',')}`);
+
+    await win.click('#service-manager-modal .modal-close');
+    await win.waitForTimeout(300);
 
     // Optional services (minio, meilisearch) must not appear as red "Stopped"
     // cards on a machine that never enabled them — that reads as a broken
@@ -1698,6 +1745,37 @@ async function run() {
       ['installs its own next version', /SELF_SRC|SELF_DST/]
     ]) {
       check(`sync script ${label}`, re.test(syncBody));
+    }
+
+    // --- Optional services: the GUI's list vs the CLI's ------------------
+    //
+    // A contract test. The GUI keeps its own catalogue because it needs labels
+    // and grouping the CLI does not provide — and because there is no
+    // machine-readable listing to read: `podium enable-service` with no
+    // argument prints usage text that currently names two of the nine.
+    //
+    // So assert the two lists agree. Offering a service the CLI would reject,
+    // or hiding one it supports, both fail here rather than on a user.
+    const enableScript = '/usr/local/share/podium-cli/src/scripts/enable_service.sh';
+    if (fsMod.existsSync(enableScript)) {
+      const cliList = (fsMod.readFileSync(enableScript, 'utf8')
+        .match(/AVAILABLE_OPTIONAL_SERVICES="([^"]*)"/) || [])[1];
+      const cliServices = (cliList || '').split(/\s+/).filter(Boolean).sort();
+      const guiServices = (await win.evaluate(() => window.__optionalServices())).sort();
+
+      check('the CLI still declares its optional service list where we read it',
+        cliServices.length > 0, enableScript);
+      check('GUI service catalogue matches the CLI exactly',
+        JSON.stringify(cliServices) === JSON.stringify(guiServices),
+        `cli=${cliServices.join(',')} gui=${guiServices.join(',')}`);
+
+      // The always-on trio must never appear as a toggle: they cannot be turned
+      // off, so a control for them could only confuse.
+      const offered = guiServices.filter((s) => ['redis', 'memcached', 'mailhog'].includes(s));
+      check('the always-on services are not offered as toggles',
+        offered.length === 0, offered.join(','));
+    } else {
+      check('CLI enable_service.sh is where the contract test expects it', false, enableScript);
     }
 
     // Arch-only landmines, both from the CLI's installer.

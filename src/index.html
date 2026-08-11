@@ -74,8 +74,13 @@
                     <div class="services-controls">
                         <button class="btn btn-success btn-small" onclick="startServices()" data-testid="start-services">▶ Start Services</button>
                         <button class="btn btn-warning btn-small" onclick="stopServices()" data-testid="stop-services">⏹ Stop Services</button>
-                        <button class="btn btn-primary btn-small" onclick="openUrl('http://phpmyadmin')">🗄️ phpMyAdmin</button>
+                        <!-- phpMyAdmin is opt-in now, so its link is rendered
+                             only when it is actually enabled. MailHog is
+                             unconditional and always there. -->
+                        <span id="service-links" class="service-links"></span>
                         <button class="btn btn-primary btn-small" onclick="openUrl('http://localhost:8025')">📧 MailHog</button>
+                        <button class="btn btn-secondary btn-small" onclick="showServiceManager()"
+                                data-testid="manage-services" title="Turn optional shared services on or off">⚙️ Manage Services</button>
                     </div>
                 </div>
                 <div id="services-grid" data-testid="services-grid" class="services-grid">
@@ -94,6 +99,28 @@
                 </p>
             </footer>
         </main>
+
+        <div id="service-manager-modal" class="modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>⚙️ Shared Services</h3>
+                    <button class="modal-close" onclick="closeModal()">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <p class="stage-intro">
+                        Optional services are off until you turn them on. Databases start
+                        automatically for a project that declares one; the rest are yours to choose.
+                    </p>
+                    <div id="service-manager-list" data-testid="service-manager-list">
+                        <p class="app-list-empty">Loading…</p>
+                    </div>
+                    <p class="form-help" id="service-always-on"></p>
+                </div>
+                <div class="form-actions">
+                    <button class="btn btn-secondary" onclick="closeModal()">Close</button>
+                </div>
+            </div>
+        </div>
 
         <!-- Modals -->
         <div id="new-project-modal" class="modal">

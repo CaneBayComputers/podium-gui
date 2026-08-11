@@ -82,7 +82,7 @@ document.addEventListener('DOMContentLoaded', (): void => {
     // Read which optional services are enabled BEFORE the first render, so
     // minio/meilisearch are never briefly shown as "Stopped" on a machine that
     // simply never enabled them.
-    loadOptionalServices().then(() => Promise.all([
+    loadOptionalServices().then(() => renderServiceLinks()).then(() => Promise.all([
         loadProjects(),
         loadServices(),
         showAboutVersions()
@@ -854,8 +854,159 @@ async function loadServices(): Promise<void> {
 
 // Optional shared services, per the CLI's `podium enable-service`. Kept as a
 // list rather than inferred, so a core service is never hidden by accident.
-const OPTIONAL_SERVICE_NAMES = ['minio', 'meilisearch'];
+// The nine services `podium enable-service` accepts. Kept here because the GUI
+// needs labels and grouping the CLI does not provide — and because the CLI has
+// no machine-readable listing: `podium enable-service` with no argument prints
+// usage text that currently names only two of the nine.
+//
+// A test asserts this list matches AVAILABLE_OPTIONAL_SERVICES in the CLI's
+// enable_service.sh, so drift fails in CI rather than showing the user a
+// service that does not exist, or hiding one that does.
+interface OptionalService {
+    name: string;
+    label: string;
+    group: 'database' | 'admin' | 'extra';
+    note: string;
+}
+
+const OPTIONAL_SERVICES: OptionalService[] = [
+    { name: 'mysql',        label: 'MariaDB / MySQL', group: 'database',
+      note: 'Started automatically for a project that declares it.' },
+    { name: 'postgres',     label: 'PostgreSQL',      group: 'database',
+      note: 'Started automatically for a project that declares it.' },
+    { name: 'mongo',        label: 'MongoDB',         group: 'database',
+      note: 'Started automatically for a project that declares it. ~200MB resident.' },
+    { name: 'adminer',      label: 'Adminer',         group: 'admin',
+      note: 'One UI for Postgres, MariaDB/MySQL, SQLite and Mongo. ~50MB.' },
+    { name: 'phpmyadmin',   label: 'phpMyAdmin',      group: 'admin',
+      note: 'MariaDB/MySQL only. Pre-wired to the shared server.' },
+    { name: 'mongo-express', label: 'Mongo Express',  group: 'admin',
+      note: 'MongoDB only, pre-wired to the shared server.' },
+    { name: 'redisinsight', label: 'RedisInsight',    group: 'admin',
+      note: 'Official Redis UI: key browser, profiler and CLI.' },
+    { name: 'minio',        label: 'MinIO',           group: 'extra',
+      note: 'S3-compatible object storage.' },
+    { name: 'meilisearch',  label: 'Meilisearch',     group: 'extra',
+      note: 'Full-text search engine.' }
+];
+
+// Redis, Memcached and Mailhog are unconditional — they cannot be turned off,
+// so the manager does not list them. Showing a toggle that refuses to move
+// only raises the question of why.
+const ALWAYS_ON_SERVICES = ['redis', 'memcached', 'mailhog'];
+
+const OPTIONAL_SERVICE_NAMES = OPTIONAL_SERVICES.map(s => s.name);
 let enabledOptionalServices: string[] = [];
+
+// ---------------------------------------------------------------------------
+// Shared service manager
+// ---------------------------------------------------------------------------
+
+let servicesInUse: Record<string, string[]> = {};
+
+async function showServiceManager(): Promise<void> {
+    showModal('service-manager-modal');
+    await loadOptionalServices();
+    servicesInUse = await ipcRenderer.invoke('get-services-in-use') || {};
+    renderServiceManager();
+}
+
+function renderServiceManager(): void {
+    const host = document.getElementById('service-manager-list');
+    if (!host) return;
+
+    const groups: Array<[OptionalService['group'], string]> = [
+        ['database', 'Databases'],
+        ['admin', 'Admin interfaces'],
+        ['extra', 'Storage and search']
+    ];
+
+    host.innerHTML = groups.map(([group, heading]) => {
+        const rows = OPTIONAL_SERVICES.filter(svc => svc.group === group).map(svc => {
+            const on = enabledOptionalServices.includes(svc.name);
+            // Enabled in config is not the same as running. `enable-service`
+            // records the service even when starting it fails — a bad image tag
+            // leaves it listed as enabled with no container — so say which of
+            // the two is true rather than showing a healthy-looking "enabled".
+            const live = (sharedServices as any)[`podium-${svc.name}`]?.status === 'running'
+                || (svc.name === 'mysql' && (sharedServices as any)['podium-mariadb']?.status === 'running');
+            const users = servicesInUse[svc.name] || [];
+            // Turning off a database a project points at leaves that project
+            // unable to connect, and nothing in the CLI stops it. Refuse here
+            // and say which projects, rather than letting them find out.
+            const locked = on && users.length > 0;
+            const action = on ? 'Disable' : 'Enable';
+
+            return `
+                <div class="service-row${locked ? ' locked' : ''}" data-testid="service-row-${svc.name}">
+                    <div class="service-row-main">
+                        <strong>${svc.label}</strong>
+                        <code class="app-slug">${svc.name}</code>
+                        <span class="service-state ${on ? (live ? 'on' : 'stale') : 'off'}">${
+                            on ? (live ? 'enabled' : 'enabled, not running') : 'off'}</span>
+                    </div>
+                    <p class="service-note">${escapeHtml(svc.note)}</p>
+                    ${locked ? `<p class="service-note service-locked-note">In use by ${users.map(escapeHtml).join(', ')} — disabling would break ${users.length === 1 ? 'it' : 'them'}.</p>` : ''}
+                    <button class="btn btn-small ${on ? 'btn-warning' : 'btn-success'}"
+                            data-testid="toggle-${svc.name}"
+                            ${locked ? 'disabled title="A project is using this"' : ''}
+                            onclick="toggleOptionalService('${svc.name}')">${action}</button>
+                </div>`;
+        }).join('');
+
+        return `<div class="service-group"><h4>${heading}</h4>${rows}</div>`;
+    }).join('');
+
+    const always = document.getElementById('service-always-on');
+    if (always) {
+        always.textContent =
+            `Always on and not listed here: ${ALWAYS_ON_SERVICES.join(', ')}. `
+            + `They are small, and their absence produces confusing failures rather than clear ones.`;
+    }
+}
+
+async function toggleOptionalService(name: string): Promise<void> {
+    const on = enabledOptionalServices.includes(name);
+    const command = on ? 'disable-service' : 'enable-service';
+
+    const result = await ipcRenderer.invoke('execute-podium', command, [name, '--json-output']);
+    if (result.code !== 0) {
+        showError(`Could not ${on ? 'disable' : 'enable'} ${name}: ${result.stderr || result.stdout}`);
+        return;
+    }
+
+    showSuccess(`${name} ${on ? 'disabled' : 'enabled'}.`);
+    await loadOptionalServices();
+    servicesInUse = await ipcRenderer.invoke('get-services-in-use') || {};
+    renderServiceManager();
+    renderServices();
+    renderServiceLinks();
+}
+
+// phpMyAdmin moved into the opt-in group, so its shortcut only makes sense when
+// it is actually enabled — otherwise the button opens a hostname that does not
+// resolve. Same for the other admin UIs.
+function renderServiceLinks(): void {
+    const host = document.getElementById('service-links');
+    if (!host) return;
+
+    const links: Array<[string, string, string]> = [
+        ['phpmyadmin', '🗄️ phpMyAdmin', 'http://phpmyadmin'],
+        ['adminer', '🗃️ Adminer', 'http://adminer'],
+        ['mongo-express', '🍃 Mongo Express', 'http://mongo-express'],
+        ['redisinsight', '🧠 RedisInsight', 'http://redisinsight']
+    ];
+
+    host.innerHTML = links
+        // Enabled AND running. Linking something merely enabled opens a
+        // hostname that does not resolve, which reads as a broken app rather
+        // than a service that failed to start.
+        .filter(([name]) => enabledOptionalServices.includes(name)
+            && (sharedServices as any)[`podium-${name}`]?.status === 'running')
+        .map(([, label, url]) =>
+            `<button class="btn btn-primary btn-small" onclick="openUrl('${url}')">${label}</button>`)
+        .join('');
+}
 
 async function loadOptionalServices(): Promise<void> {
     try {
@@ -3991,6 +4142,13 @@ async function submitEditProject(): Promise<void> {
 (window as any).disableProject = disableProject;
 (window as any).enableProject = enableProject;
 (window as any).isDisabled = isDisabled;
+(window as any).showServiceManager = showServiceManager;
+(window as any).toggleOptionalService = toggleOptionalService;
+(window as any).renderServiceLinks = renderServiceLinks;
+(window as any).__optionalServices = () => OPTIONAL_SERVICES.map(s => s.name);
+// Unfiltered, unlike __visibleProjects — the suite needs to reason about
+// projects the default view deliberately hides.
+(window as any).__allProjects = () => projects.map(withMetadata);
 // Test hook: drive the disabled state without shelling out to the CLI and
 // mutating a real project's compose file.
 (window as any).__setMetaStatus = (name: string, value: any) => {
