@@ -1890,7 +1890,31 @@ span.status-indicator {
     flex: 0 0 auto;
 }
 
-.service-links { display: inline-flex; gap: 0.5rem; }
+/* The row has to be a positioning context for the busy overlay. */
+.service-row { position: relative; }
+
+.service-row.busy { pointer-events: none; }
+
+.service-row-busy {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.6rem;
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(1px);
+    color: var(--text-primary);
+    font-size: 0.85rem;
+}
+
+.service-row-busy .loading-spinner {
+    width: 18px;
+    height: 18px;
+    border-width: 2px;
+    margin: 0;
+}
 
 .service-group { margin-bottom: 1.25rem; }
 .service-group h4 {

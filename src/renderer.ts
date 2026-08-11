@@ -84,7 +84,6 @@ document.addEventListener('DOMContentLoaded', (): void => {
     // simply never enabled them.
     loadOptionalServices()
         .then(() => refreshServiceCatalog())
-        .then(() => renderServiceLinks())
         .then(() => Promise.all([
         loadProjects(),
         loadServices(),
@@ -903,6 +902,22 @@ async function refreshServiceCatalog(): Promise<void> {
     serviceCatalogError = catalog.error || '';
 }
 
+// Cover the row being toggled and say which way it is going. Cleared by the
+// re-render that follows, so there is no separate teardown to forget.
+function setServiceRowBusy(slug: string, label: string): void {
+    const row = document.querySelector(`[data-testid="service-row-${slug}"]`);
+    if (!row) return;
+
+    row.classList.add('busy');
+    row.querySelectorAll('button').forEach(b => ((b as HTMLButtonElement).disabled = true));
+
+    const overlay = document.createElement('div');
+    overlay.className = 'service-row-busy';
+    overlay.dataset.testid = `service-busy-${slug}`;
+    overlay.innerHTML = `<span class="loading-spinner"></span><span>${escapeHtml(label)}</span>`;
+    row.appendChild(overlay);
+}
+
 // The CLI's group names, in the order they should appear.
 const SERVICE_GROUPS: Array<[string, string]> = [
     ['database', 'Databases'],
@@ -977,6 +992,11 @@ async function toggleOptionalService(name: string): Promise<void> {
     const on = !!svc && svc.state !== 'disabled';
     const command = on ? 'disable-service' : 'enable-service';
 
+    // Enabling pulls an image and starts a container — seconds at best, much
+    // longer on a cold pull. Without this the row sits unchanged and the click
+    // looks like it did nothing, so people click again.
+    setServiceRowBusy(name, on ? 'Stopping…' : 'Starting…');
+
     const result = await ipcRenderer.invoke('execute-podium', command, [name, '--json-output']);
     if (result.code !== 0) {
         showError(`Could not ${on ? 'disable' : 'enable'} ${name}: ${result.stderr || result.stdout}`);
@@ -992,23 +1012,6 @@ async function toggleOptionalService(name: string): Promise<void> {
     servicesInUse = await ipcRenderer.invoke('get-services-in-use') || {};
     renderServiceManager();
     renderServices();
-    renderServiceLinks();
-}
-
-// Shortcuts for the admin UIs, addressed from the CLI's own listing rather than
-// hardcoded hostnames — optional services moved to .250-.254 and the addresses
-// are rewritten on every enable.
-function renderServiceLinks(): void {
-    const host = document.getElementById('service-links');
-    if (!host) return;
-
-    host.innerHTML = optionalServices
-        .filter(svc => svc.group === 'admin-ui' && svc.state === 'running' && svc.address)
-        .map(svc => {
-            const url = svc.address.startsWith('http') ? svc.address : `http://${svc.address}`;
-            return `<button class="btn btn-primary btn-small" onclick="openUrl('${escapeHtml(url)}')">${escapeHtml(svc.slug)}</button>`;
-        })
-        .join('');
 }
 
 async function loadOptionalServices(): Promise<void> {
@@ -1056,8 +1059,23 @@ function renderServices(): void {
     }
 
     servicesGrid.innerHTML = visibleServices.map(([serviceName, service]: [string, SharedService]) => {
-        const statusIcon = service.status === 'running' ? '🟢' : '🔴';
         const statusText = service.status === 'running' ? 'Running' : 'Stopped';
+
+        // podium status keys these as `podium-<name>`. The action buttons below
+        // compared the raw key against bare names, so NONE of them has ever
+        // rendered — every service card has been actionless.
+        const slug = serviceName.replace(/^podium-/, '').toLowerCase();
+        // The listing calls MariaDB "mysql"; status calls the container mariadb.
+        const listed = optionalServices.find(
+            svc => svc.slug === slug || (svc.slug === 'mysql' && slug === 'mariadb'));
+
+        // Web UI address comes from the CLI listing, which is rewritten on every
+        // enable — optional services moved to .250-.254, so anything hardcoded
+        // here would point at the old address.
+        const webUi = listed && listed.group === 'admin-ui' && listed.address
+            ? (listed.address.startsWith('http') ? listed.address : `http://${listed.address}`)
+            : slug === 'mailhog' ? 'http://localhost:8025'
+            : '';
         
         // Handle IP and port display
         let ipInfo = '';
@@ -1086,16 +1104,12 @@ function renderServices(): void {
                     ${ipInfo ? `<div class="service-ip">${ipInfo}</div>` : ''}
                 </div>
                 <div class="service-actions">
-                    ${(serviceName === 'redis' || serviceName === 'memcached') && service.status === 'running' ? 
-                        `<button class="btn btn-secondary btn-sm" onclick="showManageModal('${serviceName}')">Manage</button>` : 
+                    ${(slug === 'redis' || slug === 'memcached') && service.status === 'running' ?
+                        `<button class="btn btn-secondary btn-sm" onclick="showManageModal('${slug}')">Manage</button>` :
                         ''
                     }
-                    ${serviceName === 'phpmyadmin' && service.status === 'running' ? 
-                        `<button class="btn btn-primary btn-sm" onclick="openUrl('http://phpmyadmin')">🗄️ Open Web UI</button>` : 
-                        ''
-                    }
-                    ${serviceName === 'mailhog' && service.status === 'running' ? 
-                        `<button class="btn btn-primary btn-sm" onclick="openUrl('http://localhost:8025')">📧 Open Web UI</button>` : 
+                    ${webUi && service.status === 'running' ?
+                        `<button class="btn btn-primary btn-sm" data-testid="open-${slug}" onclick="openUrl('${escapeHtml(webUi)}')">🌐 Open Web UI</button>` :
                         ''
                     }
                 </div>
@@ -4147,7 +4161,7 @@ async function submitEditProject(): Promise<void> {
 (window as any).isDisabled = isDisabled;
 (window as any).showServiceManager = showServiceManager;
 (window as any).toggleOptionalService = toggleOptionalService;
-(window as any).renderServiceLinks = renderServiceLinks;
+(window as any).setServiceRowBusy = setServiceRowBusy;
 (window as any).__optionalServices = () => optionalServices.map(s => s.slug);
 // Unfiltered, unlike __visibleProjects — the suite needs to reason about
 // projects the default view deliberately hides.
