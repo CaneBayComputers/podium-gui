@@ -71,8 +71,13 @@ done
 # `podium` must resolve for a .desktop launch too, which does not inherit
 # /usr/local/bin from a login shell's PATH — hence both locations.
 if [ -n "$CLI_REPO" ] && [ -x "$CLI_REPO/src/podium" ]; then
+    # Compare RESOLVED against RESOLVED. /usr/local/share/podium-cli is itself a
+    # symlink on some installs, so readlink -f on the link resolved further than
+    # the literal target string — the guard never matched and every run relinked
+    # and logged "linked ...", claiming a change it had not made.
+    want=$(readlink -f "$CLI_REPO/src/podium")
     for link in /usr/local/bin/podium /usr/bin/podium; do
-        [ "$(readlink -f "$link" 2>/dev/null)" = "$CLI_REPO/src/podium" ] && continue
+        [ "$(readlink -f "$link" 2>/dev/null)" = "$want" ] && continue
         ln -sfn "$CLI_REPO/src/podium" "$link" && log "linked $link -> $CLI_REPO/src/podium"
     done
 fi
