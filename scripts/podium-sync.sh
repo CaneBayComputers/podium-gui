@@ -163,11 +163,40 @@ if [ -f "$LAUNCHER" ]; then
     fi
 fi
 
+# Generated, not copied. The template carries `Icon=podium-gui`, a theme-name
+# lookup that only resolved while the deb was installed — and this script
+# removes that package, so the menu entry lost its icon. A .desktop cannot
+# compute a path, so substitute the real one from wherever the repo actually is.
 DESKTOP_SRC=$GUI_REPO/scripts/podium-gui.desktop
 DESKTOP_DST=/usr/share/applications/podium-gui-source.desktop
-if [ -f "$DESKTOP_SRC" ] && ! cmp -s "$DESKTOP_SRC" "$DESKTOP_DST"; then
-    install -m 644 "$DESKTOP_SRC" "$DESKTOP_DST" && log "installed menu entry"
-    update-desktop-database /usr/share/applications 2>/dev/null || true
+if [ -f "$DESKTOP_SRC" ]; then
+    ICON=$GUI_REPO/packaging/icons/256x256.png
+    TMP_DESKTOP=$(mktemp)
+    if [ -f "$ICON" ]; then
+        sed "s|^Icon=.*|Icon=$ICON|" "$DESKTOP_SRC" > "$TMP_DESKTOP"
+    else
+        cp "$DESKTOP_SRC" "$TMP_DESKTOP"
+    fi
+    if ! cmp -s "$TMP_DESKTOP" "$DESKTOP_DST"; then
+        install -m 644 "$TMP_DESKTOP" "$DESKTOP_DST" && log "installed menu entry"
+        update-desktop-database /usr/share/applications 2>/dev/null || true
+    fi
+    rm -f "$TMP_DESKTOP"
+fi
+
+# Shell aliases, matching the workstation: `pgui` and `podium-gui-run`. Kept out
+# of the `podium-gui` name, which already cd's into the repo.
+ALIASES=/home/shawn/.bash_aliases
+if [ -f "$ALIASES" ] && ! grep -q "alias pgui=" "$ALIASES" 2>/dev/null; then
+    cat >> "$ALIASES" <<'ALIASEOF'
+
+# Launch the Podium GUI from the source checkout (builds first, then detaches).
+# Deliberately not called `podium-gui`, which already cd's into the repo.
+alias podium-gui-run='/usr/local/bin/podium-gui'
+alias pgui='/usr/local/bin/podium-gui'
+ALIASEOF
+    chown 1000:1000 "$ALIASES" 2>/dev/null
+    log "added pgui / podium-gui-run aliases"
 fi
 
 log "done"
