@@ -432,8 +432,56 @@ async function run() {
       shouldLock.every((s) => guard.locked.includes(s)),
       `in use+enabled=${shouldLock.join(',')} locked=${guard.locked.join(',')}`);
 
+    // Toggling pulls an image and starts a container. Without visible feedback
+    // the row sits unchanged and the click looks like it did nothing — which is
+    // how it read before, and why people clicked twice.
+    const busy = await win.evaluate(async () => {
+      const row = document.querySelector('#service-manager-list .service-row');
+      const slug = row.getAttribute('data-testid').replace('service-row-', '');
+      window.setServiceRowBusy(slug, 'Starting…');
+      const overlay = row.querySelector('.service-row-busy');
+      const box = overlay ? overlay.getBoundingClientRect() : null;
+      const rowBox = row.getBoundingClientRect();
+      const state = {
+        present: !!overlay,
+        // It has to actually cover the row, not sit collapsed in a corner.
+        covers: !!box && box.width >= rowBox.width - 2 && box.height >= rowBox.height - 2,
+        buttonsDisabled: [...row.querySelectorAll('button')].every((b) => b.disabled),
+        spins: !!overlay?.querySelector('.loading-spinner')
+      };
+      overlay?.remove();
+      row.classList.remove('busy');
+      row.querySelectorAll('button').forEach((b) => (b.disabled = false));
+      return state;
+    });
+    check('toggling a service covers its row while it works',
+      busy.present && busy.covers && busy.spins, JSON.stringify(busy));
+    check('the row cannot be clicked again while busy', busy.buttonsDisabled);
+
     await win.click('#service-manager-modal .modal-close');
     await win.waitForTimeout(300);
+
+    // Web UI links belong on the service's own card, not in a detached row of
+    // header buttons. The card buttons compared `podium-phpmyadmin` against
+    // `phpmyadmin` and so had never rendered at all.
+    check('the header no longer carries a separate row of web UI links',
+      await win.locator('#service-links').count() === 0);
+
+    const cardActions = await win.evaluate(() =>
+      [...document.querySelectorAll('#services-grid .service-card')].map((c) => ({
+        name: c.querySelector('h3')?.textContent?.trim(),
+        running: !!c.querySelector('.status-indicator.running'),
+        buttons: [...c.querySelectorAll('button')].map((b) => b.textContent.trim())
+      })));
+    const runningCards = cardActions.filter((c) => c.running);
+    if (runningCards.length > 0) {
+      // redis and memcached are always on, so at least one running card must
+      // offer its action. Zero actions across every running card is the bug.
+      const withActions = runningCards.filter((c) => c.buttons.length > 0);
+      check('running service cards offer their actions',
+        withActions.length > 0,
+        runningCards.map((c) => `${c.name}:${c.buttons.length}`).join(' '));
+    }
 
     // Optional services (minio, meilisearch) must not appear as red "Stopped"
     // cards on a machine that never enabled them — that reads as a broken

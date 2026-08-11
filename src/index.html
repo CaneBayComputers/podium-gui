@@ -74,11 +74,9 @@
                     <div class="services-controls">
                         <button class="btn btn-success btn-small" onclick="startServices()" data-testid="start-services">▶ Start Services</button>
                         <button class="btn btn-warning btn-small" onclick="stopServices()" data-testid="stop-services">⏹ Stop Services</button>
-                        <!-- phpMyAdmin is opt-in now, so its link is rendered
-                             only when it is actually enabled. MailHog is
-                             unconditional and always there. -->
-                        <span id="service-links" class="service-links"></span>
-                        <button class="btn btn-primary btn-small" onclick="openUrl('http://localhost:8025')">📧 MailHog</button>
+                        <!-- Web UI links live on each service's own card now,
+                             next to that service's status, rather than as a row
+                             of buttons up here detached from what they open. -->
                         <button class="btn btn-secondary btn-small" onclick="showServiceManager()"
                                 data-testid="manage-services" title="Turn optional shared services on or off">⚙️ Manage Services</button>
                     </div>
