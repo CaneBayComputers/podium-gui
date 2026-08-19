@@ -463,6 +463,18 @@ async function run() {
     check('no dictation state renders a dead-end "Preparing"',
       !dictStates.some((h) => /Preparing/.test(h)));
 
+    // The preference survives a restart; the loaded model does not, because it
+    // is tensors in one process's memory. Nothing reloaded it, so a relaunch
+    // showed a ticked "Enable dictation" box above an empty panel with no mic
+    // buttons — indistinguishable from the setting not having saved. Unchecking
+    // and re-checking was the only way back.
+    const rendererRestore = require('fs').readFileSync(
+      require('path').join(require('./helpers').ROOT, 'src/renderer.ts'), 'utf8');
+    check('an enabled dictation reloads its model at startup',
+      /if \(dictationEnabled\(\)\) void restoreDictation\(\)/.test(rendererRestore));
+    check('opening Settings also recovers an enabled-but-unloaded model',
+      /dictationEnabled\(\) && !whisperPipeline/.test(rendererRestore));
+
     // Off until asked for, because turning it on downloads 150MB.
     check('dictation is off until enabled',
       await win.evaluate(() => window.__dictationEnabled()) === false);

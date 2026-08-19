@@ -96,6 +96,10 @@ document.addEventListener('DOMContentLoaded', (): void => {
         // dashboard for a check nobody has asked for yet. The badge appears when
         // it lands.
         if (autoUpdateCheckEnabled()) checkUpdatesInBackground();
+
+        // Not awaited: the model is cached so this is quick, but the dashboard
+        // has no reason to wait on it either way.
+        if (dictationEnabled()) void restoreDictation();
         
         // Show debug indicator if in debug mode
         if (isDebugMode) {
@@ -2831,8 +2835,11 @@ async function showSettings(tab: 'appearance' | 'layout' | 'hosts' | 'ai' = 'app
 
     const dictBox = document.getElementById('dictation-enabled') as HTMLInputElement | null;
     if (dictBox) dictBox.checked = dictationEnabled();
-    // The panel reflects the live state; reopening it must not reset one.
-    if (dictationEnabled() && whisperPipeline) {
+    // Enabled but not loaded means a restart happened; bring it back rather
+    // than showing a ticked box above an empty panel.
+    if (dictationEnabled() && !whisperPipeline && dictationState !== 'downloading') {
+        void restoreDictation();
+    } else if (dictationEnabled() && whisperPipeline) {
         dictationState = 'ready';
         void listMicrophones();
     }
@@ -3772,6 +3779,40 @@ async function setDictationEnabled(on: boolean): Promise<void> {
 
     renderDictationStatus();
     if (dictationState === 'ready') await listMicrophones();
+    refreshMicButtons();
+}
+
+// Load the model again after a restart.
+//
+// The PREFERENCE survives a restart; the loaded model does not — it is a few
+// hundred MB of tensors in this process's memory. Nothing reloaded it, so a
+// relaunch left a ticked "Enable dictation" box above an empty panel and no mic
+// buttons anywhere. It looked like the setting had not saved. Unchecking and
+// re-checking was the only way back, which is not something anyone should have
+// to discover.
+//
+// The download is cached, so this is a load rather than a fetch — seconds, not
+// minutes — but it is still reported, because on a slow machine silence for
+// several seconds is indistinguishable from nothing happening.
+async function restoreDictation(): Promise<void> {
+    if (whisperPipeline || !dictationEnabled()) return;
+
+    dictationState = 'starting';
+    renderDictationStatus();
+    try {
+        await loadWhisper((msg) => {
+            // A download here means the cache was cleared since last time.
+            dictationState = msg ? 'downloading' : 'starting';
+            dictationDetail = msg;
+            renderDictationStatus();
+        });
+        dictationState = 'ready';
+        await listMicrophones();
+    } catch (error) {
+        dictationState = 'error';
+        dictationDetail = `Could not load the model: ${(error as Error).message}`;
+    }
+    renderDictationStatus();
     refreshMicButtons();
 }
 
@@ -5367,6 +5408,7 @@ async function submitEditProject(): Promise<void> {
 (window as any).setDictationDevice = setDictationDevice;
 (window as any).setDictationGain = setDictationGain;
 (window as any).__dictationState = () => dictationState;
+(window as any).restoreDictation = restoreDictation;
 // Test-only: drive the panel through each state without a 150MB download.
 (window as any).__setDictationState = (st: DictationState) => {
     dictationState = st;
