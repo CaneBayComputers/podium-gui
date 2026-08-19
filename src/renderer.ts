@@ -298,23 +298,56 @@ function toggleVersionGroups(): void {
     }
 }
 
+// Which hosts the dashboard shows. Local (when this machine has Podium) plus
+// every configured SSH profile.
+let dashboardHosts: Array<{ id: string; label: string }> = [];
+// Hosts that failed their last poll, so a tile-less host is distinguishable
+// from a host that is simply empty.
+let hostErrors: Record<string, string> = {};
+
+async function refreshDashboardHosts(): Promise<void> {
+    const caps = await ipcRenderer.invoke('get-platform-capabilities');
+    await loadSshProfiles();
+
+    dashboardHosts = [];
+    if (caps.localPodium) dashboardHosts.push({ id: 'local', label: 'This computer' });
+    for (const p of sshProfiles) {
+        if (p.host) dashboardHosts.push({ id: p.id, label: p.label || p.host });
+    }
+}
+
 async function loadProjects(): Promise<void> {
     try {
+        await refreshDashboardHosts();
+
+        // Every host in parallel. Sequential would make the slowest host set the
+        // refresh interval for all of them, and one unreachable machine would
+        // stall the whole dashboard rather than just its own tiles.
+        //
         // `--all` is required: podium status lists only RUNNING projects by
         // default, so without it the grid is empty whenever nothing is up.
-        const result = await ipcRenderer.invoke('execute-podium', 'status', ['--all', '--json-output']);
+        const results = await Promise.all(dashboardHosts.map(async (h) => ({
+            host: h,
+            result: await ipcRenderer.invoke('execute-podium-on', h.id, 'status', ['--all', '--json-output'])
+        })));
 
-        // Check if command succeeded
-        if (result.code !== 0) {
-            console.log('Podium status command failed, likely no projects or services stopped');
-            projects = [];
-            sharedServices = {};
-            renderProjects();
-            renderFilterBar();   // counts derive from the project list
-            return;
+        projects = [];
+        sharedServices = {};
+        hostErrors = {};
+
+        let appended = false;
+        for (const { host, result } of results) {
+            if (result.code !== 0) {
+                // Recorded rather than thrown away: a host that is down should
+                // say so, not silently contribute nothing and look like a host
+                // with no projects.
+                hostErrors[host.id] = (result.stderr || result.stdout || 'did not respond').split('\n')[0]!;
+                continue;
+            }
+            parseProjectStatusJSON(result.stdout, host.id, appended);
+            appended = true;
         }
 
-        parseProjectStatusJSON(result.stdout);
         renderProjects();
         renderFilterBar();   // counts derive from the project list
     } catch (error) {
@@ -328,9 +361,25 @@ async function loadProjects(): Promise<void> {
     }
 }
 
-function parseProjectStatusJSON(statusOutput: string): void {
-    projects = [];
-    sharedServices = {};
+// Identity is (host, name), not name.
+//
+// Two hosts can each have a `drupal-test`. Everything used to key on the name
+// alone — tile lookup, terminal session keys, the emoji filter — and with more
+// than one host that silently conflates two different projects.
+function projectKey(hostId: string, name: string): string {
+    return `${hostId}:${name}`;
+}
+
+function keyOf(project: Project): string {
+    return projectKey((project as any).hostId || 'local', project.name);
+}
+
+function parseProjectStatusJSON(statusOutput: string, hostId: string = 'local',
+                                append: boolean = false): void {
+    if (!append) {
+        projects = [];
+        sharedServices = {};
+    }
     
     if (!statusOutput || statusOutput.trim() === '') {
         console.log('Empty status output, no projects to parse');
@@ -348,7 +397,12 @@ function parseProjectStatusJSON(statusOutput: string): void {
         const data = JSON.parse(statusOutput);
         
         // Store shared services data
-        sharedServices = data.shared_services || {};
+        // Shared services are per host. The panel shows the local set, or the
+        // first host's when there is no local install — merging them would
+        // present one machine's Redis as though it were another's.
+        if (!append || Object.keys(sharedServices).length === 0) {
+            sharedServices = data.shared_services || {};
+        }
         
         // Parse projects
         if (data.projects && Array.isArray(data.projects)) {
@@ -384,6 +438,9 @@ function parseProjectStatusJSON(statusOutput: string): void {
                 // exact string disabled disables" stays on this side.
                 (project as any).last_on = meta.last_on || '';
                 (project as any).status_meta = meta.status || '';
+                // Which machine this project lives on. Everything downstream —
+                // the tile's actions, its terminal, its key — needs it.
+                (project as any).hostId = hostId;
                 
                 // Determine overall status.
                 //
@@ -731,6 +788,16 @@ function renderProjects(): void {
         return;
     }
 
+    // A host that did not answer contributes no tiles, which is
+    // indistinguishable from a host with no projects. Say which, and why.
+    const hostBanner = Object.keys(hostErrors).length > 0
+        ? `<div class="host-errors" data-testid="host-errors">${
+            Object.entries(hostErrors).map(([id, err]) => {
+                const label = dashboardHosts.find((h) => h.id === id)?.label || id;
+                return `<p>⚠️ <strong>${escapeHtml(label)}</strong> did not respond — ${escapeHtml(err)}</p>`;
+            }).join('')}</div>`
+        : '';
+
     const shown = visibleProjects();
     if (shown.length === 0) {
         // Distinguish "no projects" from "your filter hid them all" — otherwise
@@ -747,7 +814,7 @@ function renderProjects(): void {
         return;
     }
 
-    grid.innerHTML = shown.map((parsed: Project) => {
+    grid.innerHTML = hostBanner + shown.map((parsed: Project) => {
         // Apply cached display metadata here rather than trusting the parsed
         // object — display fields arrive on it directly from status now.
         const project = withMetadata(parsed);
@@ -772,6 +839,16 @@ function renderProjects(): void {
         // does not exist, so docker cannot tell it from stopped and the dot has
         // to come from the metadata.
         const disabled = isDisabled(parsed);
+
+        // Which machine, shown only when there is more than one. On a
+        // single-host dashboard the badge would be on every tile and mean
+        // nothing; with several it is the difference between two projects that
+        // share a name.
+        const pHost = (parsed as any).hostId || 'local';
+        const hostBadge = dashboardHosts.length > 1
+            ? `<span class="host-badge" data-testid="host-badge-${escapeHtml(pHost)}">${
+                escapeHtml(dashboardHosts.find((h) => h.id === pHost)?.label || pHost)}</span>`
+            : '';
         const statusDot = disabled ? '⏸️' : project.status === 'running' ? '🟢' : '🔴';
         const statusClass = disabled ? 'disabled' : project.status === 'running' ? 'running' : 'stopped';
 
@@ -782,6 +859,7 @@ function renderProjects(): void {
                 <div class="project-header">
                     <div class="project-icon">${projectIcon}</div>
                     <h3>${displayName}</h3>
+                    ${hostBadge}
                 </div>
                 ${descriptionHtml}
                 <div class="project-details">
@@ -839,7 +917,20 @@ async function loadServices(): Promise<void> {
             return;
         }
         
-        parseProjectStatusJSON(result.stdout);
+        // Services ONLY. This used to call the full parser, which rebuilds the
+        // project list — so on a multi-host dashboard it wiped the union and
+        // refilled it from the local host alone, and whichever of loadProjects
+        // and loadServices finished last decided what the grid showed.
+        //
+        // Exactly the shape of the metadata-cache race removed earlier: two
+        // loaders owning one piece of state. This one owns shared services and
+        // nothing else.
+        try {
+            const data = JSON.parse(result.stdout);
+            sharedServices = data.shared_services || {};
+        } catch (error) {
+            console.log('Services status output did not parse');
+        }
         renderServices();
     } catch (error) {
         console.error('Failed to load services:', error);
@@ -1122,10 +1213,28 @@ function startupErrorCode(stdout: string): string {
     }
 }
 
+// Which host a project lives on, by name. Actions take a name from the DOM, so
+// this is where the name is turned back into a machine.
+//
+// Defaults to local when the project is unknown — but a project is only unknown
+// if the grid is mid-refresh, and the alternative (refusing) would make buttons
+// intermittently dead. The wrong-host risk is bounded because a name that
+// exists on two hosts resolves to whichever the grid currently holds, and the
+// grid is what the user clicked.
+function hostOf(projectName: string): string {
+    const p = projects.find((x) => x.name === projectName);
+    return (p as any)?.hostId || 'local';
+}
+
+// Same shape as `execute-podium` but aimed at the project's own machine.
+function podiumFor(projectName: string, subcommand: string, args: string[] = []): Promise<any> {
+    return ipcRenderer.invoke('execute-podium-on', hostOf(projectName), subcommand, args);
+}
+
 async function startProject(projectName: string): Promise<void> {
     try {
         showLoadingOverlay('Starting Project', `Starting ${projectName}...`);
-        const result = await ipcRenderer.invoke('execute-podium', 'up', [projectName, '--json-output']);
+        const result = await podiumFor(projectName, 'up', [projectName, '--json-output']);
         
         hideLoadingOverlay();
         
@@ -1155,7 +1264,7 @@ async function startProject(projectName: string): Promise<void> {
 async function stopProject(projectName: string): Promise<void> {
     try {
         showLoadingOverlay('Stopping Project', `Stopping ${projectName}...`);
-        const result = await ipcRenderer.invoke('execute-podium', 'down', [projectName, '--json-output']);
+        const result = await podiumFor(projectName, 'down', [projectName, '--json-output']);
         
         hideLoadingOverlay();
         
@@ -1210,7 +1319,7 @@ async function removeProject(projectName: string): Promise<void> {
         const args = [projectName, '--json-output'];
         args.push(preserveDatabase ? '--preserve-database' : '--force-db-delete');
 
-        const result = await ipcRenderer.invoke('execute-podium', 'remove', args);
+        const result = await podiumFor(projectName, 'remove', args);
         
         hideLoadingOverlay();
         
@@ -1245,7 +1354,7 @@ async function disableProject(projectName: string): Promise<void> {
         + `Files, database and volumes are all kept — nothing is deleted.\n\n`
         + `Find it again with the "Disabled" filter.`)) return;
 
-    const result = await ipcRenderer.invoke('execute-podium', 'disable', [projectName, '--json-output']);
+    const result = await podiumFor(projectName, 'disable', [projectName, '--json-output']);
     if (result.code === 0) {
         // Say where it went. A project vanishing from the grid with only a
         // "done" toast is indistinguishable from having deleted it.
@@ -1258,7 +1367,7 @@ async function disableProject(projectName: string): Promise<void> {
 }
 
 async function enableProject(projectName: string): Promise<void> {
-    const result = await ipcRenderer.invoke('execute-podium', 'enable', [projectName, '--json-output']);
+    const result = await podiumFor(projectName, 'enable', [projectName, '--json-output']);
     if (result.code === 0) {
         // enable deliberately does not start it, so do not imply that it did.
         showSuccess(`${projectName} enabled. Start it when you are ready.`);
@@ -1647,7 +1756,7 @@ if (ipcRenderer) {
 async function testStartProject(projectName: string): Promise<void> {
     console.log('🧪 Testing startProject with:', projectName);
     try {
-        const result = await ipcRenderer.invoke('execute-podium', 'up', [projectName]);
+        const result = await podiumFor(projectName, 'up', [projectName]);
         console.log('✅ Command result:', result);
     } catch (error) {
         console.error('❌ Command failed:', error);
@@ -1738,7 +1847,7 @@ async function startAllProjects(): Promise<void> {
             );
             
             try {
-                const result = await ipcRenderer.invoke('execute-podium', 'up', [project.name, '--json-output']);
+                const result = await podiumFor(project.name, 'up', [project.name, '--json-output']);
                 if (result.code === 0) {
                     successCount++;
                 } else {
@@ -1805,7 +1914,7 @@ async function stopAllProjects(): Promise<void> {
             );
             
             try {
-                const result = await ipcRenderer.invoke('execute-podium', 'down', [project.name, '--json-output']);
+                const result = await podiumFor(project.name, 'down', [project.name, '--json-output']);
                 if (result.code === 0) {
                     successCount++;
                 } else {
@@ -4251,8 +4360,8 @@ async function confirmRemoveProject(): Promise<void> {
             args.push('--preserve-database');
         }
         
-        const result = await ipcRenderer.invoke('execute-podium', 'remove', args);
-        
+        const result = await podiumFor(currentProjectName, 'remove', args);
+
         hideLoadingOverlay();
         
         if (result.code === 0) {
