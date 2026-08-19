@@ -7,6 +7,7 @@
 
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const { _electron: electron } = require('playwright');
 
 const ROOT = path.join(__dirname, '..');
@@ -18,12 +19,30 @@ const DEBUG_DIR = path.join(ROOT, 'debug');
  * The main process resolves its HTML with a relative path ('../src/index.html'),
  * which is relative to process.cwd() — so cwd must be the repo root.
  */
+// Every run gets its own user-data directory.
+//
+// Tests used to share the real one, so they read and wrote the machine's actual
+// SSH hosts — and a crashed run left test hosts behind, while a save that raced
+// a load replaced the whole configuration with nothing. Snapshot-and-restore was
+// papering over that: it restored whatever state the previous crash had left,
+// so a wipe survived every subsequent run.
+//
+// A scratch directory removes the entire class. Tests are deterministic because
+// they start from nothing, and no test can damage a real configuration however
+// badly it fails. Reused across launches within a run so state persists between
+// them, which several tests rely on.
+const TEST_USER_DATA = path.join(os.tmpdir(), `podium-gui-test-${process.pid}`);
+
+function testUserDataDir() { return TEST_USER_DATA; }
+
 async function launchApp(options = {}) {
+  fs.mkdirSync(TEST_USER_DATA, { recursive: true });
   const app = await electron.launch({
     // --no-focus so a test run does not steal the keyboard from whoever is at
     // the machine. Playwright drives the window over CDP, which does not need
     // it focused, so this costs the tests nothing.
-    args: [path.join(ROOT, 'dist', 'main.js'), '--no-focus', ...(options.args || [])],
+    args: [path.join(ROOT, 'dist', 'main.js'), '--no-focus',
+           `--user-data-dir=${TEST_USER_DATA}`, ...(options.args || [])],
     cwd: ROOT,
     env: { ...process.env, ...(options.env || {}) }
   });
@@ -58,4 +77,5 @@ async function loadedPage(win) {
 
 const t = (id) => `[data-testid="${id}"]`;
 
-module.exports = { launchApp, screenshot, loadedPage, t, ROOT, DEBUG_DIR };
+module.exports = {
+  testUserDataDir, launchApp, screenshot, loadedPage, t, ROOT, DEBUG_DIR };
