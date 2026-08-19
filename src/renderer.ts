@@ -2409,31 +2409,208 @@ function showDonateModal(): void {
 // a path to a private key, never a key and never a password.
 // ---------------------------------------------------------------------------
 
+interface SshCredential {
+    id: string;
+    label: string;
+    user: string;
+    authType: 'key' | 'password';
+    keyPath?: string;
+    /** Whether a secret is stored. Never the secret — that stays in main. */
+    hasSecret?: boolean;
+    /** A newly typed password, sent once on save and then forgotten. */
+    newSecret?: string;
+    /** Explicitly remove a stored secret, as distinct from not changing it. */
+    clearSecret?: boolean;
+}
+
 interface SshProfile {
     id: string;
     label: string;
     host: string;
     port: number;
-    user: string;
-    keyPath: string;
+    credentialId?: string;
+    user?: string;
+    keyPath?: string;
     // Filled in by the connection test, editable. Not fixed: script installers
     // use /usr/local/bin, the .deb uses /usr/bin.
     podiumPath?: string;
 }
 
 let sshProfiles: SshProfile[] = [];
+let sshCredentials: SshCredential[] = [];
+// Whether the store has been read yet. Saving before it has been is how an
+// empty in-memory list gets written over a real configuration — and the write
+// looks entirely successful, so nothing reports it.
+let sshStoreLoaded = false;
+// What the platform's secret storage actually is, so the UI can say so rather
+// than implying a protection the machine may not provide.
+let sshEncryption = { available: false, backend: 'unknown' };
 // Keyed by profile id so a result belongs to the row that produced it — a
 // single shared status line would attribute a slow host's failure to whichever
 // row was tested last.
 let sshTestResults: Record<string, { ok: boolean; stage: string; detail: string; testing?: boolean }> = {};
 
 async function loadSshProfiles(): Promise<void> {
-    sshProfiles = await ipcRenderer.invoke('get-ssh-profiles') || [];
+    const store = await ipcRenderer.invoke('get-ssh-store');
+    sshProfiles = store?.hosts || [];
+    sshCredentials = store?.credentials || [];
+    sshEncryption = store?.encryption || { available: false, backend: 'unknown' };
+    sshStoreLoaded = true;
 }
 
 async function persistSshProfiles(): Promise<void> {
-    const result = await ipcRenderer.invoke('save-ssh-profiles', sshProfiles);
-    if (!result.success) showError(`Could not save SSH hosts: ${result.error}`);
+    // Never write what has not been read. Both lists start empty, so a save
+    // that beats the initial load replaces every host and credential with
+    // nothing — and reports success while doing it.
+    if (!sshStoreLoaded) {
+        console.warn('Refusing to save SSH settings before they have been loaded');
+        return;
+    }
+
+    const result = await ipcRenderer.invoke('save-ssh-store',
+        { credentials: sshCredentials, hosts: sshProfiles });
+    if (!result.success) { showError(`Could not save SSH settings: ${result.error}`); return; }
+
+    // Re-read so a just-typed password becomes "stored" rather than lingering
+    // in the renderer, and so hasSecret reflects what is actually on disk.
+    await loadSshProfiles();
+}
+
+// --- Credentials -----------------------------------------------------------
+
+function renderSshCredentials(): void {
+    const host = document.getElementById('ssh-credential-list');
+    if (!host) return;
+
+    if (sshCredentials.length === 0) {
+        host.innerHTML = `<p class="app-list-empty">No profiles yet. Add one to connect to a host.</p>`;
+    } else {
+        host.innerHTML = sshCredentials.map((c, i) => `
+            <div class="ssh-profile" data-testid="cred-${i}">
+                <div class="form-group">
+                    <label>Name</label>
+                    <input type="text" value="${escapeHtml(c.label)}" data-testid="cred-label-${i}"
+                           oninput="updateSshCredential(${i}, 'label', this.value)"
+                           placeholder="e.g. shawn on the LAN">
+                </div>
+                <div class="ssh-row">
+                    <div class="form-group">
+                        <label>Username</label>
+                        <input type="text" value="${escapeHtml(c.user)}" data-testid="cred-user-${i}"
+                               oninput="updateSshCredential(${i}, 'user', this.value)">
+                    </div>
+                    <div class="form-group">
+                        <label>Authentication</label>
+                        <select data-testid="cred-auth-${i}"
+                                onchange="updateSshCredential(${i}, 'authType', this.value)">
+                            <option value="key"${c.authType !== 'password' ? ' selected' : ''}>Key file</option>
+                            <option value="password"${c.authType === 'password' ? ' selected' : ''}>Password</option>
+                        </select>
+                    </div>
+                </div>
+                ${c.authType === 'password' ? `
+                    <div class="form-group">
+                        <label>Password</label>
+                        <input type="password" data-testid="cred-password-${i}"
+                               placeholder="${c.hasSecret ? 'saved - type to replace' : 'not set'}"
+                               oninput="updateSshCredential(${i}, 'newSecret', this.value)">
+                        ${c.hasSecret ? `<button class="btn btn-secondary btn-small" data-testid="cred-clear-${i}"
+                                    onclick="clearSshSecret(${i})">Remove saved password</button>` : ''}
+                    </div>`
+                : `
+                    <div class="form-group">
+                        <label>Key file</label>
+                        <div class="ssh-row">
+                            <input type="text" readonly value="${escapeHtml(c.keyPath || '')}"
+                                   data-testid="cred-key-${i}" placeholder="none selected">
+                            <button class="btn btn-secondary btn-small" data-testid="cred-browse-${i}"
+                                    onclick="browseForKey(${i})">Browse...</button>
+                        </div>
+                    </div>`}
+                <div class="ssh-actions">
+                    <button class="btn btn-danger btn-small" data-testid="cred-remove-${i}"
+                            onclick="removeSshCredential(${i})">Remove</button>
+                </div>
+            </div>`).join('');
+    }
+
+    // Say what the storage actually is. Electron falls back to a hardcoded key
+    // where the OS store is unreachable, which is obfuscation rather than
+    // encryption — measured as exactly that on this workstation.
+    const note = document.getElementById('ssh-encryption-note');
+    if (note) {
+        const usesPassword = sshCredentials.some((c) => c.authType === 'password');
+        note.textContent = !usesPassword ? ''
+            : sshEncryption.available
+                ? "Passwords are encrypted using this machine's credential store."
+                // Accurate rather than reassuring: it is base64 in a 0600 file,
+                // which is the same protection an unencrypted key in ~/.ssh has.
+                : 'This machine has no credential store, so saved passwords are kept '
+                  + 'unencrypted - protected by file permissions only, the same as an '
+                  + 'unencrypted key in ~/.ssh.';
+    }
+}
+
+async function addSshCredential(): Promise<void> {
+    sshCredentials.push({
+        id: `cred-${Date.now()}`, label: '', user: '', authType: 'key', keyPath: ''
+    });
+    renderSshCredentials();
+    await persistSshProfiles();
+    renderSshCredentials();
+    renderSshProfiles();
+}
+
+async function updateSshCredential(index: number, field: string, value: string): Promise<void> {
+    const c = sshCredentials[index];
+    if (!c) return;
+    (c as any)[field] = value;
+    if (field === 'newSecret') c.clearSecret = false;
+    // Switching auth type re-renders, since the fields below it change.
+    if (field === 'authType') { renderSshCredentials(); }
+    await persistSshProfiles();
+    if (field === 'authType' || field === 'newSecret') renderSshCredentials();
+    // A renamed credential is shown by name in every host's dropdown.
+    if (field === 'label' || field === 'user') renderSshProfiles();
+}
+
+async function clearSshSecret(index: number): Promise<void> {
+    const c = sshCredentials[index];
+    if (!c) return;
+    c.clearSecret = true;
+    c.newSecret = '';
+    c.hasSecret = false;
+    await persistSshProfiles();
+    renderSshCredentials();
+}
+
+// A path chosen from disk rather than typed. A mistyped key path fails as a
+// connection error, which sends people to look at the host instead of the path.
+async function browseForKey(index: number): Promise<void> {
+    const chosen = await ipcRenderer.invoke('browse-for-key');
+    if (!chosen) return;
+    const c = sshCredentials[index];
+    if (!c) return;
+    c.keyPath = chosen;
+    await persistSshProfiles();
+    renderSshCredentials();
+}
+
+async function removeSshCredential(index: number): Promise<void> {
+    const c = sshCredentials[index];
+    if (!c) return;
+
+    // A credential in use is a host that stops working, so say which rather
+    // than letting them fail one by one later.
+    const users = sshProfiles.filter((p) => p.credentialId === c.id);
+    if (users.length > 0) {
+        const names = users.map((p) => p.label || p.host).join(', ');
+        if (!confirm(`"${c.label || c.user}" is used by ${names}. Remove it anyway?`)) return;
+    }
+    sshCredentials.splice(index, 1);
+    await persistSshProfiles();
+    renderSshCredentials();
+    renderSshProfiles();
 }
 
 function renderSshProfiles(): void {
@@ -2472,17 +2649,17 @@ function renderSshProfiles(): void {
                     <input type="number" value="${p.port || 22}" data-testid="ssh-port-${i}"
                            oninput="updateSshProfile(${i}, 'port', this.value)">
                 </div>
-                <div class="form-group">
-                    <label>User</label>
-                    <input type="text" value="${escapeHtml(p.user)}" data-testid="ssh-user-${i}"
-                           oninput="updateSshProfile(${i}, 'user', this.value)" placeholder="ubuntu">
                 </div>
-            </div>
-            <div class="form-group">
-                <label>Private key</label>
-                <input type="text" value="${escapeHtml(p.keyPath)}" data-testid="ssh-key-${i}"
-                       oninput="updateSshProfile(${i}, 'keyPath', this.value)" placeholder="~/.ssh/id_rsa">
-            </div>
+                <div class="form-group">
+                <label>Profile</label>
+                <select data-testid="ssh-cred-${i}"
+                        onchange="updateSshProfile(${i}, 'credentialId', this.value)">
+                    <option value="">-- choose a profile --</option>
+                    ${sshCredentials.map((c) => `
+                        <option value="${escapeHtml(c.id)}"${p.credentialId === c.id ? ' selected' : ''}
+                            >${escapeHtml(c.label || c.user || 'unnamed')}</option>`).join('')}
+                </select>
+                </div>
             <div class="form-group">
                 <label>Podium path <span class="form-help">found automatically; override only if needed</span></label>
                 <input type="text" value="${escapeHtml(p.podiumPath || '')}" data-testid="ssh-podium-${i}"
@@ -2583,6 +2760,7 @@ async function testSshProfile(index: number): Promise<void> {
 async function showSettings(tab: 'appearance' | 'layout' | 'hosts' | 'ai' = 'appearance'): Promise<void> {
     renderThemePicker();
     await loadSshProfiles();
+    renderSshCredentials();
     renderSshProfiles();
     switchSettingsTab(tab);
     // Populate BEFORE showing. Loading afterwards made Appearance open a beat
@@ -4668,6 +4846,12 @@ async function submitEditProject(): Promise<void> {
 (window as any).updateSshProfile = updateSshProfile;
 (window as any).removeSshProfile = removeSshProfile;
 (window as any).testSshProfile = testSshProfile;
+(window as any).addSshCredential = addSshCredential;
+(window as any).updateSshCredential = updateSshCredential;
+(window as any).removeSshCredential = removeSshCredential;
+(window as any).clearSshSecret = clearSshSecret;
+(window as any).browseForKey = browseForKey;
+(window as any).__sshCredentials = () => sshCredentials;
 (window as any).configureSshHost = configureSshHost;
 (window as any).__sshProfiles = () => sshProfiles;
 (window as any).applyEndpoint = applyEndpoint;

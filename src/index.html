@@ -452,6 +452,20 @@
                         Podium installations on other machines. A project is created on one of
                         these or locally, and the dashboard shows everything from every host.
                     </p>
+                    <h4 class="settings-subhead">SSH Profiles</h4>
+                    <p class="settings-note">
+                        Login details, reusable across hosts. A profile is a username
+                        plus either a key file or a password.
+                    </p>
+                    <div id="ssh-credential-list" data-testid="ssh-credential-list"></div>
+                    <button class="btn btn-secondary btn-small" data-testid="cred-add"
+                            onclick="addSshCredential()">+ Add a profile</button>
+                    <p id="ssh-encryption-note" class="settings-note" data-testid="encryption-note"></p>
+
+                    <h4 class="settings-subhead">SSH Hosts</h4>
+                    <p class="settings-note">
+                        Machines running Podium. Each one uses a profile above.
+                    </p>
                     <div id="ssh-profile-list" data-testid="ssh-profile-list"></div>
                     <button class="btn btn-primary btn-small" data-testid="ssh-add"
                             onclick="addSshProfile()">+ Add a host</button>

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, IpcMainInvokeEvent, Menu, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, IpcMainInvokeEvent, Menu, shell, safeStorage } from 'electron';
 import * as path from 'path';
 import { spawn, ChildProcess, execSync } from 'child_process';
 import * as fs from 'fs';
@@ -409,13 +409,35 @@ function resolveOnPath(bin: string): string | null {
 // deliberately; key-based auth is what the executor will use.
 // ---------------------------------------------------------------------------
 
+// A credential: who to log in as and how. Separate from the host so one set of
+// details can serve several machines — which is the common case here, where the
+// same account and key reach every box.
+interface SshCredential {
+  id: string;
+  label: string;
+  user: string;
+  authType: 'key' | 'password';
+  /** Absolute path, chosen with a file picker rather than typed. */
+  keyPath?: string;
+  /**
+   * safeStorage ciphertext, base64. Never the password itself, and never sent
+   * back to the renderer once saved — the UI shows whether one is set, not what
+   * it is.
+   */
+  secret?: string;
+}
+
 interface SshProfile {
   id: string;
   label: string;
   host: string;
   port: number;
-  user: string;
-  keyPath: string;
+  /** Which credential to log in with. */
+  credentialId?: string;
+  // Kept for profiles written before credentials existed. Migrated on read;
+  // never written again.
+  user?: string;
+  keyPath?: string;
   // Resolved by the connection test, editable in the form. Not a fixed path,
   // because it genuinely varies: the four script installers put podium at
   // /usr/local/bin -> /usr/local/share/podium-cli, while the .deb puts it at
@@ -429,52 +451,257 @@ function sshProfilesPath(): string {
   return path.join(app.getPath('userData'), 'ssh-hosts.json');
 }
 
-function readSshProfiles(): SshProfile[] {
+interface SshStore {
+  credentials: SshCredential[];
+  hosts: SshProfile[];
+}
+
+// Read the store, migrating the old shape if that is what is on disk.
+//
+// The original format was a bare array of hosts, each carrying its own user and
+// keyPath. Those become one credential per distinct (user, keyPath) pair, so two
+// hosts sharing an account end up sharing a credential rather than duplicating
+// it. Migration happens on read and is written back on the next save, so an
+// existing setup keeps working without anyone re-entering anything.
+function readSshStore(): SshStore {
+  let parsed: any;
   try {
-    const raw = fs.readFileSync(sshProfilesPath(), 'utf8');
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    parsed = JSON.parse(fs.readFileSync(sshProfilesPath(), 'utf8'));
   } catch {
-    // Absent or unreadable: no hosts configured is a normal state, not an error.
-    return [];
+    // Absent or unreadable: nothing configured is a normal state, not an error.
+    return { credentials: [], hosts: [] };
+  }
+
+  if (parsed && Array.isArray(parsed.hosts)) {
+    return {
+      credentials: Array.isArray(parsed.credentials) ? parsed.credentials : [],
+      hosts: parsed.hosts
+    };
+  }
+
+  if (!Array.isArray(parsed)) return { credentials: [], hosts: [] };
+
+  const credentials: SshCredential[] = [];
+  const hosts: SshProfile[] = parsed.map((old: any) => {
+    const user = old.user || '';
+    const keyPath = old.keyPath || '';
+    let cred = credentials.find((c) => c.user === user && c.keyPath === keyPath);
+    if (!cred) {
+      cred = {
+        id: `cred-${credentials.length + 1}`,
+        label: keyPath ? `${user} (key)` : user,
+        user,
+        authType: 'key',
+        keyPath
+      };
+      credentials.push(cred);
+    }
+    return {
+      id: old.id, label: old.label, host: old.host, port: old.port,
+      credentialId: cred.id, podiumPath: old.podiumPath
+    };
+  });
+  debugLog('Migrated SSH hosts to the credential model',
+    { hosts: hosts.length, credentials: credentials.length });
+  return { credentials, hosts };
+}
+
+/** Hosts only. Most callers want these and do not care about credentials. */
+function readSshProfiles(): SshProfile[] {
+  return readSshStore().hosts;
+}
+
+/** The credential a host logs in with, or null if it names one that is gone. */
+function credentialFor(profile: SshProfile): SshCredential | null {
+  const store = readSshStore();
+  return store.credentials.find((c) => c.id === profile.credentialId) || null;
+}
+
+// Build the ssh2 connection options for a host.
+//
+// Shared by the connection test and the executor. Two auth paths existing in two
+// places is how one of them ends up supporting passwords and the other not.
+function connectOptionsFor(profile: SshProfile): {
+  options?: any; error?: string; stage?: string;
+} {
+  const cred = credentialFor(profile);
+  if (!cred) {
+    return { error: 'No credential is set for this host. Choose one in Settings.', stage: 'credential' };
+  }
+
+  const base = {
+    host: profile.host,
+    port: profile.port || 22,
+    username: cred.user,
+    readyTimeout: 10000,
+    keepaliveInterval: 20000
+  };
+
+  if (cred.authType === 'password') {
+    const password = decryptSecret(cred.secret);
+    if (!password) {
+      // A credential set to password auth with nothing stored would otherwise
+      // fail as a rejected login, sending someone to check the wrong thing.
+      return { error: `No password is saved for "${cred.label}".`, stage: 'credential' };
+    }
+    return { options: { ...base, password } };
+  }
+
+  if (!cred.keyPath) {
+    return { error: `No key is selected for "${cred.label}".`, stage: 'credential' };
+  }
+  try {
+    const privateKey = fs.readFileSync(cred.keyPath.replace(/^~/, os.homedir()));
+    const passphrase = decryptSecret(cred.secret);
+    return { options: passphrase ? { ...base, privateKey, passphrase } : { ...base, privateKey } };
+  } catch (error) {
+    // Distinguished from a connection failure: the fix is a different path, not
+    // a different host.
+    return { error: `Cannot read key: ${(error as Error).message}`, stage: 'key' };
+  }
+}
+
+// Store a secret using the OS credential store where there is one, and plainly
+// where there is not.
+//
+// safeStorage.encryptString THROWS when encryption is unavailable — it does not
+// return something weaker. Measured on this workstation: isEncryptionAvailable()
+// is false and the backend is basic_text even with --password-store forced, so
+// saving a password failed outright with "Encryption is not available".
+//
+// Refusing to save would be worse than saving plainly. The file is already mode
+// 0600 in the user's home, which is exactly the protection an unencrypted
+// private key in ~/.ssh has — and that is how most people already store the
+// credential this replaces. The UI says which of the two it got.
+//
+// Marked with a prefix so reading knows how it was written, rather than
+// guessing from whether decryption happens to fail.
+function encryptSecret(plain: string): string {
+  if (!plain) return '';
+  try {
+    if (safeStorage.isEncryptionAvailable()) {
+      return 'enc:' + safeStorage.encryptString(plain).toString('base64');
+    }
+  } catch {
+    // Fall through: a store that claims to be available can still refuse.
+  }
+  return 'plain:' + Buffer.from(plain, 'utf8').toString('base64');
+}
+
+function decryptSecret(secret: string | undefined): string {
+  if (!secret) return '';
+  try {
+    if (secret.startsWith('plain:')) {
+      return Buffer.from(secret.slice(6), 'base64').toString('utf8');
+    }
+    const body = secret.startsWith('enc:') ? secret.slice(4) : secret;
+    return safeStorage.decryptString(Buffer.from(body, 'base64'));
+  } catch {
+    return '';
   }
 }
 
 ipcMain.handle('get-ssh-profiles', async (): Promise<SshProfile[]> => readSshProfiles());
 
-ipcMain.handle('save-ssh-profiles', async (
+// The store as the renderer is allowed to see it: a stored secret becomes a
+// boolean. The password itself has no reason to travel back, and a renderer
+// with nodeIntegration is the last place to put one.
+ipcMain.handle('get-ssh-store', async (): Promise<{
+  credentials: Array<Omit<SshCredential, 'secret'> & { hasSecret: boolean }>;
+  hosts: SshProfile[];
+  encryption: { available: boolean; backend: string };
+}> => {
+  const store = readSshStore();
+  return {
+    credentials: store.credentials.map(({ secret, ...rest }) => ({
+      ...rest, hasSecret: Boolean(secret)
+    })),
+    hosts: store.hosts,
+    encryption: {
+      available: safeStorage.isEncryptionAvailable(),
+      backend: (safeStorage as any).getSelectedStorageBackend?.() ?? 'unknown'
+    }
+  };
+});
+
+// Save credentials and hosts together.
+//
+// A credential arrives with `secret` set to a new plaintext password, or absent
+// to keep whatever is stored. That distinction is what lets the UI show "a
+// password is set" without ever holding the password.
+ipcMain.handle('save-ssh-store', async (
   _event: IpcMainInvokeEvent,
-  profiles: SshProfile[]
+  incoming: { credentials: any[]; hosts: SshProfile[] }
 ): Promise<{ success: boolean; error?: string }> => {
   try {
-    // Drop cached connections: a profile edit may have changed the host, user
-    // or key, and reusing a connection opened under the old details would run
-    // commands against a machine the profile no longer describes.
     disposeExecutors();
-    fs.mkdirSync(path.dirname(sshProfilesPath()), { recursive: true });
-    fs.writeFileSync(sshProfilesPath(), JSON.stringify(profiles, null, 2), { mode: 0o600 });
+    const existing = readSshStore();
+
+
+    const credentials: SshCredential[] = (incoming.credentials || []).map((c) => {
+      const prior = existing.credentials.find((p) => p.id === c.id);
+      const out: SshCredential = {
+        id: c.id, label: c.label, user: c.user,
+        authType: c.authType === 'password' ? 'password' : 'key',
+        keyPath: c.keyPath || ''
+      };
+      if (typeof c.newSecret === 'string' && c.newSecret !== '') {
+        out.secret = encryptSecret(c.newSecret);
+      } else if (c.clearSecret) {
+        // Explicitly removed rather than merely absent.
+      } else if (prior?.secret) {
+        out.secret = prior.secret;
+      }
+      return out;
+    });
+
+    const store: SshStore = { credentials, hosts: incoming.hosts || [] };
+    // Keep the last non-empty version beside the live one.
+    //
+    // Losing every host and credential to a bug is unrecoverable otherwise —
+    // there is nothing to re-derive them from, and the write reports success.
+    // Cheap insurance: one extra file, only rewritten when the store is about
+    // to go from something to nothing.
+    if ((existing.hosts.length > 0 || existing.credentials.length > 0)
+        && store.hosts.length === 0 && store.credentials.length === 0) {
+      try {
+        fs.writeFileSync(sshProfilesPath() + '.last', JSON.stringify(existing, null, 2), { mode: 0o600 });
+        debugLog('SSH store emptied; previous contents kept alongside', {
+          had: { hosts: existing.hosts.length, credentials: existing.credentials.length },
+          stack: new Error().stack
+        });
+      } catch { /* the backup failing must not block the save */ }
+    }
+
+    fs.writeFileSync(sshProfilesPath(), JSON.stringify(store, null, 2), { mode: 0o600 });
+    // Re-applied on every write: an existing file keeps its old mode, so a
+    // file created before this was set would stay world-readable forever.
+    fs.chmodSync(sshProfilesPath(), 0o600);
     return { success: true };
   } catch (error) {
     return { success: false, error: (error as Error).message };
   }
 });
 
-// Prove a profile can actually reach a working Podium, in one connection.
+// Browse for a private key rather than typing a path.
 //
-// Deliberately runs `/usr/local/bin/podium` by ABSOLUTE path. A non-interactive
-// ssh command gets a PATH built without /usr/local/bin on macOS — path_helper
-// runs for login shells only — so `podium status` there fails with "command not
-// found" on a machine where Podium is installed and working. It succeeds on
-// Linux, which is what makes it dangerous: testing against a Linux host would
-// prove nothing. Reported by the CLI session from the Mac rig.
-//
-// Not `zsh -lc "podium ..."` either: a login shell sources the user's rc files,
-// and their aliases and version-manager output end up in a stream being parsed
-// as JSON.
+// Defaults to ~/.ssh, and filters nothing: keys have no consistent extension —
+// id_rsa, id_ed25519, something.pem — so an extension filter would hide most of
+// them.
+ipcMain.handle('browse-for-key', async (): Promise<string> => {
+  const result = await dialog.showOpenDialog({
+    title: 'Select a private key',
+    defaultPath: path.join(os.homedir(), '.ssh'),
+    properties: ['openFile', 'showHiddenFiles'],
+    buttonLabel: 'Use this key'
+  });
+  return result.canceled ? '' : (result.filePaths[0] || '');
+});
+
 const REMOTE_PODIUM_CANDIDATES = ['/usr/local/bin/podium', '/usr/bin/podium'];
 
 // Podium's own scripts shell out to docker, git and sed. A non-interactive ssh
-// command inherits a PATH those are not on — verified on the Mac rig, where
+// command inherits a PATH those are not on - verified on the Mac rig, where
 // `/usr/local/bin/podium status` ran and then died on
 // "status.sh: line 137: docker: command not found" while
 // /usr/local/bin/docker existed the whole time.
@@ -484,10 +711,10 @@ const REMOTE_PODIUM_CANDIDATES = ['/usr/local/bin/podium', '/usr/bin/podium'];
 // so a host with its own additions keeps them.
 const REMOTE_PATH_PREFIX = 'PATH=/usr/local/bin:/opt/homebrew/bin:$PATH';
 
-function remoteCommand(profile: SshProfile, args: string): string {
-  const bin = profile.podiumPath || REMOTE_PODIUM_CANDIDATES[0];
-  return `${REMOTE_PATH_PREFIX} ${bin} ${args}`;
-}
+// `save-ssh-profiles` is deliberately absent. It wrote a bare array, which is
+// the pre-credential shape — calling it now would silently discard every
+// credential and leave each host pointing at an id that no longer exists. Use
+// `save-ssh-store`, which writes both halves together.
 
 ipcMain.handle('test-ssh-profile', async (
   _event: IpcMainInvokeEvent,
@@ -507,13 +734,9 @@ ipcMain.handle('test-ssh-profile', async (
       resolve({ ok, stage, detail, podiumPath: resolvedPath });
     };
 
-    let key: Buffer;
-    try {
-      key = fs.readFileSync(profile.keyPath.replace(/^~/, os.homedir()));
-    } catch (error) {
-      // Distinguished from a connection failure: the fix is a different path,
-      // not a different host.
-      return resolve({ ok: false, stage: 'key', detail: `Cannot read key: ${(error as Error).message}` });
+    const built = connectOptionsFor(profile);
+    if (!built.options) {
+      return resolve({ ok: false, stage: built.stage || 'key', detail: built.error || 'Cannot connect' });
     }
 
     const conn = new Client();
@@ -599,13 +822,7 @@ ipcMain.handle('test-ssh-profile', async (
       done(false, 'connect', err.message);
     });
 
-    conn.connect({
-      host: profile.host,
-      port: profile.port || 22,
-      username: profile.user,
-      privateKey: key,
-      readyTimeout: 10000
-    });
+    conn.connect(built.options);
   });
 });
 
@@ -2021,12 +2238,10 @@ class SshExecutor implements Executor {
 
     this.connecting = new Promise((resolve, reject) => {
       const { Client } = require('ssh2');
-      let key: Buffer;
-      try {
-        key = fs.readFileSync(this.profile.keyPath.replace(/^~/, os.homedir()));
-      } catch (error) {
+      const built = connectOptionsFor(this.profile);
+      if (!built.options) {
         this.connecting = null;
-        return reject(new Error(`Cannot read key ${this.profile.keyPath}: ${(error as Error).message}`));
+        return reject(new Error(built.error || 'Cannot connect'));
       }
 
       const conn = new Client();
@@ -2044,14 +2259,7 @@ class SshExecutor implements Executor {
       // call tries to reuse.
       conn.on('close', () => { this.conn = null; });
 
-      conn.connect({
-        host: this.profile.host,
-        port: this.profile.port || 22,
-        username: this.profile.user,
-        privateKey: key,
-        readyTimeout: 10000,
-        keepaliveInterval: 20000
-      });
+      conn.connect(built.options);
     });
     return this.connecting;
   }

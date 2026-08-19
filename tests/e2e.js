@@ -396,6 +396,14 @@ async function run() {
     await win.evaluate(() => window.loadProjects());
     await win.waitForTimeout(2000);
 
+    // Tests must not read or write the machine's real configuration. They used
+    // to, which is how a crashed run left test hosts behind and a save racing a
+    // load replaced a real setup with nothing.
+    const userDataInUse = await app.evaluate(async ({ app: a }) => a.getPath('userData'));
+    check('the suite runs against a scratch user-data directory',
+      userDataInUse === require('./helpers').testUserDataDir(),
+      `using ${userDataInUse}`);
+
     // --- Reachability -----------------------------------------------------
     //
     // A remote project's own addresses are useless from here. local_url is
@@ -659,11 +667,17 @@ async function run() {
     console.log('\nservice manager');
     await win.click(t('manage-services'));
     await win.waitForSelector('#service-manager-modal.show', { timeout: 8000 });
-    await win.waitForTimeout(800);
+    // Wait for the rows themselves rather than a fixed delay. The list is filled
+    // asynchronously, and on a machine with an unreachable host configured the
+    // app can be busy for ten seconds waiting out that handshake — which made a
+    // fixed 800ms wait pass alone and fail in a full run.
+    await win.waitForSelector('#service-manager-list .service-row', { timeout: 20000 });
 
     const managerRows = await win.evaluate(() =>
       [...document.querySelectorAll('#service-manager-list .service-row')]
-        .map((r) => r.getAttribute('data-testid').replace('service-row-', '')));
+        .map((r) => r.getAttribute('data-testid') || '')
+        .filter(Boolean)
+        .map((id) => id.replace('service-row-', '')));
     check('the manager lists every optional service',
       managerRows.length === 9, `${managerRows.length}: ${managerRows.join(',')}`);
     check('the manager omits the always-on services',
@@ -1139,7 +1153,10 @@ async function run() {
 
     await win.evaluate(() => window.closeModal());
     await win.evaluate(async () => {
-      await require('electron').ipcRenderer.invoke('save-ssh-profiles', []);
+      // Credentials stay; only the hosts go, which is what leaves the picker
+      // with a single option.
+      await require('electron').ipcRenderer.invoke('save-ssh-store',
+        { credentials: window.__sshCredentials(), hosts: [] });
     });
     await win.waitForTimeout(200);
     await win.click(t('new-project'));
@@ -1152,16 +1169,18 @@ async function run() {
       await win.evaluate(() => window.__newProjectHost()) === 'local');
 
     await win.evaluate(async (profiles) => {
-      await require('electron').ipcRenderer.invoke('save-ssh-profiles', profiles);
+      await require('electron').ipcRenderer.invoke('save-ssh-store', profiles);
     }, savedProfiles);
     await win.waitForTimeout(200);
 
     // Add a host and reopen: now there is a real choice, so it must be asked.
     await win.evaluate(async () => {
-      await require('electron').ipcRenderer.invoke('save-ssh-profiles', [
-        { id: 'picker-test', label: 'test-host', host: '192.0.2.10',
-          port: 22, user: 'someone', keyPath: '~/.ssh/id_rsa' }
-      ]);
+      await require('electron').ipcRenderer.invoke('save-ssh-store', {
+        credentials: [{ id: 'picker-cred', label: 'picker', user: 'someone',
+                        authType: 'key', keyPath: '~/.ssh/id_rsa' }],
+        hosts: [{ id: 'picker-test', label: 'test-host', host: '192.0.2.10',
+                  port: 22, credentialId: 'picker-cred' }]
+      });
     });
     await win.evaluate(() => window.closeModal());
     await win.waitForTimeout(200);
@@ -1204,7 +1223,7 @@ async function run() {
 
     // Put back exactly what this machine had, rather than leaving it empty.
     await win.evaluate(async (profiles) => {
-      await require('electron').ipcRenderer.invoke('save-ssh-profiles', profiles);
+      await require('electron').ipcRenderer.invoke('save-ssh-store', profiles);
     }, savedProfiles);
     await win.evaluate(() => window.closeModal());
     await win.waitForTimeout(200);
@@ -1507,9 +1526,11 @@ async function run() {
     // saved that array back — and if it was stale or not yet loaded, saving it
     // wiped the file. This machine has real hosts configured; a test must put
     // them back exactly, not approximately.
-    const sshSnapshot = await app.evaluate(async ({ ipcMain }) =>
-      ipcMain._invokeHandlers.get('get-ssh-profiles')({}));
-    const sshBefore = sshSnapshot.length;
+    const sshSnapshot = await app.evaluate(async ({ ipcMain }) => {
+      const s = await ipcMain._invokeHandlers.get('get-ssh-store')({});
+      return { credentials: s.credentials, hosts: s.hosts };
+    });
+    const sshBefore = sshSnapshot.hosts.length;
 
     await win.click(t('ssh-add'));
     await win.waitForTimeout(300);
@@ -1568,15 +1589,33 @@ async function run() {
     await win.waitForTimeout(200);
     await win.click(t('ssh-add'));
     await win.waitForTimeout(300);
+    // A username lives on a credential now, not on the host, so the hosts
+    // reference one. That separation is the point: several machines reached with
+    // the same account share one set of details instead of repeating them.
+    // Created through the UI, then found by identity rather than by index.
+    // Index arithmetic breaks the moment the list holds anything else, and a
+    // real machine's list does.
+    const credCountBefore = await win.evaluate(() => window.__sshCredentials().length);
+    await win.click(t('cred-add'));
+    await win.waitForTimeout(400);
+    await win.fill(t(`cred-label-${credCountBefore}`), 'test account');
+    await win.fill(t(`cred-user-${credCountBefore}`), 'ubuntu');
+    await win.waitForTimeout(400);
+    const testCredId = await win.evaluate(() =>
+      window.__sshCredentials().find((c) => c.label === 'test account')?.id);
+    check('a credential created in the UI is saved and findable',
+      typeof testCredId === 'string' && testCredId.length > 0,
+      String(testCredId));
+
     await win.fill(t('ssh-label-0'), 'ec2-ubuntu');
     await win.fill(t('ssh-host-0'), '44.202.33.176');
-    await win.fill(t('ssh-user-0'), 'ubuntu');
     await win.fill(t('ssh-label-1'), 'ec2-arch');
     await win.fill(t('ssh-host-1'), '52.23.206.186');
-    await win.fill(t('ssh-user-1'), 'arch');
     await win.fill(t('ssh-label-2'), 'mac-m1');
     await win.fill(t('ssh-host-2'), '192.168.1.193');
-    await win.fill(t('ssh-user-2'), 'shawn');
+    for (const i of [0, 1, 2]) {
+      await win.selectOption(t(`ssh-cred-${i}`), testCredId);
+    }
     await win.waitForTimeout(400);
 
     const rows = await win.locator('.ssh-profile').count();
@@ -1585,11 +1624,18 @@ async function run() {
     const multi = await app.evaluate(async ({ ipcMain }) =>
       ipcMain._invokeHandlers.get('get-ssh-profiles')({}));
     const labels = multi.map((p) => p.label);
-    check('all three persist, each keeping its own host and user',
+    check('all three persist, each keeping its own host',
       ['ec2-ubuntu', 'ec2-arch', 'mac-m1'].every((l) => labels.includes(l))
-      && multi.find((p) => p.label === 'ec2-arch')?.user === 'arch'
+      && multi.find((p) => p.label === 'ec2-arch')?.host === '52.23.206.186'
       && multi.find((p) => p.label === 'mac-m1')?.host === '192.168.1.193',
-      JSON.stringify(multi.map((p) => `${p.label}:${p.user}@${p.host}`)));
+      JSON.stringify(multi.map((p) => `${p.label}@${p.host}`)));
+
+    // One credential serving several hosts is the reason it is a separate
+    // thing; if each host copied it, editing an account would mean editing it
+    // once per machine.
+    check('several hosts can share one credential',
+      [0, 1, 2].every((i) => multi[i]?.credentialId === testCredId),
+      JSON.stringify(multi.map((p) => p.credentialId)));
 
     // Ids must be distinct, or a test result would attach to the wrong row.
     const ids = multi.map((p) => p.id);
@@ -1765,21 +1811,31 @@ async function run() {
     // describes.
     const mainSrcExec = require('fs').readFileSync(
       require('path').join(require('./helpers').ROOT, 'src/main.ts'), 'utf8');
-    const saveHandler = mainSrcExec.slice(mainSrcExec.indexOf("ipcMain.handle('save-ssh-profiles'"));
+    const saveHandler = mainSrcExec.slice(mainSrcExec.indexOf("ipcMain.handle('save-ssh-store'"));
     check('saving profiles disposes cached connections',
-      /disposeExecutors\(\)/.test(saveHandler.slice(0, 700)));
+      /disposeExecutors\(\)/.test(saveHandler.slice(0, 900)));
+
+    // The pre-credential writer took a bare array. Leaving it registered would
+    // let one stale caller wipe every credential and leave each host pointing at
+    // an id that no longer exists.
+    check('the legacy array writer is gone, not merely unused',
+      !/ipcMain\.handle\('save-ssh-profiles'/.test(mainSrcExec));
 
     // Restore the exact snapshot rather than trimming whatever the renderer
     // happens to hold.
     await win.evaluate(async (profiles) => {
-      await require('electron').ipcRenderer.invoke('save-ssh-profiles', profiles);
+      await require('electron').ipcRenderer.invoke('save-ssh-store', profiles);
     }, sshSnapshot);
-    await win.waitForTimeout(200);
-    const cleaned = await app.evaluate(async ({ ipcMain }) =>
-      ipcMain._invokeHandlers.get('get-ssh-profiles')({}));
+    await win.waitForTimeout(300);
+    const cleaned = await app.evaluate(async ({ ipcMain }) => {
+      const s = await ipcMain._invokeHandlers.get('get-ssh-store')({});
+      return { credentials: s.credentials, hosts: s.hosts };
+    });
     check('the suite restores the hosts exactly as it found them',
-      JSON.stringify(cleaned) === JSON.stringify(sshSnapshot),
-      `${cleaned.length} vs ${sshSnapshot.length}`);
+      JSON.stringify(cleaned.hosts) === JSON.stringify(sshSnapshot.hosts)
+      && cleaned.credentials.length === sshSnapshot.credentials.length,
+      `${cleaned.hosts.length} hosts / ${cleaned.credentials.length} creds vs `
+      + `${sshSnapshot.hosts.length} / ${sshSnapshot.credentials.length}`);
 
     await win.click(t('settings-tab-ai'));
     await win.waitForTimeout(150);
