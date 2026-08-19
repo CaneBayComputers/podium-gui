@@ -30,7 +30,25 @@ function withoutComments(source, lineComment = '//') {
   return source.split('\n').filter((l) => !re.test(l)).join('\n');
 }
 
+// Run one section instead of all of them: `npm test -- --only=ssh`.
+//
+// The suite is 300-odd assertions and most of a run re-verifies ground that has
+// not moved. Matching on the section banner keeps a focused run honest — it
+// skips whole sections rather than individual checks, so what does run is still
+// a complete section.
+const ONLY = (process.argv.find((a) => a.startsWith('--only=')) || '').slice(7).toLowerCase();
+let currentSection = '';
+let sectionSkipped = false;
+
+function section(name) {
+  currentSection = name;
+  sectionSkipped = Boolean(ONLY) && !name.toLowerCase().includes(ONLY);
+  console.log(sectionSkipped ? `\n${name} (skipped)` : `\n${name}`);
+  return !sectionSkipped;
+}
+
 function check(name, condition, detail = '') {
+  if (sectionSkipped) return;
   if (condition) {
     passed++;
     console.log(`  ✓ ${name}`);
@@ -403,6 +421,42 @@ async function run() {
     check('the suite runs against a scratch user-data directory',
       userDataInUse === require('./helpers').testUserDataDir(),
       `using ${userDataInUse}`);
+
+    // --- About and updates ------------------------------------------------
+    await win.evaluate(() => window.closeModal());
+    await win.waitForTimeout(200);
+    await win.click(t('about-open'));
+    await win.waitForTimeout(400);
+    check('the About window has a button that opens it',
+      await win.isVisible('#about-modal'));
+    await win.evaluate(() => window.closeModal());
+
+    // Both Podium repos are source checkouts, so an update is a git pull. The
+    // check must be read-only — it fetches remote refs and never touches a
+    // working tree, because running it should not be able to change anything.
+    const updates = await app.evaluate(async ({ ipcMain }) =>
+      ipcMain._invokeHandlers.get('check-updates')({}));
+    check('the update check finds the GUI checkout it is running from',
+      updates.some((r) => r.id === 'gui' && r.branch),
+      JSON.stringify(updates.map((r) => `${r.id}:${r.branch}`)));
+    check('each repo reports how far behind and ahead it is',
+      updates.every((r) => typeof r.behind === 'number' && typeof r.ahead === 'number'),
+      JSON.stringify(updates.map((r) => `${r.id} -${r.behind}/+${r.ahead}`)));
+
+    const updateSrc = require('fs').readFileSync(
+      require('path').join(require('./helpers').ROOT, 'src/main.ts'), 'utf8');
+    const updateBlock = updateSrc.slice(updateSrc.indexOf("ipcMain.handle('update-repo'"),
+                                        updateSrc.indexOf("ipcMain.handle('get-platform-capabilities'"));
+    // A pull over uncommitted work can destroy it, and which of commit, stash or
+    // discard is right is a human decision.
+    check('an update refuses to pull over uncommitted changes',
+      /status', '--porcelain'/.test(updateBlock) && /uncommitted/i.test(updateBlock));
+    // --ff-only so divergence stops cleanly instead of leaving a conflicted tree
+    // for someone else to unpick.
+    check('an update cannot produce a merge or a conflicted tree',
+      /--ff-only/.test(updateBlock));
+    check('a failed pull surfaces git\'s own message',
+      /pulled\.out/.test(updateBlock));
 
     // --- Reachability -----------------------------------------------------
     //
@@ -1595,6 +1649,8 @@ async function run() {
     // Created through the UI, then found by identity rather than by index.
     // Index arithmetic breaks the moment the list holds anything else, and a
     // real machine's list does.
+    await win.click(t('remotes-tab-profiles'));
+    await win.waitForTimeout(200);
     const credCountBefore = await win.evaluate(() => window.__sshCredentials().length);
     await win.click(t('cred-add'));
     await win.waitForTimeout(400);
@@ -1607,6 +1663,10 @@ async function run() {
       typeof testCredId === 'string' && testCredId.length > 0,
       String(testCredId));
 
+    // Back to Hosts: the two lists are separate subtabs now, so only one set of
+    // controls is on screen at a time.
+    await win.click(t('remotes-tab-hosts'));
+    await win.waitForTimeout(200);
     await win.fill(t('ssh-label-0'), 'ec2-ubuntu');
     await win.fill(t('ssh-host-0'), '44.202.33.176');
     await win.fill(t('ssh-label-1'), 'ec2-arch');
@@ -2203,92 +2263,11 @@ async function run() {
     check('dismissing restores the overlay for next time',
       restored.spinner !== 'none' && restored.dismiss === 'none', JSON.stringify(restored));
 
-    // --- Terminals ------------------------------------------------------
-    //
-    // Sessions are independent and must survive the window being hidden — the
-    // previous single-session design silently orphaned a running pty whenever a
-    // second terminal opened.
-    console.log('\nterminals');
-    const termState = await win.evaluate(async () => {
-      const mk = (key, title) => window.openAgentTerminal({
-        title, status: 'test', cwd: '/tmp', command: 'sh',
-        args: ['-c', 'echo hello-' + key + '; sleep 120'], sessionKey: key
-      });
-      await mk('t-alpha', 'alpha');
-      await mk('t-beta', 'beta');
-      await new Promise((r) => setTimeout(r, 1200));
-      return {
-        sessions: window.__terminalCount(),
-        tabs: document.querySelectorAll('#terminal-tabs .terminal-tab').length,
-        panes: document.querySelectorAll('#terminal-panes .terminal-pane').length,
-        visiblePanes: [...document.querySelectorAll('#terminal-panes .terminal-pane')]
-          .filter((p) => p.style.display !== 'none').length
-      };
-    });
-    check('two terminals run at once', termState.sessions === 2, JSON.stringify(termState));
-    check('one tab per session', termState.tabs === 2, `${termState.tabs} tabs`);
-    check('exactly one pane visible at a time', termState.visiblePanes === 1,
-      `${termState.visiblePanes} visible`);
+    // The Terminals window is gone. Sessions live in project tiles, which the
+    // tile-terminal section below covers — a separate window that tracked
+    // sessions in tabs was a second home for something that already had one.
 
-    // Re-opening the same target focuses rather than spawning a duplicate agent.
-    const dupe = await win.evaluate(async () => {
-      await window.openAgentTerminal({
-        title: 'alpha', status: 'test', cwd: '/tmp', command: 'sh',
-        args: ['-c', 'sleep 120'], sessionKey: 't-alpha'
-      });
-      await new Promise((r) => setTimeout(r, 400));
-      return window.__terminalCount();
-    });
-    check('reopening the same target does not duplicate the session', dupe === 2, `${dupe}`);
-
-    // Hiding the window keeps sessions alive; that is what the header button
-    // exists to get back to.
-    const afterHide = await win.evaluate(async () => {
-      window.hideTerminals();
-      await new Promise((r) => setTimeout(r, 400));
-      return {
-        count: window.__terminalCount(),
-        modalOpen: document.getElementById('build-terminal-modal').classList.contains('show'),
-        buttonShown: document.getElementById('terminals-button').style.display !== 'none'
-      };
-    });
-    check('hiding the window leaves sessions running', afterHide.count === 2 && !afterHide.modalOpen,
-      JSON.stringify(afterHide));
-    check('header offers a way back to running terminals', afterHide.buttonShown);
-
-    // The terminal must fit inside its panel — a fixed height overflowed it.
-    const fits = await win.evaluate(async () => {
-      window.showTerminals();
-      await new Promise((r) => setTimeout(r, 600));
-      const body = document.querySelector('#build-terminal-modal .modal-body');
-      const panes = document.getElementById('terminal-panes');
-      const content = document.querySelector('#build-terminal-modal .modal-content');
-      return {
-        panesBottom: panes.getBoundingClientRect().bottom,
-        bodyBottom: body.getBoundingClientRect().bottom,
-        contentBottom: content.getBoundingClientRect().bottom,
-        viewport: window.innerHeight
-      };
-    });
-    check('terminal stays inside its panel',
-      fits.panesBottom <= fits.bodyBottom + 1 && fits.contentBottom <= fits.viewport + 1,
-      JSON.stringify(fits));
-
-    // Closing a tab ends only that session.
-    const afterKill = await win.evaluate(async () => {
-      window.__killFirstTerminal();
-      await new Promise((r) => setTimeout(r, 600));
-      return window.__terminalCount();
-    });
-    check('closing one tab ends only that session', afterKill === 1, `${afterKill}`);
-
-    await screenshot(win, '07-terminals');
-    await win.evaluate(async () => {
-      window.__killAllTerminals();
-      await new Promise((r) => setTimeout(r, 400));
-    });
-
-    // --- Terminals hosted inside a project tile --------------------------
+// --- Terminals hosted inside a project tile --------------------------
     //
     // The whole risk here is the projects grid: it is rebuilt from scratch on
     // every status poll, so a terminal living in a tile has to survive having
@@ -2313,21 +2292,25 @@ async function run() {
         });
         await new Promise((r) => setTimeout(r, 900));
         const card = document.querySelector(`[data-terminal-host="${CSS.escape(name)}"]`);
-        return {
-          inTile: !!card?.querySelector('.tile-terminal'),
-          tabs: document.querySelectorAll('#terminal-tabs .terminal-tab').length,
-          headerButton: document.getElementById('terminals-button').style.display,
-          modalOpen: document.getElementById('build-terminal-modal').classList.contains('show')
-        };
-      }, target) : { inTile: false, tabs: 0, headerButton: 'none', modalOpen: false };
+        // The Terminals window is gone, so there is no tab bar, header button or
+        // modal to assert about — only whether the session landed in its tile.
+        return { inTile: !!card?.querySelector('.tile-terminal') };
+      }, target) : { inTile: false };
       if (target) {
         check('the agent terminal opens inside the project tile', opened.inTile,
           JSON.stringify(opened));
       }
       await screenshot(win, '08-tile-terminal');
-      check('a tile session stays out of the modal and its tab bar',
-        opened.tabs === 0 && !opened.modalOpen && opened.headerButton === 'none',
-        JSON.stringify(opened));
+
+      // The Terminals window is gone rather than merely unused: a second home
+      // for sessions meant two × buttons that meant different things.
+      const rendererSrcT = require('fs').readFileSync(
+        require('path').join(require('./helpers').ROOT, 'src/renderer.ts'), 'utf8');
+      const htmlSrcT = require('fs').readFileSync(
+        require('path').join(require('./helpers').ROOT, 'src/index.html'), 'utf8');
+      check('the terminals window is removed, not just hidden',
+        !/build-terminal-modal|terminals-button|terminal-tabs/.test(htmlSrcT)
+        && !/function showTerminals|function activateTerminal/.test(rendererSrcT));
 
       // The real trap: a poll rebuilds #projects-grid.innerHTML underneath it.
       const survived = await win.evaluate(async (name) => {

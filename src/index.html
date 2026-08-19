@@ -39,8 +39,7 @@
                     <button class="btn btn-primary" onclick="cloneProject()" data-testid="clone-project">📥 Clone</button>
                     <!-- Only appears while sessions are alive, so they can be
                          reopened after the window is hidden. -->
-                    <button class="btn btn-secondary" onclick="showTerminals()" id="terminals-button"
-                            data-testid="terminals-button" style="display: none;">🖥️ Terminals</button>
+                    
                     <button class="btn btn-secondary" onclick="showSettings('appearance')" data-testid="settings-open" title="Theme and AI agent settings">⚙️ Settings</button>
                     <button class="btn btn-secondary" onclick="showDonateModal()" data-testid="donate" title="Support Podium">💳 Donate</button>
                 </div>
@@ -97,6 +96,12 @@
             <footer class="app-footer">
                 <div class="footer-links">
                     <button class="btn btn-secondary btn-small" onclick="openUrl('https://github.com/CaneBayComputers/podium-gui')" data-testid="github-gui" title="Podium GUI on GitHub">🐙 GitHub</button>
+                    <button class="btn btn-secondary btn-small" onclick="showAboutModal()"
+                            data-testid="about-open" title="About Podium">ℹ️ About</button>
+                    <button class="btn btn-secondary btn-small" onclick="showUpdates()"
+                            data-testid="updates-open" title="Check for updates">⬆️ Updates<span
+                            id="update-badge" class="update-badge" data-testid="update-badge"
+                            style="display: none;"></span></button>
                 </div>
                 <p class="footer-note">
                     <a href="#" data-testid="mit-license" onclick="event.preventDefault(); openUrl('https://github.com/CaneBayComputers/podium-gui/blob/master/LICENSE')">MIT License</a>
@@ -409,7 +414,7 @@
                             onclick="switchSettingsTab('layout')">🧩 Project layout</button>
                     <button class="settings-tab" data-settings-tab="hosts"
                             data-testid="settings-tab-hosts"
-                            onclick="switchSettingsTab('hosts')">🖧 SSH Hosts</button>
+                            onclick="switchSettingsTab('hosts')">🖧 SSH Remotes</button>
                     <button class="settings-tab" data-settings-tab="ai"
                             data-testid="settings-tab-ai"
                             onclick="switchSettingsTab('ai')">🤖 AI Agent</button>
@@ -448,31 +453,25 @@
                 </div>
 
                 <div class="modal-body" data-settings-panel="hosts" style="display: none;">
-                    <p class="stage-intro">
-                        Podium installations on other machines. A project is created on one of
-                        these or locally, and the dashboard shows everything from every host.
-                    </p>
-                    <h4 class="settings-subhead">SSH Profiles</h4>
-                    <p class="settings-note">
-                        Login details, reusable across hosts. A profile is a username
-                        plus either a key file or a password.
-                    </p>
-                    <div id="ssh-credential-list" data-testid="ssh-credential-list"></div>
-                    <button class="btn btn-secondary btn-small" data-testid="cred-add"
-                            onclick="addSshCredential()">+ Add a profile</button>
-                    <p id="ssh-encryption-note" class="settings-note" data-testid="encryption-note"></p>
+                    <div class="settings-subtabs">
+                        <button class="settings-subtab active" data-remotes-tab="hosts"
+                                data-testid="remotes-tab-hosts" onclick="showRemotesTab('hosts')">Hosts</button>
+                        <button class="settings-subtab" data-remotes-tab="profiles"
+                                data-testid="remotes-tab-profiles" onclick="showRemotesTab('profiles')">Profiles</button>
+                    </div>
 
-                    <h4 class="settings-subhead">SSH Hosts</h4>
-                    <p class="settings-note">
-                        Machines running Podium. Each one uses a profile above.
-                    </p>
-                    <div id="ssh-profile-list" data-testid="ssh-profile-list"></div>
-                    <button class="btn btn-primary btn-small" data-testid="ssh-add"
-                            onclick="addSshProfile()">+ Add a host</button>
-                    <p class="form-help">
-                        Key-based authentication only. The key path is stored, never the key
-                        itself and never a password.
-                    </p>
+                    <div data-remotes-panel="hosts">
+                        <div id="ssh-profile-list" data-testid="ssh-profile-list"></div>
+                        <button class="btn btn-secondary btn-small" data-testid="ssh-add"
+                                onclick="addSshProfile()">+ Add a host</button>
+                    </div>
+
+                    <div data-remotes-panel="profiles" style="display: none;">
+                        <div id="ssh-credential-list" data-testid="ssh-credential-list"></div>
+                        <button class="btn btn-secondary btn-small" data-testid="cred-add"
+                                onclick="addSshCredential()">+ Add a profile</button>
+                        <p id="ssh-encryption-note" class="settings-note" data-testid="encryption-note"></p>
+                    </div>
                 </div>
 
                 <div class="modal-body" data-settings-panel="ai" style="display: none;">
@@ -584,25 +583,7 @@
             </div>
         </div>
 
-        <div id="build-terminal-modal" class="modal terminal-modal">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h3 id="build-terminal-title">🖥️ Terminals</h3>
-                    <button class="modal-close" onclick="hideTerminals()">&times;</button>
-                </div>
-                <!-- One tab per live session. Sessions keep running when the
-                     window is closed; they are only killed by their own × . -->
-                <div id="terminal-tabs" class="terminal-tabs" data-testid="terminal-tabs"></div>
-                <div class="modal-body">
-                    <div id="terminal-panes" class="terminal-panes" data-testid="terminal-panes"></div>
-                    <p class="form-help" id="build-terminal-status">Session running — type to answer the agent.</p>
-                </div>
-                <div class="form-actions">
-                    <button class="btn btn-secondary" onclick="hideTerminals()" data-testid="build-terminal-close">Hide</button>
-                    <button class="btn btn-danger" onclick="closeActiveTerminal()" data-testid="terminal-end-session">End session</button>
-                </div>
-            </div>
-        </div>
+        
 
         <!--
             Create with AI — the flagship path. The user describes what they
@@ -803,7 +784,19 @@
     </div>
 
     <!-- About Modal -->
-    <div id="about-modal" class="modal">
+    <div id="updates-modal" class="modal" data-testid="updates-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Updates</h2>
+                <button class="modal-close" onclick="closeModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="updates-list" data-testid="updates-list"></div>
+            </div>
+        </div>
+    </div>
+
+<div id="about-modal" class="modal">
         <div class="modal-content">
             <div class="modal-header">
                 <h2>About Podium</h2>
