@@ -915,6 +915,38 @@ async function run() {
     check('podium resolves from PATH when it is there',
       !podiumCmd.error && podiumCmd.normal?.command?.endsWith('podium'),
       podiumCmd.error || JSON.stringify(podiumCmd.normal));
+    // The install check is a SEPARATE path from the resolver, and it was the one
+    // still running a bare `podium`. It is the first decision the app makes: get
+    // it wrong and the whole UI is replaced by the installer.
+    //
+    // The realistic failure is a .desktop launch, or a macOS app opened from
+    // Finder — PATH without /usr/local/bin, not PATH empty. An empty PATH is not
+    // a valid test: the CLI is a bash script that needs git, sed and awk, so it
+    // fails for reasons that have nothing to do with how it was invoked.
+    const statusMinimal = await app.evaluate(async ({ ipcMain }) => {
+      const handler = ipcMain._invokeHandlers.get('get-podium-status');
+      if (!handler) return { error: 'get-podium-status not registered' };
+      const before = process.env.PATH;
+      const normal = await handler({});
+      process.env.PATH = '/usr/bin:/bin';   // what a .desktop launch gets
+      const minimal = await handler({});
+      process.env.PATH = before;
+      return { normal, minimal };
+    });
+    check('the install check survives a launcher PATH without /usr/local/bin',
+      !statusMinimal.error && statusMinimal.minimal === statusMinimal.normal,
+      JSON.stringify(statusMinimal));
+
+    // On this machine /usr/bin/podium happens to exist, so the check above
+    // cannot tell a resolved call from a bare one. Assert the mechanism too, so
+    // it holds on a machine where only /usr/local/bin has it.
+    const statusSrc = require('fs').readFileSync(
+      require('path').join(require('./helpers').ROOT, 'src/main.ts'), 'utf8');
+    const checkBody = statusSrc.slice(statusSrc.indexOf('function checkPodiumStatus'));
+    check('the install check invokes podium by resolved path, not by name',
+      /resolvePodium\(\)/.test(checkBody.slice(0, 900))
+      && !/execSync\('podium /.test(checkBody.slice(0, 900)));
+
     check('podium still resolves with PATH stripped, as a menu launch has it',
       !podiumCmd.error &&
       (podiumCmd.stripped?.command?.startsWith('/') || podiumCmd.stripped?.command === 'bash'),

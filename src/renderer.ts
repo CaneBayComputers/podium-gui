@@ -4262,17 +4262,6 @@ document.addEventListener('click', function(event: Event) {
     }
 });
 
-function openTerminal(): void {
-    // Try to open terminal application
-    if (process.platform === 'win32') {
-        shell.openExternal('cmd://');
-    } else if (process.platform === 'darwin') {
-        shell.openExternal('terminal://');
-    } else {
-        // Linux - try common terminal applications
-        shell.openExternal('gnome-terminal://') || shell.openExternal('xterm://') || shell.openExternal('konsole://');
-    }
-}
 
 
 (window as any).showModal = showModal;
@@ -4294,4 +4283,3 @@ function openTerminal(): void {
 (window as any).showAboutModal = showAboutModal;
 (window as any).closeAboutModal = closeAboutModal;
 (window as any).showModal = showModal;
-(window as any).openTerminal = openTerminal;
