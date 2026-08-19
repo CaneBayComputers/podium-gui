@@ -285,6 +285,24 @@ async function run() {
     await win.evaluate(() => window.loadProjects());
     await win.waitForTimeout(3000);
 
+    // The host badge must not sit under the status dot, which is absolutely
+    // positioned in the card's top-right corner. Measured rather than eyeballed
+    // — margin-left:auto put them on top of each other.
+    const badgeOverlap = await win.evaluate(() => {
+      const card = document.querySelector('#projects-grid .project-card:not(.placeholder)');
+      const badge = card?.querySelector('.host-badge');
+      const dot = card?.querySelector('.project-status-dot');
+      if (!badge || !dot) return { skipped: true };
+      const b = badge.getBoundingClientRect(), d = dot.getBoundingClientRect();
+      return {
+        skipped: false,
+        overlaps: !(b.right <= d.left || b.left >= d.right || b.bottom <= d.top || b.top >= d.bottom)
+      };
+    });
+    if (!badgeOverlap.skipped) {
+      check('the host badge does not sit under the status dot', !badgeOverlap.overlaps);
+    }
+
     // --- Dashboard union --------------------------------------------------
     //
     // The bug this pins: loadServices used to call the full status parser,
@@ -320,6 +338,40 @@ async function run() {
       /hostErrors\[host\.id\]/.test(loaderBlock));
     check('hosts are polled in parallel, not one after another',
       /Promise\.all\(dashboardHosts\.map/.test(loaderBlock));
+
+    // --- Host filter ------------------------------------------------------
+    const hostFilterBehaviour = await win.evaluate(() => {
+      const all = window.__allProjects();
+      const hosts = [...new Set(all.map((p) => p.hostId))];
+      const target = hosts[0];
+      window.setHostFilter(target);
+      const shown = window.__visibleProjects();
+      const out = {
+        target,
+        allFromTarget: shown.every((p) => p.hostId === target),
+        // Counts beside the other controls must describe what those controls
+        // would actually show, not the whole unfiltered set.
+        runLabel: document.querySelector('[data-testid="filter-run"] option')?.textContent || ''
+      };
+      window.resetFilters();
+      return out;
+    });
+    check('filtering by host shows only that host\'s projects',
+      hostFilterBehaviour.allFromTarget, JSON.stringify(hostFilterBehaviour));
+    check('resetting filters clears the host filter too',
+      await win.evaluate(() => window.__hostFilter()) === '');
+
+    // A persisted filter naming a host whose profile was deleted would hide
+    // everything with nothing on screen explaining why.
+    const staleHost = await win.evaluate(() => {
+      window.setHostFilter('local');
+      const forced = 'a-host-that-no-longer-exists';
+      // Simulate the persisted value directly, as loading would.
+      window.setHostFilter(forced);
+      return { stored: window.__hostFilter() };
+    });
+    check('a filter naming an unknown host is refused rather than hiding everything',
+      staleHost.stored === '', JSON.stringify(staleHost));
 
     // --- Tile filters ----------------------------------------------------
     if (expectedProjects > 0) {
@@ -1508,6 +1560,29 @@ async function run() {
     check('an unreachable probe returns within its timeout rather than hanging',
       probeTiming.ms < 3000 && probeTiming.r.code === 0,
       `${probeTiming.ms}ms, ${JSON.stringify(probeTiming.r)}`);
+
+    // A remote project's agent runs on that host — Shawn's decision, and the
+    // only coherent one: `podium resume` cds into the project directory and
+    // starts the agent there, so files, container and agent share a machine.
+    // It follows that the agent's install and API key live there too.
+    const aiSrc = require('fs').readFileSync(
+      require('path').join(require('./helpers').ROOT, 'src/renderer.ts'), 'utf8');
+    // Bounded by the next function rather than a character count. A fixed
+    // window cut off just before `hostId: host` and reported a real property as
+    // missing — the assertion was measuring my guess at the function's length.
+    const modifyStart = aiSrc.indexOf('async function modifyWithAI');
+    const modifyEnd = aiSrc.indexOf('\nasync function ', modifyStart + 10);
+    const modifyBlock = aiSrc.slice(modifyStart, modifyEnd > 0 ? modifyEnd : modifyStart + 3000);
+    check('the agent check asks the host the agent will run on',
+      /get-ai-agent', host/.test(modifyBlock));
+    check('the projects directory comes from that host too',
+      /get-projects-dir-on', host/.test(modifyBlock));
+    check('the terminal opens on the project\'s host',
+      /hostId: host/.test(modifyBlock));
+    // Two hosts can each have a project of this name; a shared session key
+    // would focus the wrong machine's terminal.
+    check('agent session keys are host-scoped',
+      /resume-\$\{host\}-\$\{projectName\}/.test(modifyBlock));
 
     // --- Executor ---------------------------------------------------------
     //

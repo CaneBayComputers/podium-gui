@@ -1348,6 +1348,68 @@ ipcMain.handle('pty-start', async (
   }
 });
 
+// A pty on a remote host, for an agent session on a remote project.
+//
+// Shawn's decision: a remote project runs its agent remotely. That is the only
+// coherent option — `podium resume` cds into the project directory and starts
+// the agent there, so the files, the container and the agent all live on the
+// same machine. Running the agent locally would mean an agent editing a
+// directory that does not exist here.
+//
+// It follows that the agent's own install and API key live on that host too.
+// The AI settings panel therefore configures a host, not the app.
+//
+// Registered in the same ptySessions map as local ones, behind a uniform
+// write/resize/kill shape, so the renderer's session registry needs no idea
+// which kind it holds.
+ipcMain.handle('pty-start-on', async (
+  event: IpcMainInvokeEvent,
+  hostId: string,
+  sessionId: string,
+  cwd: string,
+  command: string,
+  args: string[] = []
+): Promise<{ ok: boolean; error?: string }> => {
+  if (hostId === 'local') {
+    const local = ipcMain as any;
+    return local._invokeHandlers.get('pty-start')(event, sessionId, cwd, command, args);
+  }
+
+  const executor = executorFor(hostId) as any;
+  if (typeof executor.openPty !== 'function') {
+    return { ok: false, error: `Host ${hostId} cannot open a terminal.` };
+  }
+
+  try {
+    const stream = await executor.openPty(cwd, command, args);
+
+    stream.on('data', (d: Buffer) => {
+      if (!event.sender.isDestroyed()) {
+        event.sender.send('pty-data', { sessionId, data: d.toString() });
+      }
+    });
+    stream.on('close', (code: number) => {
+      ptySessions.delete(sessionId);
+      if (!event.sender.isDestroyed()) {
+        event.sender.send('pty-exit', { sessionId, exitCode: code ?? 0 });
+      }
+    });
+
+    // Adapted to the same shape node-pty exposes, so pty-input, pty-resize and
+    // pty-kill work on either kind without knowing the difference.
+    ptySessions.set(sessionId, {
+      write: (data: string) => stream.write(data),
+      resize: (cols: number, rows: number) => stream.setWindow(rows, cols, 0, 0),
+      kill: () => { try { stream.signal('KILL'); } catch { /* best effort */ } stream.end(); }
+    });
+
+    debugLog('Started remote pty session', { sessionId, hostId, command, args, cwd });
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: (error as Error).message };
+  }
+});
+
 ipcMain.handle('pty-input', async (event: IpcMainInvokeEvent, sessionId: string, data: string): Promise<void> => {
   ptySessions.get(sessionId)?.write(data);
 });
@@ -1468,8 +1530,15 @@ ipcMain.handle('get-ai-agent-full', async (): Promise<any> => {
   }
 });
 
-ipcMain.handle('get-ai-agent', async (): Promise<{ agent: string; model: string }> => {
-  const result = await runPodium(['ai-set', '--json-output']);
+ipcMain.handle('get-ai-agent', async (
+  _event: IpcMainInvokeEvent,
+  hostId: string = 'local'
+): Promise<{ agent: string; model: string }> => {
+  // From the host the agent will RUN on. A remote project's agent runs
+  // remotely, with that machine's install and its own API key, so asking this
+  // machine whether an agent is configured would answer about the wrong one —
+  // and would block or allow the session on the wrong evidence.
+  const result = await executorFor(hostId).exec(['ai-set', '--json-output']);
 
   if (result.code !== 0) return { agent: '', model: '' };
 
@@ -1848,6 +1917,17 @@ interface ProjectMetadata {
 
 // Resolve the projects directory from Podium's own config rather than guessing
 // at a list of candidate paths. `podium projects-dir` prints the same value.
+// The projects directory on a given host. `podium projects-dir` prints it, and
+// a remote host's is whatever ITS config says — not this machine's.
+ipcMain.handle('get-projects-dir-on', async (
+  _event: IpcMainInvokeEvent,
+  hostId: string = 'local'
+): Promise<string> => {
+  if (hostId === 'local') return getProjectsDir();
+  const result = await executorFor(hostId).exec(['projects-dir']);
+  return result.code === 0 ? result.stdout.trim() : '';
+});
+
 function getProjectsDir(): string {
   return readEnvValue('PROJECTS_DIR') ?? path.join(os.homedir(), 'podium-projects');
 }
@@ -2019,6 +2099,27 @@ class SshExecutor implements Executor {
           resolve({ code: code ?? 1, stdout, stderr });
         });
       });
+    });
+  }
+
+  /**
+   * An interactive pty on the remote host.
+   *
+   * `pty: true` matters: `podium resume` starts an AI agent, which needs a
+   * terminal to render into and to read keystrokes from. Without it the agent
+   * sees a pipe, and most of them refuse to run interactively at all.
+   */
+  async openPty(cwd: string, command: string, args: string[]): Promise<any> {
+    const conn = await this.connect();
+    const bin = command === 'podium'
+      ? (this.profile.podiumPath || REMOTE_PODIUM_CANDIDATES[0])
+      : command;
+    const quoted = args.map((a) => `'${a.replace(/'/g, `'\\''`)}'`).join(' ');
+    const full = `cd ${JSON.stringify(cwd)} && ${REMOTE_PATH_PREFIX} ${bin} ${quoted}`;
+
+    return new Promise((resolve, reject) => {
+      conn.exec(full, { pty: { term: 'xterm-256color', cols: 100, rows: 28 } },
+        (err: any, stream: any) => err ? reject(err) : resolve(stream));
     });
   }
 

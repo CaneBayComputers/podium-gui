@@ -256,16 +256,28 @@ Podium invokes invokes.
 - **The catalogues.** `apps.json` and `frameworks.json` come from a CLI install.
   Nearly identical everywhere; decide which host to read them from.
 
-## Open question, unresolved
+## Settled: a remote project runs its agent remotely
 
-**Does the AI agent run on the remote host or locally?**
+Shawn's decision, 2026-08-19, and the only coherent one. `podium resume` cds
+into the project directory and starts the agent there, so the files, the
+container and the agent all live on the same machine. A local agent would be
+editing a directory that does not exist here.
 
-`podium resume` starts the agent in the project directory, so a remote project
-means a remote agent — a second install, a second API key, a second `ai-set`.
-The alternative is a local agent editing remote files, which needs a mount and
-loses the "podium resume does it all" property.
+It follows that **the agent's install and API key live on that host too**, which
+is why the AI settings tab configures a host rather than the app. A remote
+project with no agent configured says so, naming the machine — the fix is
+`podium ai-set` on that box, not this one.
 
-This changes what the GUI has to show and has not been decided.
+Implemented as a pty over SSH. `pty: true` is not optional: an agent needs a
+terminal to render into and read keystrokes from, and without one it sees a pipe
+and most refuse to run interactively. Verified on the dell-laptop — `tty`
+returns `/dev/pts/0`, `TERM` is `xterm-256color`, and `hostname` returns
+`dell-laptop`, which is what proves the session is genuinely remote rather than
+a local shell with a remote-looking name.
+
+Session keys are host-scoped (`resume-<host>-<project>`). Two hosts can each
+have a project of that name, and a shared key would focus the wrong machine's
+terminal.
 
 ## Deliberately deferred
 
