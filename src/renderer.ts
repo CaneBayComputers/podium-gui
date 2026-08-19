@@ -4155,6 +4155,10 @@ async function submitEditProject(): Promise<void> {
 // Unfiltered, unlike __visibleProjects — the suite needs to reason about
 // projects the default view deliberately hides.
 (window as any).__allProjects = () => projects.map(withMetadata);
+// Feed synthetic status JSON through the real parser. Every project on this
+// machine carries metadata, so the shapes that matter most for existing users —
+// an empty metadata object, or none at all — cannot occur here naturally.
+(window as any).__parseStatus = (json: string) => { parseProjectStatusJSON(json); return projects; };
 // Test hook: drive the disabled state without shelling out to the CLI and
 // mutating a real project's compose file.
 (window as any).__setMetaStatus = (name: string, value: any) => {
