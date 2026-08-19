@@ -1795,8 +1795,14 @@ async function run() {
     const launcherBody = fsMod.readFileSync(launcher, 'utf8');
     // It is symlinked from ~/scripts and from /usr/local/bin, so a hardcoded
     // path would resolve to the wrong checkout on three of the four machines.
+    // Resolves its own location rather than hardcoding one — it is symlinked
+    // from ~/scripts, /usr/local/bin and /opt/homebrew/bin, so a fixed path
+    // would point at the wrong checkout on three of the four machines. The
+    // resolution goes through a helper now, because `readlink -f` is missing on
+    // older macOS; assert the intent, not the spelling.
     check('source launcher finds its own checkout rather than a fixed path',
-      /readlink -f "\$\{BASH_SOURCE\[0\]\}"/.test(launcherBody));
+      /_resolve "\$\{BASH_SOURCE\[0\]\}"/.test(launcherBody)
+      && /readlink -f/.test(launcherBody));
     // A .desktop launch never sources .bashrc, so npm is missing from the menu
     // even though it works fine from a terminal.
     check('source launcher recovers npm from nvm', /NVM_DIR/.test(launcherBody));

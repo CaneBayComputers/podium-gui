@@ -23,9 +23,57 @@ SSH="ssh -i $KEY -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o BatchMode=y
 BRANCH=dev
 
 CLI_REPO=""
-GUI_REPO=/home/shawn/repos/podium/podium-gui
+
+# Platform. macOS differs in enough places that guessing is worse than asking:
+# the home directory root, the uid/gid to chown to, whether /usr/local/bin even
+# exists, and whether desktop entries are a concept at all.
+case "$(uname -s)" in
+    Darwin)
+        PLATFORM=mac
+        HOME_DIR=/Users/shawn
+        # 501:staff is the first user on macOS; 1000:1000 is the Linux
+        # equivalent and does not exist there.
+        OWNER=501:staff
+        # /usr/local/bin is absent on a stock Apple Silicon machine and needs
+        # sudo to create. /opt/homebrew/bin already exists, is user-writable,
+        # and is on the interactive PATH.
+        BIN_DIR=/opt/homebrew/bin
+        ;;
+    *)
+        PLATFORM=linux
+        HOME_DIR=/home/shawn
+        OWNER=1000:1000
+        BIN_DIR=/usr/local/bin
+        ;;
+esac
+
+GUI_REPO=$HOME_DIR/repos/podium/podium-gui
 
 log() { echo "[podium-sync] $*"; }
+
+# The Mac rig has /sbin/sha256sum, but that is not standard on macOS — the
+# portable spelling is `shasum -a 256`. Used to notice whether
+# package-lock.json moved; if it silently returned nothing, both sides would
+# compare equal and `npm install` would never run on a dependency change.
+file_hash() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" 2>/dev/null | cut -d' ' -f1
+    else
+        shasum -a 256 "$1" 2>/dev/null | cut -d' ' -f1
+    fi
+}
+
+# `readlink -f` exists on macOS 13+ (verified on 26.6.1) but NOT on older
+# releases, where BSD readlink has no -f and silently prints nothing. Every
+# symlink guard here compares resolved paths, so without a fallback they would
+# all compare "" to "" and match wrongly. Capability-checked, not OS-checked.
+resolve_path() {
+    if readlink -f / >/dev/null 2>&1; then
+        readlink -f "$1" 2>/dev/null
+    else
+        python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$1" 2>/dev/null
+    fi
+}
 
 # This file ships inside the GUI repo, so it is now present on the workstation
 # as well — where running it would hard-reset the source of truth to itself and
@@ -52,7 +100,7 @@ pull_repo() {
 
     # A dev checkout under /home must stay owned by the user, not root — this
     # runs from a system timer.
-    case "$repo" in /home/*) chown -R 1000:1000 "$repo" 2>/dev/null;; esac
+    case "$repo" in "$HOME_DIR"/*) chown -R "$OWNER" "$repo" 2>/dev/null;; esac
 
     [ "$before" = "$after" ] && { log "$label already current ($after)"; return 1; }
     log "$label $before -> $after"
@@ -60,7 +108,7 @@ pull_repo() {
 }
 
 # --- CLI -------------------------------------------------------------------
-for R in /usr/local/share/podium-cli /home/shawn/repos/podium/podium-cli; do
+for R in /usr/local/share/podium-cli "$HOME_DIR/repos/podium/podium-cli"; do
     [ -d "$R/.git" ] || continue
     CLI_REPO=$R
     pull_repo "$R" "CLI"
@@ -75,9 +123,12 @@ if [ -n "$CLI_REPO" ] && [ -x "$CLI_REPO/src/podium" ]; then
     # symlink on some installs, so readlink -f on the link resolved further than
     # the literal target string — the guard never matched and every run relinked
     # and logged "linked ...", claiming a change it had not made.
-    want=$(readlink -f "$CLI_REPO/src/podium")
-    for link in /usr/local/bin/podium /usr/bin/podium; do
-        [ "$(readlink -f "$link" 2>/dev/null)" = "$want" ] && continue
+    want=$(resolve_path "$CLI_REPO/src/podium")
+    # /usr/bin is protected by SIP on macOS and cannot be written to at all.
+    LINK_TARGETS="/usr/local/bin/podium /usr/bin/podium"
+    [ "$PLATFORM" = mac ] && LINK_TARGETS="/usr/local/bin/podium"
+    for link in $LINK_TARGETS; do
+        [ "$(resolve_path "$link")" = "$want" ] && continue
         ln -sfn "$CLI_REPO/src/podium" "$link" && log "linked $link -> $CLI_REPO/src/podium"
     done
 fi
@@ -90,16 +141,20 @@ fi
 
 # Note the dependency set BEFORE pulling, so `npm install` runs only when it
 # has something to do — it is minutes; the tsc build is seconds.
-LOCK_BEFORE=$(sha256sum "$GUI_REPO/package-lock.json" 2>/dev/null | cut -d' ' -f1)
+LOCK_BEFORE=$(file_hash "$GUI_REPO/package-lock.json")
 GUI_CHANGED=1
 pull_repo "$GUI_REPO" "GUI" && GUI_CHANGED=0
-LOCK_AFTER=$(sha256sum "$GUI_REPO/package-lock.json" 2>/dev/null | cut -d' ' -f1)
+LOCK_AFTER=$(file_hash "$GUI_REPO/package-lock.json")
 
 # npm lives under nvm, which a system timer's environment does not have.
 if ! command -v npm >/dev/null 2>&1; then
-    NODE_BIN=$(ls -d /home/shawn/.nvm/versions/node/*/bin 2>/dev/null | sort -V | tail -1)
+    NODE_BIN=$(ls -d "$HOME_DIR"/.nvm/versions/node/*/bin 2>/dev/null | sort -V | tail -1)
     [ -n "$NODE_BIN" ] && export PATH="$NODE_BIN:$PATH"
 fi
+# Homebrew's bin is added by ~/.zprofile, which a launchd job or a
+# non-interactive shell never sources — the same trap that made the CLI session
+# report Homebrew as missing when it was installed.
+[ "$PLATFORM" = mac ] && [ -d /opt/homebrew/bin ] && export PATH="/opt/homebrew/bin:$PATH"
 command -v npm >/dev/null 2>&1 || { log "GUI: npm not found, cannot build"; exit 0; }
 
 # Build as the user, not root: a root-owned node_modules or dist breaks the
@@ -158,8 +213,8 @@ fi
 LAUNCHER=$GUI_REPO/scripts/podium-gui-dev.sh
 if [ -f "$LAUNCHER" ]; then
     chmod +x "$LAUNCHER" 2>/dev/null
-    if [ "$(readlink -f /usr/local/bin/podium-gui 2>/dev/null)" != "$LAUNCHER" ]; then
-        ln -sfn "$LAUNCHER" /usr/local/bin/podium-gui && log "linked /usr/local/bin/podium-gui"
+    if [ "$(resolve_path "$BIN_DIR/podium-gui")" != "$LAUNCHER" ]; then
+        ln -sfn "$LAUNCHER" "$BIN_DIR/podium-gui" && log "linked $BIN_DIR/podium-gui"
     fi
 fi
 
@@ -167,6 +222,37 @@ fi
 # lookup that only resolved while the deb was installed — and this script
 # removes that package, so the menu entry lost its icon. A .desktop cannot
 # compute a path, so substitute the real one from wherever the repo actually is.
+# Shell aliases, matching the workstation: `pgui` and `podium-gui-run`. Kept out
+# of the `podium-gui` name, which already cd's into the repo.
+#
+# Before the desktop-entry section, which is Linux-only — the aliases are just
+# as useful on macOS, where they are the ONLY way in, there being no menu entry.
+# macOS defaults to zsh and has no ~/.bash_aliases.
+if [ "$PLATFORM" = mac ]; then
+    ALIASES=$HOME_DIR/.zshrc
+    [ -f "$ALIASES" ] || : > "$ALIASES"
+else
+    ALIASES=$HOME_DIR/.bash_aliases
+fi
+if [ -f "$ALIASES" ] && ! grep -q "alias pgui=" "$ALIASES" 2>/dev/null; then
+    cat >> "$ALIASES" <<ALIASEOF
+
+# Launch the Podium GUI from the source checkout (builds first, then detaches).
+# Deliberately not called \`podium-gui\`, which already cd's into the repo.
+alias podium-gui-run='$BIN_DIR/podium-gui'
+alias pgui='$BIN_DIR/podium-gui'
+ALIASEOF
+    chown "$OWNER" "$ALIASES" 2>/dev/null
+    log "added pgui / podium-gui-run aliases to $(basename "$ALIASES")"
+fi
+
+# Desktop entries are a freedesktop.org concept; macOS has no equivalent and
+# the app is launched by its command or a .app bundle instead.
+if [ "$PLATFORM" = mac ]; then
+    log "done"
+    exit 0
+fi
+
 DESKTOP_SRC=$GUI_REPO/scripts/podium-gui.desktop
 DESKTOP_DST=/usr/share/applications/podium-gui-source.desktop
 if [ -f "$DESKTOP_SRC" ]; then
@@ -184,19 +270,5 @@ if [ -f "$DESKTOP_SRC" ]; then
     rm -f "$TMP_DESKTOP"
 fi
 
-# Shell aliases, matching the workstation: `pgui` and `podium-gui-run`. Kept out
-# of the `podium-gui` name, which already cd's into the repo.
-ALIASES=/home/shawn/.bash_aliases
-if [ -f "$ALIASES" ] && ! grep -q "alias pgui=" "$ALIASES" 2>/dev/null; then
-    cat >> "$ALIASES" <<'ALIASEOF'
-
-# Launch the Podium GUI from the source checkout (builds first, then detaches).
-# Deliberately not called `podium-gui`, which already cd's into the repo.
-alias podium-gui-run='/usr/local/bin/podium-gui'
-alias pgui='/usr/local/bin/podium-gui'
-ALIASEOF
-    chown 1000:1000 "$ALIASES" 2>/dev/null
-    log "added pgui / podium-gui-run aliases"
-fi
 
 log "done"
