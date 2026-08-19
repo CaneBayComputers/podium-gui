@@ -433,6 +433,44 @@ async function run() {
       userDataInUse === require('./helpers').testUserDataDir(),
       `using ${userDataInUse}`);
 
+    // --- Dictation --------------------------------------------------------
+    //
+    // decodeAudioData CRASHES this Electron's renderer — not throws, crashes, so
+    // nothing can catch it. Reproduced on a synthetic in-memory WAV with no file
+    // access, in a normal desktop session as well as headless. The capture path
+    // must therefore never call it: it taps raw samples off the stream instead.
+    const rendererDict = require('fs').readFileSync(
+      require('path').join(require('./helpers').ROOT, 'src/renderer.ts'), 'utf8');
+    check('dictation never calls decodeAudioData',
+      !/decodeAudioData/.test(rendererDict.replace(/\/\/[^\n]*/g, '')),
+      'the renderer crashes on it; capture raw PCM instead');
+
+    // Off until asked for, because turning it on downloads 150MB.
+    check('dictation is off until enabled',
+      await win.evaluate(() => window.__dictationEnabled()) === false);
+    const micsHidden = await win.evaluate(() =>
+      [...document.querySelectorAll('.mic-button')].every((b) => b.style.display === 'none'));
+    check('mic buttons are hidden while dictation is off', micsHidden);
+
+    // The resampler is arithmetic, so it can be checked exactly rather than
+    // listened to: one second at 48k must become exactly 16000 samples, and a
+    // full-scale sine must stay full-scale.
+    const resample = await win.evaluate(() => {
+      const rate = 48000;
+      const src = new Float32Array(rate);
+      for (let i = 0; i < rate; i++) src[i] = Math.sin(2 * Math.PI * 440 * i / rate);
+      const got = window.__resampleTo16k(src, rate);
+      let peak = 0;
+      for (const v of got) peak = Math.max(peak, Math.abs(v));
+      return { length: got.length, peak: +peak.toFixed(2),
+               passthrough: window.__resampleTo16k(src, 16000).length };
+    });
+    check('resampling 48k to 16k gives exactly one third the samples',
+      resample.length === 16000, `${resample.length}`);
+    check('resampling preserves amplitude', resample.peak >= 0.99, `${resample.peak}`);
+    check('audio already at 16k is passed through untouched',
+      resample.passthrough === 48000, `${resample.passthrough}`);
+
     // --- Updates ----------------------------------------------------------
     await win.evaluate(() => window.closeModal());
     await win.waitForTimeout(200);

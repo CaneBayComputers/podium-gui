@@ -1586,6 +1586,7 @@ function openUrl(url: string): void {
 
 async function showCreateProject(): Promise<void> {
     showModal('new-project-modal');
+    refreshMicButtons();
     await showProjectHostStep();
 }
 
@@ -2827,6 +2828,10 @@ async function showSettings(tab: 'appearance' | 'layout' | 'hosts' | 'ai' = 'app
     // Reflect the stored preference rather than the markup's default.
     const autoBox = document.getElementById('auto-update-check') as HTMLInputElement | null;
     if (autoBox) autoBox.checked = autoUpdateCheckEnabled();
+
+    const dictBox = document.getElementById('dictation-enabled') as HTMLInputElement | null;
+    if (dictBox) dictBox.checked = dictationEnabled();
+    renderDictationStatus();
     switchSettingsTab(tab);
     // Populate BEFORE showing. Loading afterwards made Appearance open a beat
     // sooner, but it also meant the form finished loading after the panel was
@@ -3656,9 +3661,293 @@ function buildTileWrapper(session: TerminalSession, project: string): HTMLElemen
     viewport.className = 'tile-terminal-viewport';
     viewport.appendChild(session.pane);
 
+    // A compose box rather than typing into the terminal.
+    //
+    // An agent CLI is a poor text editor: no cursor movement worth the name, no
+    // selection, and a stray Ctrl-C ends the session. Most people asking an agent
+    // to change something are writing a sentence or two, and want to fix a typo
+    // halfway through it. The terminal stays as the transcript — it is genuinely
+    // good at showing what happened — and input moves somewhere built for input.
+    const compose = document.createElement('div');
+    compose.className = 'tile-compose';
+    compose.innerHTML = `
+        <textarea class="tile-compose-input" rows="2"
+                  data-testid="compose-input-${escapeHtml(project)}"
+                  placeholder="Tell the agent what to change…"></textarea>
+        <div class="tile-compose-actions">
+            <button class="btn btn-secondary btn-small mic-button"
+                    data-testid="compose-mic-${escapeHtml(project)}"
+                    title="Dictate" onclick="toggleDictation(this)">🎤</button>
+            <button class="btn btn-primary btn-small"
+                    data-testid="compose-send-${escapeHtml(project)}"
+                    onclick="sendCompose('${escapeHtml(project)}')">Send</button>
+        </div>`;
+
+    // Enter sends, Shift+Enter makes a newline — the convention every chat box
+    // uses, so it needs no explaining.
+    const input = compose.querySelector('.tile-compose-input') as HTMLTextAreaElement;
+    input.addEventListener('keydown', (e: KeyboardEvent) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            sendCompose(project);
+        }
+    });
+
     wrapper.appendChild(bar);
     wrapper.appendChild(viewport);
+    wrapper.appendChild(compose);
+    // A newly built tile has to agree with the current setting, not the markup.
+    setTimeout(refreshMicButtons, 0);
     return wrapper;
+}
+
+// --- Dictation -------------------------------------------------------------
+//
+// Whisper runs locally: the audio never leaves the machine, there is no API key
+// and no per-minute cost. transformers.js rather than whisper.cpp because it is
+// WASM — no native module to build per platform, which matters given Windows is
+// a supported target and node-pty already taught us what that costs.
+//
+// The model is downloaded on first use and cached by the browser, so the first
+// dictation is slow and later ones are not. Loading it at startup would make
+// every launch pay for a feature most sessions never touch.
+
+// Off until someone turns it on, because turning it on costs a 150MB download.
+// A feature that quietly downloads that on first click is a feature that
+// surprises people on a metered connection.
+function dictationEnabled(): boolean {
+    return localStorage.getItem('podium-dictation') === 'on';
+}
+
+async function setDictationEnabled(on: boolean): Promise<void> {
+    localStorage.setItem('podium-dictation', on ? 'on' : 'off');
+
+    if (!on) {
+        // Free the weights. A loaded Whisper sits on a few hundred MB of tensors,
+        // and someone turning the feature off has said they are not using it —
+        // holding that for the rest of the session would make "off" mean nothing
+        // except a hidden button.
+        //
+        // The DOWNLOAD stays cached, so turning it back on is fast. Deleting it
+        // would punish a person for changing their mind.
+        try { await whisperPipeline?.dispose?.(); } catch { /* nothing to free */ }
+        whisperPipeline = null;
+        // A recording in flight has nowhere to go now.
+        if (activeRecorder) {
+            try { activeRecorder.recorder.stop(); } catch { /* already stopped */ }
+            activeRecorder = null;
+        }
+        renderDictationStatus();
+        refreshMicButtons();
+        return;
+    }
+
+    renderDictationStatus();
+    // Fetch it now rather than at first use, so the wait happens where it was
+    // asked for and can be watched.
+    if (!whisperPipeline) {
+        try {
+            await loadWhisper((msg) => renderDictationStatus(msg));
+            renderDictationStatus();
+        } catch (error) {
+            renderDictationStatus(`Could not download the model: ${(error as Error).message}`);
+        }
+    }
+    refreshMicButtons();
+}
+
+function renderDictationStatus(progress?: string): void {
+    const el = document.getElementById('dictation-status');
+    if (!el) return;
+    if (!dictationEnabled()) { el.innerHTML = ''; return; }
+    el.innerHTML = progress
+        ? `<p class="ssh-status testing" data-testid="dictation-progress">${escapeHtml(progress)}</p>`
+        : whisperPipeline
+            ? `<p class="ssh-status ok" data-testid="dictation-ready">Ready. Turning this off frees the memory; the download stays cached.</p>`
+            : `<p class="ssh-status testing">Preparing…</p>`;
+}
+
+// Mic buttons exist only when dictation is on and ready. A button that responds
+// to a click with "go and enable this first" is a worse version of not being
+// there.
+function refreshMicButtons(): void {
+    const show = dictationEnabled() && Boolean(whisperPipeline);
+    document.querySelectorAll('.mic-button').forEach((b) => {
+        (b as HTMLElement).style.display = show ? '' : 'none';
+    });
+}
+
+let whisperPipeline: any = null;
+let whisperLoading: Promise<any> | null = null;
+let activeRecorder: { recorder: { stop: () => Promise<void> }; target: HTMLTextAreaElement } | null = null;
+
+async function loadWhisper(onProgress?: (msg: string) => void): Promise<any> {
+    if (whisperPipeline) return whisperPipeline;
+    if (whisperLoading) return whisperLoading;
+
+    whisperLoading = (async () => {
+        const { pipeline, env } = require('@huggingface/transformers');
+        // No local model directory is shipped, so do not look for one — without
+        // this it probes a path that will never exist and the failure reads as a
+        // missing file rather than a download.
+        env.allowLocalModels = false;
+
+        const pipe = await pipeline('automatic-speech-recognition', 'Xenova/whisper-base.en', {
+            progress_callback: (p: any) => {
+                if (p.status === 'progress' && p.total) {
+                    onProgress?.(`Downloading speech model ${Math.round((p.loaded / p.total) * 100)}%`);
+                }
+            }
+        });
+        whisperPipeline = pipe;
+        return pipe;
+    })();
+
+    try { return await whisperLoading; } finally { whisperLoading = null; }
+}
+
+// Down to 16kHz mono, which is what Whisper takes.
+//
+// Plain linear interpolation rather than a WebAudio resampler. Speech at 16k is
+// forgiving, and the alternative pulls in an API this Electron build cannot be
+// trusted with — see captureMicrophone.
+function resampleTo16k(input: Float32Array, inputRate: number): Float32Array {
+    if (inputRate === 16000) return input;
+    const ratio = inputRate / 16000;
+    const out = new Float32Array(Math.floor(input.length / ratio));
+    for (let i = 0; i < out.length; i++) {
+        const at = i * ratio;
+        const lo = Math.floor(at);
+        const hi = Math.min(lo + 1, input.length - 1);
+        const frac = at - lo;
+        out[i] = input[lo]! * (1 - frac) + input[hi]! * frac;
+    }
+    return out;
+}
+
+// The textarea this mic button belongs to. Both entry points — a project tile
+// and Create with AI — use the same button, so it finds its own box rather than
+// each caller passing one.
+function boxForMic(button: HTMLElement): HTMLTextAreaElement | null {
+    const scope = button.closest('.tile-compose') || button.closest('.dictation-scope');
+    return (scope?.querySelector('textarea') as HTMLTextAreaElement | null) || null;
+}
+
+async function toggleDictation(button: HTMLElement): Promise<void> {
+    if (!dictationEnabled()) {
+        showError('Dictation is off. Turn it on under Settings → Dictation.');
+        return;
+    }
+    if (activeRecorder) { stopDictation(button); return; }
+
+    const target = boxForMic(button);
+    if (!target) return;
+
+    let stream: MediaStream;
+    try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (error) {
+        // Denied or absent. Saying which is the difference between "click allow"
+        // and "this machine has no microphone".
+        showError(`No microphone available: ${(error as Error).message}`);
+        return;
+    }
+
+    // Raw samples, not a recording.
+    //
+    // The obvious route is MediaRecorder -> Blob -> decodeAudioData, and
+    // decodeAudioData CRASHES this Electron's renderer — not throws, crashes,
+    // so nothing can catch it. Reproduced on a synthetic in-memory WAV with no
+    // file access involved, in a normal desktop session as well as a headless
+    // one, which rules out both the harness and codec licensing.
+    //
+    // Tapping the stream gives Float32 samples directly. No container, no codec,
+    // and no decode step to crash in.
+    const ctx = new AudioContext();
+    const source = ctx.createMediaStreamSource(stream);
+    const processor = ctx.createScriptProcessor(4096, 1, 1);
+    const blocks: Float32Array[] = [];
+
+    processor.onaudioprocess = (e) => {
+        // Copied, because the event's buffer is reused for the next block.
+        blocks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+    };
+    source.connect(processor);
+    // ScriptProcessor only runs while connected to a destination, even though
+    // nothing should be audible — so the gain is zeroed rather than skipped.
+    const mute = ctx.createGain();
+    mute.gain.value = 0;
+    processor.connect(mute);
+    mute.connect(ctx.destination);
+
+    const recorder = {
+        stop: async () => {
+            processor.disconnect();
+            source.disconnect();
+            mute.disconnect();
+            stream.getTracks().forEach((t) => t.stop());
+
+            button.classList.remove('recording');
+            button.textContent = '⏳';
+
+            const total = blocks.reduce((n, b) => n + b.length, 0);
+            const joined = new Float32Array(total);
+            let at = 0;
+            for (const b of blocks) { joined.set(b, at); at += b.length; }
+            const audio = resampleTo16k(joined, ctx.sampleRate);
+            await ctx.close();
+
+            try {
+                const pipe = await loadWhisper((msg) => { button.title = msg; });
+                const result = await pipe(audio);
+                const text = (result?.text || '').trim();
+                if (text) {
+                    // Appended, not replaced: dictation adds to what is already
+                    // typed rather than discarding it.
+                    target.value = target.value ? `${target.value.trimEnd()} ${text}` : text;
+                    target.focus();
+                } else {
+                    showError('Nothing was transcribed. Try speaking closer to the microphone.');
+                }
+            } catch (error) {
+                showError(`Dictation failed: ${(error as Error).message}`);
+            } finally {
+                button.textContent = '🎤';
+                button.title = 'Dictate';
+                activeRecorder = null;
+            }
+        }
+    };
+
+    activeRecorder = { recorder, target };
+    button.classList.add('recording');
+    button.textContent = '⏹';
+    button.title = 'Stop dictation';
+}
+
+function stopDictation(button: HTMLElement): void {
+    if (!activeRecorder) return;
+    void activeRecorder.recorder.stop();
+}
+
+// Send the compose box's contents to the agent, then clear it.
+//
+// A trailing carriage return submits it, the same as pressing Enter in the
+// terminal would.
+function sendCompose(project: string): void {
+    const wrapper = document.querySelector(`[data-testid="tile-terminal-${CSS.escape(project)}"]`);
+    const input = wrapper?.querySelector('.tile-compose-input') as HTMLTextAreaElement | null;
+    if (!input) return;
+
+    const text = input.value;
+    if (!text.trim()) return;
+
+    const session = [...terminalSessions.values()].find((s) => s.project === project);
+    if (!session) { showError('That session has ended.'); return; }
+
+    ipcRenderer.invoke('pty-input', session.id, text + '\r');
+    input.value = '';
+    input.focus();
 }
 
 interface AgentTerminalOptions {
@@ -3714,11 +4003,32 @@ async function openAgentTerminal(options: AgentTerminalOptions): Promise<void> {
     const term = new Terminal({
         fontSize: 13,
         fontFamily: "'JetBrains Mono', ui-monospace, monospace",
-        cursorBlink: true,
+        // No cursor: it is a transcript, and a blinking cursor invites typing
+        // into something that will not accept it.
+        cursorBlink: false,
         theme: terminalThemeFor(currentTheme)
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
+
+    // Keystrokes go to the compose box, not the pty.
+    //
+    // Returning false stops xterm handling the key at all. Copy shortcuts and
+    // Ctrl-C for SIGINT still pass, because both are things people legitimately
+    // need at a running agent — Ctrl-C especially, since a compose box gives no
+    // other way to interrupt one that has gone wrong.
+    if (inTile) {
+        term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
+            if (e.type !== 'keydown') return true;
+            const copyOrInterrupt = (e.ctrlKey || e.metaKey)
+                && ['c', 'C', 'v', 'V', 'a', 'A'].includes(e.key);
+            if (copyOrInterrupt) return true;
+            // Anything else: send the person to the box built for typing.
+            const box = session?.wrapper?.querySelector('.tile-compose-input') as HTMLTextAreaElement | null;
+            if (box && e.key.length === 1) box.focus();
+            return false;
+        });
+    }
 
     const session: TerminalSession = {
         id, key: options.sessionKey, label: options.title,
@@ -4920,6 +5230,12 @@ async function submitEditProject(): Promise<void> {
 (window as any).showCreateProject = showCreateProject;
 (window as any).onFrameworkChange = onFrameworkChange;
 (window as any).onRuntimeChange = onRuntimeChange;
+(window as any).sendCompose = sendCompose;
+(window as any).toggleDictation = toggleDictation;
+(window as any).__resampleTo16k = resampleTo16k;
+(window as any).setDictationEnabled = setDictationEnabled;
+(window as any).refreshMicButtons = refreshMicButtons;
+(window as any).__dictationEnabled = dictationEnabled;
 (window as any).loadFrameworkCatalog = loadFrameworkCatalog;
 (window as any).startProject = startProject;
 (window as any).stopProject = stopProject;

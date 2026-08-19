@@ -1895,6 +1895,41 @@ span.status-indicator {
     flex: 0 0 auto;
 }
 
+.tile-compose {
+    display: flex;
+    gap: 0.5rem;
+    align-items: flex-end;
+    padding: 0.5rem;
+    border-top: 1px solid var(--border-subtle);
+    background: var(--bg-tertiary);
+}
+.tile-compose-input {
+    flex: 1;
+    resize: vertical;
+    min-height: 2.4rem;
+    padding: 0.45rem 0.6rem;
+    font-family: inherit;
+    font-size: 0.85rem;
+    color: var(--text-primary);
+    background: var(--card-bg);
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+}
+.tile-compose-input:focus {
+    outline: none;
+    border-color: var(--neon-cyan);
+}
+.tile-compose-actions { display: flex; gap: 0.35rem; }
+
+/* Recording is a state the user needs to see at a glance, since the only other
+   feedback is their own voice. */
+.mic-button.recording {
+    background: var(--neon-pink);
+    color: #fff;
+    animation: mic-pulse 1.2s ease-in-out infinite;
+}
+@keyframes mic-pulse { 50% { opacity: 0.55; } }
+
 .update-banner {
     display: flex;
     align-items: center;

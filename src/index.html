@@ -417,6 +417,9 @@
                     <button class="settings-tab" data-settings-tab="ai"
                             data-testid="settings-tab-ai"
                             onclick="switchSettingsTab('ai')">🤖 AI Agent</button>
+                    <button class="settings-tab" data-settings-tab="dictation"
+                            data-testid="settings-tab-dictation"
+                            onclick="showSettings('dictation')">🎤 Dictation</button>
                 </div>
 
                 <div class="modal-body" data-settings-panel="layout" style="display: none;">
@@ -479,6 +482,24 @@
                                 onclick="addSshCredential()">+ Add a profile</button>
                         <p id="ssh-encryption-note" class="settings-note" data-testid="encryption-note"></p>
                     </div>
+                </div>
+
+                <div class="modal-body" data-settings-panel="dictation" style="display: none;">
+                    <p class="settings-note">
+                        Speak instead of typing, in Create with AI and in each project's
+                        agent box. Runs on this machine — the audio is never uploaded.
+                    </p>
+                    <div class="form-group">
+                        <label class="checkbox-row">
+                            <input type="checkbox" id="dictation-enabled" data-testid="dictation-enabled"
+                                   onchange="setDictationEnabled(this.checked)">
+                            Enable dictation
+                        </label>
+                    </div>
+                    <p class="settings-note">
+                        Turning this on downloads a speech model (about 150&nbsp;MB) once.
+                    </p>
+                    <div id="dictation-status" data-testid="dictation-status"></div>
                 </div>
 
                 <div class="modal-body" data-settings-panel="ai" style="display: none;">
@@ -614,10 +635,13 @@
                 <div class="modal-body">
                     <!-- Stage 1: describe -->
                     <div id="create-stage-idea">
-                        <div class="form-group">
+                        <div class="form-group dictation-scope">
                             <label for="create-idea">What do you want to build?</label>
                             <textarea id="create-idea" rows="3" data-testid="create-idea"
                                       placeholder="e.g. track which guitar pedals I have lent out to friends"></textarea>
+                            <button class="btn btn-secondary btn-small mic-button" type="button"
+                                    data-testid="create-idea-mic" title="Dictate"
+                                    style="display: none;" onclick="toggleDictation(this)">🎤 Dictate</button>
                             <span class="form-help">Plain English. Podium works out the stack and builds it.</span>
                             <div class="field-error" id="create-idea-error"></div>
                         </div>
