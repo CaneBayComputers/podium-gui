@@ -339,6 +339,56 @@ async function run() {
     check('hosts are polled in parallel, not one after another',
       /Promise\.all\(dashboardHosts\.map/.test(loaderBlock));
 
+    // --- Reachability -----------------------------------------------------
+    //
+    // A remote project's own addresses are useless from here. local_url is
+    // http://<name>, resolved through the REMOTE host's /etc/hosts, and lan_url
+    // is that host's view of its own network — on EC2 the private VPC address,
+    // unroutable from anywhere else. Only external_port travels.
+    const urlComposition = await win.evaluate(() => {
+      // Synthetic, so the assertion does not depend on which hosts happen to be
+      // configured or which projects happen to be running.
+      const remote = { name: 'r', status: 'running', hostId: 'probe-host', port: 8080,
+                       localUrl: 'http://r', lanUrl: 'http://10.0.0.5:8080', portMapped: true };
+      const local  = { name: 'l', status: 'running', hostId: 'local', port: 99,
+                       localUrl: 'http://l', lanUrl: 'http://192.168.1.6:99', portMapped: true };
+      const hrefs = (p) => (window.__projectUrls(p).match(/>([^<]+)<\/a>/g) || [])
+        .map((m) => m.replace(/>|<\/a>/g, ''));
+      return { remote: hrefs(remote), local: hrefs(local) };
+    });
+    // No profile with that id exists, so a remote project must render NOTHING
+    // rather than falling back to an address that cannot work.
+    check('a remote project does not fall back to its own lan_url',
+      !urlComposition.remote.some((u) => u.includes('10.0.0.5')),
+      JSON.stringify(urlComposition.remote));
+    check('a local project keeps both of its own addresses',
+      urlComposition.local.length === 2 && urlComposition.local.some((u) => u.includes('192.168.1.6')),
+      JSON.stringify(urlComposition.local));
+
+    // The probe must separate "nothing answered" from "the network said no":
+    // only one of them points at a firewall rule.
+    const refused = await app.evaluate(async ({ ipcMain }) => {
+      const t0 = Date.now();
+      // Port 1 on loopback: refused immediately, with an RST.
+      const r = await ipcMain._invokeHandlers.get('check-project-url')({}, '127.0.0.1:1', 2500);
+      return { ...r, ms: Date.now() - t0 };
+    });
+    check('a refused connection is not reported as a timeout',
+      refused.code === 0 && !refused.timedOut && refused.ms < 1500,
+      JSON.stringify(refused));
+
+    // And the click path must use a short timeout, because a blocked port is
+    // the slow failure and the user is waiting on it.
+    const clickSrc = require('fs').readFileSync(
+      require('path').join(require('./helpers').ROOT, 'src/renderer.ts'), 'utf8');
+    const openBlock = clickSrc.slice(clickSrc.indexOf('async function openProjectUrl'),
+                                     clickSrc.indexOf('async function openProjectUrl') + 2000);
+    check('the click probe uses a short timeout, not the default',
+      /check-project-url', address, 2500/.test(openBlock));
+    check('a timeout and a refusal produce different explanations',
+      /probe\.timedOut/.test(openBlock)
+      && /security group/.test(openBlock) && /asleep/.test(openBlock));
+
     // --- Host filter ------------------------------------------------------
     const hostFilterBehaviour = await win.evaluate(() => {
       const all = window.__allProjects();

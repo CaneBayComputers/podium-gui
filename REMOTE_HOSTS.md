@@ -84,6 +84,26 @@ Three cases, which differ more than they look (the CLI session's breakdown):
 The third is the nastiest: it fails *intermittently* rather than consistently,
 which is the hardest kind to diagnose from a dead link.
 
+### Built (PR #44)
+
+A remote project renders one link, composed from the SSH profile's host address
+plus `external_port` — never `lan_url`. With no profile for that host it renders
+**nothing**, rather than falling back to an address that cannot work. Local
+projects keep both of their own addresses unchanged.
+
+Clicking probes first, with a 2.5s cap, then either opens the browser or
+explains. Measured against real addresses:
+
+| case | result | time |
+|---|---|---|
+| reachable remote | `200` | 6ms |
+| blocked, no RST (EC2 security group) | `timedOut` | 2500ms — the cap |
+| refused (RST) | not timed out | 1ms |
+
+A timeout and a refusal get **different sentences**, because they point at
+different fixes: a timeout on a cloud host means a firewall rule, while a
+refusal means the machine is asleep, off the network, or saying no.
+
 **Probe on click, not on render.** Probing every project on every poll is N
 requests per host per timer tick for information that rarely changes. Probing
 when someone actually clicks costs nothing until it matters, and lets the
