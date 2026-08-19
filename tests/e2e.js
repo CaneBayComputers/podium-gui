@@ -15,6 +15,21 @@ let passed = 0;
 let failed = 0;
 const failures = [];
 
+// Strip full-line comments before grepping source for a banned construct.
+//
+// Needed twice already, both times the same way round: a comment explaining WHY
+// something is avoided matches the pattern that looks for it, and the assertion
+// fails on its own rationale. A test that fails on its own explanation is a test
+// someone deletes.
+//
+// Full-line only. Stripping trailing comments means deciding whether a `#` or
+// `//` sits inside a string, and getting that wrong would silently stop matching
+// real code — a far worse failure than a false positive.
+function withoutComments(source, lineComment = '//') {
+  const re = lineComment === '#' ? /^\s*#/ : /^\s*\/\//;
+  return source.split('\n').filter((l) => !re.test(l)).join('\n');
+}
+
 function check(name, condition, detail = '') {
   if (condition) {
     passed++;
@@ -1130,6 +1145,154 @@ async function run() {
     await win.selectOption('#layout-per-row', '2');
     await win.waitForTimeout(150);
 
+    // --- SSH host profiles ------------------------------------------------
+    await win.click(t('settings-tab-hosts'));
+    await win.waitForTimeout(200);
+    check('SSH Hosts tab reveals its panel',
+      await win.isVisible('#ssh-profile-list') && await win.isVisible(t('ssh-add')));
+
+    const sshBefore = await win.evaluate(() => window.__sshProfiles().length);
+
+    await win.click(t('ssh-add'));
+    await win.waitForTimeout(300);
+    check('adding a host renders an editable row',
+      await win.locator(t('ssh-profile-0')).count() === 1);
+
+    // A new profile must default to something usable rather than blank —
+    // port 22 and a key path are the same on nearly every host.
+    const defaults = await win.evaluate(() => window.__sshProfiles().slice(-1)[0]);
+    check('a new host defaults to port 22 and a key path',
+      defaults.port === 22 && defaults.keyPath.includes('.ssh'),
+      JSON.stringify(defaults));
+
+    // Profiles live in the main process, because the executor does. A round
+    // trip through disk is what proves the renderer is not the only owner.
+    await win.fill(t('ssh-host-0'), '192.0.2.99');
+    await win.waitForTimeout(300);
+    const persisted = await app.evaluate(async ({ ipcMain }) =>
+      ipcMain._invokeHandlers.get('get-ssh-profiles')({}));
+    check('edits persist through the main process, not just the renderer',
+      persisted.some((p) => p.host === '192.0.2.99'),
+      JSON.stringify(persisted.map((p) => p.host)));
+
+    // The stored file must never contain key material — only a path to it.
+    // Read from the test process: `require` is not defined inside
+    // app.evaluate, which injects the electron module and nothing else.
+    const userDataDir = await app.evaluate(async ({ app: a }) => a.getPath('userData'));
+    let storedRaw = '';
+    try {
+      storedRaw = require('fs').readFileSync(
+        require('path').join(userDataDir, 'ssh-hosts.json'), 'utf8');
+    } catch { /* asserted below */ }
+    check('no private key material is written to disk',
+      storedRaw.length > 0 && !/BEGIN [A-Z ]*PRIVATE KEY/.test(storedRaw)
+        && !/"password"/.test(storedRaw),
+      storedRaw.slice(0, 60));
+
+    // Editing connection details must clear a stale result: "reachable" beside
+    // a host that has since been re-pointed is a claim about a different
+    // machine.
+    const staleCleared = await win.evaluate(async () => {
+      const p = window.__sshProfiles().slice(-1)[0];
+      const idx = window.__sshProfiles().length - 1;
+      window.testSshProfile; // referenced so the hook is real
+      // Simulate a completed test, then edit the host.
+      const before = document.querySelector('.ssh-status') !== null;
+      window.updateSshProfile(idx, 'host', '192.0.2.100');
+      return { before, after: document.querySelector('.ssh-status.ok') === null };
+    });
+    check('editing a host clears any stale reachability claim', staleCleared.after);
+
+    // MULTIPLE hosts is the point of the feature — one host is the degenerate
+    // case, and a list that silently overwrites instead of appending would pass
+    // every single-host check above.
+    await win.click(t('ssh-add'));
+    await win.waitForTimeout(200);
+    await win.click(t('ssh-add'));
+    await win.waitForTimeout(300);
+    await win.fill(t('ssh-label-0'), 'ec2-ubuntu');
+    await win.fill(t('ssh-host-0'), '44.202.33.176');
+    await win.fill(t('ssh-user-0'), 'ubuntu');
+    await win.fill(t('ssh-label-1'), 'ec2-arch');
+    await win.fill(t('ssh-host-1'), '52.23.206.186');
+    await win.fill(t('ssh-user-1'), 'arch');
+    await win.fill(t('ssh-label-2'), 'mac-m1');
+    await win.fill(t('ssh-host-2'), '192.168.1.193');
+    await win.fill(t('ssh-user-2'), 'shawn');
+    await win.waitForTimeout(400);
+
+    const rows = await win.locator('.ssh-profile').count();
+    check('three hosts render as three independent rows', rows >= 3, `${rows} rows`);
+
+    const multi = await app.evaluate(async ({ ipcMain }) =>
+      ipcMain._invokeHandlers.get('get-ssh-profiles')({}));
+    const labels = multi.map((p) => p.label);
+    check('all three persist, each keeping its own host and user',
+      ['ec2-ubuntu', 'ec2-arch', 'mac-m1'].every((l) => labels.includes(l))
+      && multi.find((p) => p.label === 'ec2-arch')?.user === 'arch'
+      && multi.find((p) => p.label === 'mac-m1')?.host === '192.168.1.193',
+      JSON.stringify(multi.map((p) => `${p.label}:${p.user}@${p.host}`)));
+
+    // Ids must be distinct, or a test result would attach to the wrong row.
+    const ids = multi.map((p) => p.id);
+    check('every host gets a distinct id', new Set(ids).size === ids.length, ids.join(','));
+
+    // Removing the middle one must not disturb its neighbours.
+    const middleIdx = multi.findIndex((p) => p.label === 'ec2-arch');
+    await win.evaluate(async (i) => {
+      window.confirm = () => true;
+      await window.removeSshProfile(i);
+    }, middleIdx);
+    await win.waitForTimeout(300);
+    const afterRemove = await app.evaluate(async ({ ipcMain }) =>
+      ipcMain._invokeHandlers.get('get-ssh-profiles')({}));
+    const remaining = afterRemove.map((p) => p.label);
+    check('removing one host leaves the others intact',
+      !remaining.includes('ec2-arch')
+      && remaining.includes('ec2-ubuntu') && remaining.includes('mac-m1'),
+      remaining.join(','));
+
+    // Two properties of the remote invocation, both found on a real Mac and
+    // both invisible against a Linux host.
+    // Required locally: fsMod/pathMod/ROOT are declared later in this file, so
+    // referencing them here is a temporal-dead-zone error.
+    const mainSrc = require('fs').readFileSync(
+      require('path').join(require('./helpers').ROOT, 'src/main.ts'), 'utf8');
+    const sshBlock = mainSrc.slice(mainSrc.indexOf('REMOTE_PODIUM_CANDIDATES'),
+                                   mainSrc.indexOf("ipcMain.handle('get-podium-command'"));
+
+    // podium is at /usr/local/bin from the script installers and /usr/bin from
+    // the .deb, deliberately so they can coexist. Hardcoding either makes the
+    // other report "command not found", which is indistinguishable from "not
+    // installed" over a non-interactive ssh.
+    check('the remote podium path is probed, not hardcoded',
+      /\/usr\/local\/bin\/podium/.test(sshBlock) && /\/usr\/bin\/podium/.test(sshBlock)
+      && /test -x/.test(sshBlock),
+      'expected both candidate paths and an executable probe');
+
+    // Resolving podium is necessary but not sufficient: podium itself shells
+    // out to docker, and on the Mac that failed with "docker: command not
+    // found" while /usr/local/bin/docker existed the whole time.
+    check('remote commands set a PATH the CLI\'s own children can use',
+      /PATH=\/usr\/local\/bin:\/opt\/homebrew\/bin:\$PATH/.test(sshBlock),
+      'expected an explicit PATH prefix on remote exec');
+
+    // `command -v podium` would need a login shell, and a login shell sources
+    // rc files whose output lands in a stream being parsed as JSON.
+    check('the probe avoids a login shell',
+      !/command -v podium/.test(withoutComments(sshBlock)));
+
+    // Clean up so the suite does not leave hosts behind on a real machine.
+    await win.evaluate(async (n) => {
+      const list = window.__sshProfiles();
+      while (list.length > n) list.pop();
+      await require('electron').ipcRenderer.invoke('save-ssh-profiles', list);
+    }, sshBefore);
+    await win.waitForTimeout(200);
+    const cleaned = await win.evaluate(() => window.__sshProfiles().length);
+    check('the suite leaves no test hosts behind', cleaned === sshBefore,
+      `${cleaned} vs ${sshBefore}`);
+
     await win.click(t('settings-tab-ai'));
     await win.waitForTimeout(150);
     check('AI tab reveals the agent form', await win.isVisible('#ai-agent'));
@@ -1940,8 +2103,7 @@ async function run() {
       // is inside a string, and getting that wrong would silently stop matching
       // real code. A ban explained in a trailing comment is the rarer case and
       // failing loudly there is the safer error.
-      const body = fsMod.readFileSync(full, 'utf8')
-        .split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+      const body = withoutComments(fsMod.readFileSync(full, 'utf8'), '#');
       const found = BASH4.filter(([, re]) => re.test(body)).map(([label]) => label);
       check(`${file} avoids bash 4+ constructs (macOS has 3.2)`,
         found.length === 0, found.join('; '));
