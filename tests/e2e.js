@@ -516,10 +516,51 @@ async function run() {
     const enabledNow = await win.evaluate(() =>
       [...document.querySelectorAll('#service-manager-list .service-state.on')]
         .map((e) => e.closest('.service-row').getAttribute('data-testid').replace('service-row-', '')));
+    // The guard must not pass vacuously. It did: in-use was computed by scanning
+    // docker-compose.yaml for service hostnames, but a project names its
+    // database in .env — 12 of the 15 projects on this machine declare
+    // DB_HOST=podium-mariadb there and every one was missed. With in-use always
+    // empty, `shouldLock` was empty and `.every()` on an empty array is true.
+    //
+    // So establish independently, from disk, what the answer should be.
+    // Read from the test process: `require` is not defined inside app.evaluate,
+    // which injects the electron module and nothing else.
+    const projectsDir = await app.evaluate(async ({ ipcMain }) =>
+      ipcMain._invokeHandlers.get('get-projects-dir')({}));
+    let dbUsersOnDisk = 0;
+    {
+      const fsD = require('fs'), pathD = require('path');
+      for (const proj of fsD.readdirSync(projectsDir)) {
+        try {
+          const env = fsD.readFileSync(pathD.join(projectsDir, proj, '.env'), 'utf8');
+          if (/^DB_HOST=podium-mariadb/m.test(env)) dbUsersOnDisk++;
+        } catch { /* no .env */ }
+      }
+    }
+
+    if (dbUsersOnDisk > 0) {
+      check('the in-use guard actually finds the projects using a service',
+        (guard.inUse?.mysql || []).length > 0,
+        `${dbUsersOnDisk} projects declare DB_HOST on disk, guard found ${(guard.inUse?.mysql || []).length}`);
+    } else {
+      check('the in-use guard has something to find on this machine', false,
+        'no project declares DB_HOST — this check cannot prove anything here');
+    }
+
     const shouldLock = Object.keys(guard.inUse || {}).filter((s) => enabledNow.includes(s));
     check('a service a project depends on cannot be disabled from here',
       shouldLock.every((s) => guard.locked.includes(s)),
       `in use+enabled=${shouldLock.join(',')} locked=${guard.locked.join(',')}`);
+
+    // A hostname inside a comment must not count. Found on a real remote box: a
+    // compose comment reading "still resolved podium-mariadb ... by name" made
+    // the guard claim two projects depended on MariaDB, which would have blocked
+    // disabling a service nothing used.
+    const guardSrc = require('fs').readFileSync(
+      require('path').join(require('./helpers').ROOT, 'src/main.ts'), 'utf8');
+    check('the in-use guard ignores hostnames mentioned in comments',
+      /mentionedOutsideAComment/.test(guardSrc) && /\^\[\^#\]\*/.test(guardSrc),
+      'expected comment-aware matching on both the local and remote paths');
 
     // Toggling pulls an image and starts a container. Without visible feedback
     // the row sits unchanged and the click looks like it did nothing — which is

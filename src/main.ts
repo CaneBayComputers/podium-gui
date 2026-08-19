@@ -1157,12 +1157,18 @@ ipcMain.handle('get-optional-services', async (): Promise<string[]> => {
 // validates against. Replaces a copy that lived in the GUI: the copy existed
 // only because `enable-service` had no machine-readable output, and it drifted
 // the moment the CLI grew from two services to nine.
-ipcMain.handle('get-service-catalog', async (): Promise<{
+ipcMain.handle('get-service-catalog', async (
+  _event: IpcMainInvokeEvent,
+  hostId: string = 'local'
+): Promise<{
   always_on: string[];
   services: Array<{ slug: string; group: string; description: string; address: string; state: string }>;
   error?: string;
 }> => {
-  const result = await runPodium(['enable-service', '--json-output']);
+  // From the host being managed. A remote CLI may support a different set, and
+  // rendering this machine's list for another machine would offer services it
+  // does not have — the failure arriving at enable time.
+  const result = await executorFor(hostId).exec(['enable-service', '--json-output']);
 
   try {
     const parsed = JSON.parse(result.stdout || '{}');
@@ -1177,21 +1183,81 @@ ipcMain.handle('get-service-catalog', async (): Promise<{
   }
 });
 
+// Does this text name the host somewhere other than a comment?
+//
+// Found for real on a remote box: a compose comment reading "still resolved
+// podium-mariadb ... by name" made the guard report a project as depending on
+// MariaDB, which would have blocked disabling a service nothing used.
+function mentionedOutsideAComment(body: string, host: string): boolean {
+  return body.split('\n').some((line) => {
+    const at = line.indexOf(host);
+    if (at === -1) return false;
+    const hash = line.indexOf('#');
+    return hash === -1 || at < hash;
+  });
+}
+
+// The service hostnames a project's compose file would name if it used them.
+// Shared by the local scan and the remote grep so the two cannot disagree about
+// what "in use" means.
+const SERVICE_HOSTNAMES: Record<string, string> = {
+  mysql: 'podium-mariadb',
+  postgres: 'podium-postgres',
+  mongo: 'podium-mongo',
+  minio: 'podium-minio',
+  meilisearch: 'podium-meilisearch'
+};
+
+// Same question as the local scan, asked over SSH. One grep per service across
+// the remote projects directory rather than a round trip per project — the
+// dashboard polls, and per-project round trips would multiply by project count.
+async function servicesInUseRemote(hostId: string): Promise<Record<string, string[]>> {
+  const exec = executorFor(hostId) as any;
+  if (typeof exec.execRaw !== 'function') return {};
+
+  const dirResult = await exec.exec(['projects-dir']);
+  const dir = (dirResult.stdout || '').trim();
+  if (dirResult.code !== 0 || !dir) return {};
+
+  const inUse: Record<string, string[]> = {};
+  for (const [service, hostname] of Object.entries(SERVICE_HOSTNAMES)) {
+    // `^[^#]*` refuses to cross a #, so a hostname mentioned in a comment does
+    // not count. Found for real: a compose file whose comment reads "still
+    // resolved podium-mariadb ... by name" was reported as a project depending
+    // on MariaDB, which would have blocked disabling a service nothing used.
+    const r = await exec.execRaw(
+      `grep -rlE '^[^#]*${hostname}' '${dir}'/*/.env '${dir}'/*/docker-compose.y*ml 2>/dev/null | head -50`);
+    if (r.code !== 0 || !r.stdout.trim()) continue;
+    const names: string[] = r.stdout.trim().split('\n')
+      .map((line: string) => line.split('/').slice(-2)[0] || '')
+      .filter((n: string) => n !== '');
+    // .env and docker-compose.yaml both match for the same project.
+    inUse[service] = Array.from(new Set(names));
+  }
+  return inUse;
+}
+
 // Which shared services a project actually depends on.
 //
 // Disabling a database a project is using leaves it unable to connect, and
 // nothing in the CLI stops that today. The compose files name the service
 // hostnames directly (DB_HOST: podium-mariadb and friends), so ask them rather
 // than inferring from the framework or trusting metadata.
-ipcMain.handle('get-services-in-use', async (): Promise<Record<string, string[]>> => {
+ipcMain.handle('get-services-in-use', async (
+  _event: IpcMainInvokeEvent,
+  hostId: string = 'local'
+): Promise<Record<string, string[]>> => {
+  // Which projects depend on which service, on the host being managed.
+  //
+  // Remote hosts are asked over SSH rather than scanned locally: the projects
+  // that matter are the ones on THAT machine, and reading this machine's
+  // compose files would guard the wrong set — potentially letting someone
+  // disable a database a remote project is using while blocking one nothing
+  // uses.
+  if (hostId !== 'local') return servicesInUseRemote(hostId);
+
   const inUse: Record<string, string[]> = {};
-  const hosts: Record<string, string> = {
-    mysql: 'podium-mariadb',
-    postgres: 'podium-postgres',
-    mongo: 'podium-mongo',
-    minio: 'podium-minio',
-    meilisearch: 'podium-meilisearch'
-  };
+  const hosts = SERVICE_HOSTNAMES;
 
   try {
     const dir = getProjectsDir();
@@ -1201,15 +1267,18 @@ ipcMain.handle('get-services-in-use', async (): Promise<Record<string, string[]>
       const compose = composePathFor(project);
       if (!compose) continue;
 
+      // Read .env as well as the compose file. A Laravel project names its
+      // database in .env (DB_HOST=podium-mariadb) and not in compose at all, so
+      // scanning compose alone found nothing on this machine — 12 of 15 local
+      // projects declare DB_HOST there and every one was missed.
       let body = '';
-      try {
-        body = fs.readFileSync(compose, 'utf8');
-      } catch {
-        continue;
+      for (const file of [compose, path.join(path.dirname(compose), '.env')]) {
+        try { body += fs.readFileSync(file, 'utf8') + '\n'; } catch { /* absent is fine */ }
       }
+      if (!body) continue;
 
       for (const [service, host] of Object.entries(hosts)) {
-        if (body.includes(host)) (inUse[service] ||= []).push(project);
+        if (mentionedOutsideAComment(body, host)) (inUse[service] ||= []).push(project);
       }
     }
   } catch (error) {
