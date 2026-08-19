@@ -49,7 +49,11 @@ cd podium-gui
 
 **Windows**
 
-Download [install-windows.bat](https://raw.githubusercontent.com/CaneBayComputers/podium-gui/master/scripts/install-windows.bat) and double-click it.
+Open PowerShell **as Administrator** and paste:
+
+```powershell
+irm https://raw.githubusercontent.com/CaneBayComputers/podium-gui/master/scripts/install-windows.ps1 | iex
+```
 
 Every installer sets up from source, so the checkout you install from is the one that runs. Updating is a `git pull`, and re-running an installer is safe.
 

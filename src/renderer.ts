@@ -307,12 +307,16 @@ function toggleVersionGroups(): void {
 // Which hosts the dashboard shows. Local (when this machine has Podium) plus
 // every configured SSH profile.
 let dashboardHosts: Array<{ id: string; label: string }> = [];
+// Read once and kept, because rendering needs it synchronously — an empty state
+// that says the wrong thing for a second is worse than one that waits.
+let platformCaps: { platform: string; localPodium: boolean; remoteOnly: boolean } | null = null;
 // Hosts that failed their last poll, so a tile-less host is distinguishable
 // from a host that is simply empty.
 let hostErrors: Record<string, string> = {};
 
 async function refreshDashboardHosts(): Promise<void> {
     const caps = await ipcRenderer.invoke('get-platform-capabilities');
+    platformCaps = caps;
     await loadSshProfiles();
 
     dashboardHosts = [];
@@ -895,14 +899,26 @@ function renderProjects(): void {
     detachTileTerminals();
 
     if (projects.length === 0) {
-        grid.innerHTML = `
+        // On a machine that cannot run Podium locally and has no hosts yet,
+        // "create your first project" points at something that cannot happen —
+        // seen for real on the Windows box, where the button leads to a picker
+        // with nothing in it. Say what is actually missing.
+        const noWhereToRun = platformCaps && !platformCaps.localPodium && dashboardHosts.length === 0;
+        grid.innerHTML = noWhereToRun
+            ? `
+            <div class="project-card placeholder" data-testid="no-hosts-placeholder">
+                <div class="project-icon">🖧</div>
+                <h3>No Podium hosts yet</h3>
+                <p>This machine runs projects on other computers. Add one to get started.</p>
+                <button class="btn btn-primary" onclick="showSettings('hosts')">Add a host</button>
+            </div>`
+            : `
             <div class="project-card placeholder">
                 <div class="project-icon">🚀</div>
                 <h3>Create Your First Project</h3>
                 <p>Get started by creating a new PHP, Laravel, or WordPress project</p>
                 <button class="btn btn-primary" onclick="showCreateProject()">Create Project</button>
-            </div>
-        `;
+            </div>`;
         reattachTileTerminals();
         return;
     }
@@ -1273,7 +1289,9 @@ function renderServices(): void {
             <div class="service-card">
                 <div class="service-status">⚪</div>
                 <h4>No Services</h4>
-                <p>Start Podium to see shared services</p>
+                <p>${platformCaps && !platformCaps.localPodium
+                    ? 'Services belong to a host. Add one under Settings.'
+                    : 'Start Podium to see shared services'}</p>
             </div>
         `;
         return;
