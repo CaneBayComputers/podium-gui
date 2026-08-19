@@ -864,6 +864,72 @@ async function run() {
     await win.click(t('new-project'));
     await win.waitForSelector('#new-project-modal.show', { timeout: 5000 });
     check('new project modal opens', await win.isVisible('#new-project-modal'));
+
+    // --- Host picker ------------------------------------------------------
+    //
+    // With no SSH profiles configured there is exactly one option, and a
+    // question with one answer is friction rather than a choice — so the step
+    // is skipped and the kind choice is what appears.
+    check('with one host available the picker is skipped',
+      !(await win.isVisible(t('new-project-host')))
+      && await win.isVisible(t('new-project-choice')));
+    check('the single host is selected rather than left unset',
+      await win.evaluate(() => window.__newProjectHost()) === 'local');
+
+    // Add a host and reopen: now there is a real choice, so it must be asked.
+    await win.evaluate(async () => {
+      await require('electron').ipcRenderer.invoke('save-ssh-profiles', [
+        { id: 'picker-test', label: 'test-host', host: '192.0.2.10',
+          port: 22, user: 'someone', keyPath: '~/.ssh/id_rsa' }
+      ]);
+    });
+    await win.evaluate(() => window.closeModal());
+    await win.waitForTimeout(200);
+    await win.click(t('new-project'));
+    await win.waitForTimeout(600);
+
+    check('with two hosts available the picker is shown',
+      await win.isVisible(t('new-project-host')));
+    const hostOptions = await win.locator('#new-project-host .kind-option').count();
+    check('the picker offers local plus each configured host',
+      hostOptions === 2, `${hostOptions} options`);
+    check('the kind choice waits until a host is chosen',
+      !(await win.isVisible(t('new-project-choice'))));
+
+    // Choosing a host must advance AND be remembered — the catalogue and the
+    // create command both depend on it.
+    await win.click(t('host-picker-test'));
+    await win.waitForTimeout(400);
+    check('choosing a host advances to the kind choice',
+      await win.isVisible(t('new-project-choice'))
+      && !(await win.isVisible(t('new-project-host'))));
+    check('the chosen host is remembered',
+      await win.evaluate(() => window.__newProjectHost()) === 'picker-test');
+
+    // The framework catalogue is per host: a remote host offers whatever ITS
+    // CLI ships, and a single cache would serve the previous host's list.
+    const catalogSrc = require('fs').readFileSync(
+      require('path').join(require('./helpers').ROOT, 'src/renderer.ts'), 'utf8');
+    check('the framework catalogue is cached per host, not globally',
+      /frameworkCatalogHost === hostId/.test(catalogSrc));
+
+    // Windows has no local Podium, so 'local' must not be offered there. Cannot
+    // be run here, so assert the decision.
+    const hostStepSrc = catalogSrc.slice(catalogSrc.indexOf('async function showProjectHostStep'),
+                                         catalogSrc.indexOf('function chooseProjectHost'));
+    check('local is offered only when this machine can run Podium',
+      /if \(caps\.localPodium\)/.test(hostStepSrc));
+    check('a machine with no hosts at all points at the settings that fix it',
+      /no-hosts-settings/.test(hostStepSrc) && /remoteOnly/.test(hostStepSrc));
+
+    await win.evaluate(async () => {
+      await require('electron').ipcRenderer.invoke('save-ssh-profiles', []);
+    });
+    await win.evaluate(() => window.closeModal());
+    await win.waitForTimeout(200);
+    await win.click(t('new-project'));
+    await win.waitForTimeout(500);
+
     await win.click(t('kind-framework'));
     check('choosing a framework reveals the form and its footer',
       await win.isVisible('#new-project-form') && await win.isVisible('#new-project-footer'));

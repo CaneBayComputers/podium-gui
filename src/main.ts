@@ -922,7 +922,58 @@ interface CatalogFramework {
 // the CLI's authority on which engines each framework ACTUALLY works with, and
 // a copy here would drift. The GUI previously hardcoded three of the thirteen
 // and sent `--database mysql` for all of them.
-ipcMain.handle('get-framework-catalog', async (): Promise<{ frameworks: CatalogFramework[]; error?: string }> => {
+// Shared by the local and remote paths so the two cannot shape the same data
+// differently — a remote framework list that quietly lost its `databases` array
+// would offer engines the host does not support.
+function normaliseFrameworks(parsed: any): CatalogFramework[] {
+  return (parsed.frameworks ?? []).map((fw: any) => ({
+    slug: fw.slug ?? '',
+    display: fw.display ?? fw.slug ?? '',
+    runtime: fw.runtime ?? '',
+    // An empty/absent list means every engine is fine.
+    databases: Array.isArray(fw.databases) ? fw.databases : [],
+    note: fw.note ?? ''
+  })).filter((fw: CatalogFramework) => fw.slug !== '');
+}
+
+// Read a catalogue file from whichever host will run the command.
+//
+// Frameworks and apps come from the CLI install, so a remote host's list is
+// whatever ITS CLI ships — not this machine's. Reading the local copy and
+// offering it for a remote create would present frameworks that host may not
+// have, and the failure would arrive at creation time.
+//
+// The install directory is derived from the podium symlink rather than assumed:
+// script installs put it under /usr/local/share/podium-cli, the .deb under
+// /opt/podium-cli, and `readlink -f` on the binary resolves either.
+async function readRemoteCatalog(hostId: string, file: string): Promise<string | null> {
+  const exec = executorFor(hostId) as any;
+  if (typeof exec.execRaw !== 'function') return null;
+
+  const result = await exec.execRaw(
+    `d=$(dirname "$(dirname "$(readlink -f /usr/local/bin/podium 2>/dev/null || readlink -f /usr/bin/podium)")")`
+    + `; cat "$d/src/catalog/${file}" 2>/dev/null || cat "$d/catalog/${file}" 2>/dev/null`);
+
+  return result.code === 0 && result.stdout.trim().startsWith('{') ? result.stdout : null;
+}
+
+ipcMain.handle('get-framework-catalog', async (
+  _event: IpcMainInvokeEvent,
+  hostId: string = 'local'
+): Promise<{ frameworks: CatalogFramework[]; error?: string }> => {
+  if (hostId !== 'local') {
+    const raw = await readRemoteCatalog(hostId, 'frameworks.json');
+    if (!raw) {
+      return { frameworks: [], error: `Could not read the framework catalogue from ${hostId}.` };
+    }
+    try {
+      const parsed = JSON.parse(raw);
+      return { frameworks: normaliseFrameworks(parsed) };
+    } catch (error) {
+      return { frameworks: [], error: `Framework catalogue from ${hostId} did not parse.` };
+    }
+  }
+
   const catalogPath = path.join(PODIUM_CLI_DIR, 'src', 'catalog', 'frameworks.json');
 
   try {
@@ -931,14 +982,7 @@ ipcMain.handle('get-framework-catalog', async (): Promise<{ frameworks: CatalogF
     }
 
     const parsed = JSON.parse(fs.readFileSync(catalogPath, 'utf8'));
-    const frameworks: CatalogFramework[] = (parsed.frameworks ?? []).map((fw: any) => ({
-      slug: fw.slug ?? '',
-      display: fw.display ?? fw.slug ?? '',
-      runtime: fw.runtime ?? '',
-      // An empty/absent list means every engine is fine.
-      databases: Array.isArray(fw.databases) ? fw.databases : [],
-      note: fw.note ?? ''
-    })).filter((fw: CatalogFramework) => fw.slug !== '');
+    const frameworks = normaliseFrameworks(parsed);
 
     debugLog('Loaded framework catalogue', { count: frameworks.length });
     return { frameworks };
@@ -1759,12 +1803,38 @@ interface Executor {
   /** Human-readable, for errors and for tagging which host a project is on. */
   readonly label: string;
   exec(args: string[]): Promise<CommandResult>;
+  /**
+   * Same, but emitting output as it arrives. Creating a project takes tens of
+   * seconds — 46s measured on a remote host — and buffering that is a minute of
+   * a blank overlay followed by everything at once.
+   */
+  execStream(args: string[], onData: (chunk: string) => void): Promise<CommandResult>;
   dispose(): void;
 }
 
 class LocalExecutor implements Executor {
   readonly label = 'local';
   exec(args: string[]): Promise<CommandResult> { return runPodium(args); }
+
+  execStream(args: string[], onData: (chunk: string) => void): Promise<CommandResult> {
+    return new Promise((resolve) => {
+      const podium = resolvePodium();
+      const child = spawn(podium.command, [...podium.prefix, ...args], {
+        cwd: os.homedir(),
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: { ...process.env, NO_COLOR: '1' }
+      });
+
+      let stdout = '';
+      let stderr = '';
+      child.stdout?.on('data', (d: Buffer) => { const t = d.toString(); stdout += t; onData(t); });
+      child.stderr?.on('data', (d: Buffer) => { const t = d.toString(); stderr += t; onData(t); });
+      child.on('close', (code) => resolve({ code: code ?? 1, stdout, stderr }));
+      child.on('error', (e) => resolve({ code: 1, stdout: '', stderr: e.message }));
+      child.stdin?.end();
+    });
+  }
+
   dispose(): void { /* nothing to release */ }
 }
 
@@ -1782,6 +1852,16 @@ class SshExecutor implements Executor {
   constructor(profile: SshProfile) {
     this.profile = profile;
     this.label = profile.label || profile.host;
+  }
+
+  // Absolute podium path, and an explicit PATH for the processes podium itself
+  // spawns. Both are required and for different reasons — see
+  // REMOTE_PODIUM_CANDIDATES and REMOTE_PATH_PREFIX. Shared by exec and
+  // execStream so the two cannot drift apart on either point.
+  private podiumCommand(args: string[]): string {
+    const bin = this.profile.podiumPath || REMOTE_PODIUM_CANDIDATES[0];
+    const quoted = args.map((a) => `'${a.replace(/'/g, `'\\''`)}'`).join(' ');
+    return `${REMOTE_PATH_PREFIX} NO_COLOR=1 ${bin} ${quoted}`;
   }
 
   private connect(): Promise<any> {
@@ -1835,15 +1915,8 @@ class SshExecutor implements Executor {
       return { code: 1, stdout: '', stderr: `${this.label}: ${(error as Error).message}` };
     }
 
-    // Absolute podium path, and an explicit PATH for the processes podium
-    // itself spawns. Both are required and for different reasons — see
-    // REMOTE_PODIUM_CANDIDATES and REMOTE_PATH_PREFIX.
-    const bin = this.profile.podiumPath || REMOTE_PODIUM_CANDIDATES[0];
-    const quoted = args.map((a) => `'${a.replace(/'/g, `'\\''`)}'`).join(' ');
-    const command = `${REMOTE_PATH_PREFIX} NO_COLOR=1 ${bin} ${quoted}`;
-
     return new Promise((resolve) => {
-      conn.exec(command, (err: any, stream: any) => {
+      conn.exec(this.podiumCommand(args), (err: any, stream: any) => {
         if (err) return resolve({ code: 1, stdout: '', stderr: `${this.label}: ${err.message}` });
 
         let stdout = '';
@@ -1852,6 +1925,29 @@ class SshExecutor implements Executor {
         stream.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
         stream.on('close', (code: number) => {
           resolve({ code: code ?? 1, stdout: stdout.trim(), stderr: stderr.trim() });
+        });
+      });
+    });
+  }
+
+  async execStream(args: string[], onData: (chunk: string) => void): Promise<CommandResult> {
+    let conn;
+    try {
+      conn = await this.connect();
+    } catch (error) {
+      return { code: 1, stdout: '', stderr: `${this.label}: ${(error as Error).message}` };
+    }
+
+    return new Promise((resolve) => {
+      conn.exec(this.podiumCommand(args), (err: any, stream: any) => {
+        if (err) return resolve({ code: 1, stdout: '', stderr: `${this.label}: ${err.message}` });
+
+        let stdout = '';
+        let stderr = '';
+        stream.on('data', (d: Buffer) => { const t = d.toString(); stdout += t; onData(t); });
+        stream.stderr.on('data', (d: Buffer) => { const t = d.toString(); stderr += t; onData(t); });
+        stream.on('close', (code: number) => {
+          resolve({ code: code ?? 1, stdout, stderr });
         });
       });
     });
@@ -1899,11 +1995,10 @@ function executorFor(hostId: string): Executor {
     // A project pointing at a host that has been removed. Fail with something
     // that says so rather than silently falling back to local, which would run
     // a command against the wrong machine.
-    return {
-      label: hostId,
-      exec: async () => ({ code: 1, stdout: '', stderr: `No SSH host configured with id ${hostId}` }),
-      dispose: () => { /* nothing */ }
-    };
+    const missing = async () => ({
+      code: 1, stdout: '', stderr: `No SSH host configured with id ${hostId}`
+    });
+    return { label: hostId, exec: missing, execStream: missing, dispose: () => { /* nothing */ } };
   }
 
   const cached = executors.get(hostId) as SshExecutor | undefined;
@@ -1930,6 +2025,21 @@ ipcMain.handle('execute-podium-on', async (
   subcommand: string,
   args: string[] = []
 ): Promise<CommandResult> => executorFor(hostId).exec([subcommand, ...args]));
+
+// Streaming variant. Emits on the same channel the local streaming path uses,
+// so the renderer's progress panes need no knowledge of which host is running.
+ipcMain.handle('execute-podium-stream-on', async (
+  event: IpcMainInvokeEvent,
+  hostId: string,
+  subcommand: string,
+  args: string[] = []
+): Promise<CommandResult> => {
+  return executorFor(hostId).execStream([subcommand, ...args], (chunk) => {
+    if (!event.sender.isDestroyed()) {
+      event.sender.send('command-stream-data', { type: 'stdout', data: chunk, command: 'podium' });
+    }
+  });
+});
 
 function runPodium(args: string[]): Promise<CommandResult> {
   return new Promise((resolve) => {
