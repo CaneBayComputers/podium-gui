@@ -453,10 +453,24 @@ function parseProjectStatusJSON(statusOutput: string, hostId: string = 'local',
                 // verified-healthy install (HTTP 200) as stopped, offered a
                 // "Start" button for an already-running container, and hid its
                 // URL. The container being up is what "running" means.
+                // `ping_status` is diagnostic, not a liveness signal, and this
+                // used to treat it as one — anything other than ok/skipped meant
+                // "starting". That inverted on macOS, where Docker Desktop keeps
+                // containers inside a VM so their IPs are permanently
+                // unreachable from the host: the CLI reports `not_applicable`
+                // there, which is neither of the two allowed values, so every
+                // healthy Mac project rendered as a red not-running tile.
+                //
+                // An allowlist of known-good values would break again on the
+                // next one. So: docker_running decides up or down, http_status
+                // decides whether it is serving yet, and anything unknown
+                // defaults to running — because docker_running is the
+                // authoritative signal and "I cannot tell" is not evidence of a
+                // problem.
                 if (!project.dockerRunning) {
                     project.status = 'stopped';
-                } else if (projectData.ping_status && projectData.ping_status !== 'ok' && projectData.ping_status !== 'skipped') {
-                    // Container is up but not answering on the VPC yet.
+                } else if (projectData.http_status === 'failed') {
+                    // Up, but not answering yet — mid-boot.
                     project.status = 'starting';
                 } else {
                     project.status = 'running';

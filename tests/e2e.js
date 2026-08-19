@@ -168,11 +168,31 @@ async function run() {
       // Disabled projects are deliberately hidden from the default view, so the
       // expected count is the projects that are NOT parked — asking for all of
       // them would fail on a machine where anything has been disabled.
-      const parked = await win.evaluate(() =>
-        window.__allProjects().filter((p) => window.isDisabled(p)).length);
-      check('dashboard renders every project that is not disabled',
-        realCards === expectedProjects - parked,
-        `rendered ${realCards}, CLI reported ${expectedProjects}, ${parked} disabled`);
+      // The grid unions every configured host, so comparing it against the
+      // LOCAL status alone under-counts by whatever the remote hosts contribute.
+      // Ask each host what it has and sum, rather than assuming one.
+      const perHost = await app.evaluate(async ({ ipcMain }) => {
+        const hosts = ['local', ...(await ipcMain._invokeHandlers.get('get-ssh-profiles')({}))
+          .filter((p) => p.host).map((p) => p.id)];
+        let total = 0;
+        const detail = {};
+        for (const h of hosts) {
+          const r = await ipcMain._invokeHandlers.get('execute-podium-on')({}, h, 'status',
+            ['--all', '--json-output']);
+          if (r.code !== 0) { detail[h] = 'unreachable'; continue; }
+          try {
+            const ps = JSON.parse(r.stdout).projects || [];
+            // Parked projects are hidden by design, so they are not expected.
+            const visible = ps.filter((x) => (x.metadata || {}).status !== 'disabled').length;
+            detail[h] = visible;
+            total += visible;
+          } catch { detail[h] = 'unparseable'; }
+        }
+        return { total, detail };
+      });
+      check('dashboard renders every non-disabled project across every host',
+        realCards === perHost.total,
+        `rendered ${realCards}, hosts reported ${perHost.total} — ${JSON.stringify(perHost.detail)}`);
     }
 
     // Display metadata is GUI-owned (read from each project's compose file),
@@ -339,6 +359,43 @@ async function run() {
     check('hosts are polled in parallel, not one after another',
       /Promise\.all\(dashboardHosts\.map/.test(loaderBlock));
 
+    // A project's up/down must come from docker_running, not from ping.
+    //
+    // ping_status is diagnostic. On macOS, Docker Desktop keeps containers in a
+    // VM so their IPs are permanently unreachable from the host, and the CLI
+    // reports `not_applicable` there. Treating anything but ok/skipped as
+    // "starting" made every healthy Mac project render as a red not-running
+    // tile. An allowlist of known-good values would break on the next one, so
+    // the rule is: docker_running decides, and unknown means running.
+    const statusRules = await win.evaluate(() => {
+      const mk = (extra) => JSON.stringify({ shared_services: {},
+        projects: [{ name: 'p', docker_running: true, external_port: '1', ...extra }] });
+      const out = {};
+      for (const [label, extra] of [
+        ['ping not_applicable', { ping_status: 'not_applicable', http_status: 'ok' }],
+        ['ping failed but http ok', { ping_status: 'failed', http_status: 'ok' }],
+        ['ping absent entirely', {}],
+        ['some future ping value', { ping_status: 'quantum' }],
+        ['http failed', { http_status: 'failed' }]
+      ]) {
+        out[label] = window.__parseStatus(mk(extra))[0].status;
+      }
+      out['docker down'] = window.__parseStatus(JSON.stringify({ shared_services: {},
+        projects: [{ name: 'p', docker_running: false }] }))[0].status;
+      return out;
+    });
+    check('a healthy project is running whatever ping says',
+      ['ping not_applicable', 'ping failed but http ok', 'ping absent entirely',
+       'some future ping value'].every((k) => statusRules[k] === 'running'),
+      JSON.stringify(statusRules));
+    check('a container that is up but not serving reads as starting',
+      statusRules['http failed'] === 'starting', JSON.stringify(statusRules));
+    check('a container that is down reads as stopped',
+      statusRules['docker down'] === 'stopped', JSON.stringify(statusRules));
+
+    await win.evaluate(() => window.loadProjects());
+    await win.waitForTimeout(2000);
+
     // --- Reachability -----------------------------------------------------
     //
     // A remote project's own addresses are useless from here. local_url is
@@ -438,8 +495,13 @@ async function run() {
       check('running and stopped partition the project list',
         runningTiles + stoppedTiles === allTiles,
         `${runningTiles} + ${stoppedTiles} != ${allTiles}`);
-      check('running filter matches what the CLI reports running',
-        runningTiles === running.length, `${runningTiles} vs ${running.length}`);
+      // `running` above is the LOCAL host's list. With several hosts the grid
+      // legitimately shows more, so compare against what the app holds — which
+      // the union check above has already tied back to the hosts themselves.
+      const runningEverywhere = await win.evaluate(() =>
+        window.__allProjects().filter((p) => p.status === 'running' && !window.isDisabled(p)).length);
+      check('the running filter matches every running project the grid holds',
+        runningTiles === runningEverywhere, `${runningTiles} vs ${runningEverywhere}`);
 
       await win.evaluate(() => window.setRunFilter('all'));
 
@@ -552,6 +614,7 @@ async function run() {
       await win.waitForTimeout(200);
       const lastOnOrder = await win.evaluate(() =>
         window.__visibleProjects().map((p) => ({ name: p.name, last_on: p.last_on || '' })));
+      const localNames = (statusJson.projects || []).map((p) => p.name);
       const withStamp = lastOnOrder.filter((p) => p.last_on);
       const firstBlank = lastOnOrder.findIndex((p) => !p.last_on);
 
@@ -562,13 +625,16 @@ async function run() {
       // with operational state now, so there is no second source to reconcile.
       // Disabled projects are hidden by design, so counting their timestamps
       // against the visible list would compare two different populations.
+      // statusJson is the LOCAL host only; the list spans every host. Count the
+      // same population on both sides or this compares two different things.
       const stampedOnDisk = (statusJson.projects || [])
         .filter((p) => p.metadata?.last_on && p.metadata?.status !== 'disabled')
         .map((p) => p.name);
+      const lastOnLocal = lastOnOrder.filter((p) => p.last_on && localNames.includes(p.name));
 
       check('every last_on on disk reaches the project list',
-        withStamp.length === stampedOnDisk.length,
-        `${stampedOnDisk.length} on disk, ${withStamp.length} in the list`);
+        lastOnLocal.length === stampedOnDisk.length,
+        `${stampedOnDisk.length} on disk (local), ${lastOnLocal.length} local entries in the list`);
 
       if (withStamp.length > 0) {
         check('projects with a last_on sort ahead of those without',
@@ -735,6 +801,13 @@ async function run() {
     console.log('\ninstall app');
     await win.click(t('new-project'));
     await win.waitForSelector('#new-project-modal.show', { timeout: 5000 });
+
+    // With more than one host configured the host step comes first, because both
+    // catalogues are read from the chosen machine. Step past it when it appears.
+    if (await win.isVisible(t('new-project-host'))) {
+      await win.click('#new-project-host .kind-option');
+      await win.waitForTimeout(400);
+    }
     check('new project opens on the kind choice, not the form',
       await win.isVisible(t('new-project-choice')) &&
       !(await win.isVisible('#new-project-form')));
@@ -1054,14 +1127,34 @@ async function run() {
 
     // --- Host picker ------------------------------------------------------
     //
-    // With no SSH profiles configured there is exactly one option, and a
-    // question with one answer is friction rather than a choice — so the step
-    // is skipped and the kind choice is what appears.
+    // With one option there is nothing to choose, so the step is skipped — a
+    // question with a single answer is friction rather than a choice.
+    //
+    // This machine has real hosts configured, so the test creates the condition
+    // rather than assuming it: clear the profiles, check, then put back exactly
+    // what was there. Depending on the machine's host count would make this
+    // pass or fail for reasons unrelated to the rule.
+    const savedProfiles = await app.evaluate(async ({ ipcMain }) =>
+      ipcMain._invokeHandlers.get('get-ssh-profiles')({}));
+
+    await win.evaluate(() => window.closeModal());
+    await win.evaluate(async () => {
+      await require('electron').ipcRenderer.invoke('save-ssh-profiles', []);
+    });
+    await win.waitForTimeout(200);
+    await win.click(t('new-project'));
+    await win.waitForTimeout(600);
+
     check('with one host available the picker is skipped',
       !(await win.isVisible(t('new-project-host')))
       && await win.isVisible(t('new-project-choice')));
     check('the single host is selected rather than left unset',
       await win.evaluate(() => window.__newProjectHost()) === 'local');
+
+    await win.evaluate(async (profiles) => {
+      await require('electron').ipcRenderer.invoke('save-ssh-profiles', profiles);
+    }, savedProfiles);
+    await win.waitForTimeout(200);
 
     // Add a host and reopen: now there is a real choice, so it must be asked.
     await win.evaluate(async () => {
@@ -1109,13 +1202,18 @@ async function run() {
     check('a machine with no hosts at all points at the settings that fix it',
       /no-hosts-settings/.test(hostStepSrc) && /remoteOnly/.test(hostStepSrc));
 
-    await win.evaluate(async () => {
-      await require('electron').ipcRenderer.invoke('save-ssh-profiles', []);
-    });
+    // Put back exactly what this machine had, rather than leaving it empty.
+    await win.evaluate(async (profiles) => {
+      await require('electron').ipcRenderer.invoke('save-ssh-profiles', profiles);
+    }, savedProfiles);
     await win.evaluate(() => window.closeModal());
     await win.waitForTimeout(200);
     await win.click(t('new-project'));
-    await win.waitForTimeout(500);
+    await win.waitForTimeout(700);
+    if (await win.isVisible(t('new-project-host'))) {
+      await win.click('#new-project-host .kind-option');
+      await win.waitForTimeout(400);
+    }
 
     await win.click(t('kind-framework'));
     check('choosing a framework reveals the form and its footer',
@@ -1404,7 +1502,14 @@ async function run() {
     check('SSH Hosts tab reveals its panel',
       await win.isVisible('#ssh-profile-list') && await win.isVisible(t('ssh-add')));
 
-    const sshBefore = await win.evaluate(() => window.__sshProfiles().length);
+    // Snapshot the REAL stored profiles, from the main process, which owns them.
+    // The previous version counted the renderer's in-memory array and later
+    // saved that array back — and if it was stale or not yet loaded, saving it
+    // wiped the file. This machine has real hosts configured; a test must put
+    // them back exactly, not approximately.
+    const sshSnapshot = await app.evaluate(async ({ ipcMain }) =>
+      ipcMain._invokeHandlers.get('get-ssh-profiles')({}));
+    const sshBefore = sshSnapshot.length;
 
     await win.click(t('ssh-add'));
     await win.waitForTimeout(300);
@@ -1664,16 +1769,17 @@ async function run() {
     check('saving profiles disposes cached connections',
       /disposeExecutors\(\)/.test(saveHandler.slice(0, 700)));
 
-    // Clean up so the suite does not leave hosts behind on a real machine.
-    await win.evaluate(async (n) => {
-      const list = window.__sshProfiles();
-      while (list.length > n) list.pop();
-      await require('electron').ipcRenderer.invoke('save-ssh-profiles', list);
-    }, sshBefore);
+    // Restore the exact snapshot rather than trimming whatever the renderer
+    // happens to hold.
+    await win.evaluate(async (profiles) => {
+      await require('electron').ipcRenderer.invoke('save-ssh-profiles', profiles);
+    }, sshSnapshot);
     await win.waitForTimeout(200);
-    const cleaned = await win.evaluate(() => window.__sshProfiles().length);
-    check('the suite leaves no test hosts behind', cleaned === sshBefore,
-      `${cleaned} vs ${sshBefore}`);
+    const cleaned = await app.evaluate(async ({ ipcMain }) =>
+      ipcMain._invokeHandlers.get('get-ssh-profiles')({}));
+    check('the suite restores the hosts exactly as it found them',
+      JSON.stringify(cleaned) === JSON.stringify(sshSnapshot),
+      `${cleaned.length} vs ${sshSnapshot.length}`);
 
     await win.click(t('settings-tab-ai'));
     await win.waitForTimeout(150);
@@ -2133,9 +2239,17 @@ async function run() {
     // its surroundings replaced.
     if (expectedProjects > 0) {
       console.log('\ntile terminals');
-      const target = (statusJson.projects || [])[0].name;
+      // Must be a project that actually HAS a tile. This used to take the first
+      // project the CLI listed, which on this machine is disabled — and a
+      // disabled project is deliberately hidden, so there was no tile for the
+      // terminal to attach to and the check failed on a correct behaviour.
+      const target = await win.evaluate(() => window.__visibleProjects()[0]?.name);
+      if (!target) {
+        check('a visible project exists to host a terminal', false,
+          'no visible projects — this check cannot prove anything here');
+      }
 
-      const opened = await win.evaluate(async (name) => {
+      const opened = target ? await win.evaluate(async (name) => {
         await window.openAgentTerminal({
           title: '✨ ' + name, status: 'test', cwd: '/tmp', command: 'sh',
           args: ['-c', 'echo tile-hello; sleep 120'],
@@ -2149,9 +2263,11 @@ async function run() {
           headerButton: document.getElementById('terminals-button').style.display,
           modalOpen: document.getElementById('build-terminal-modal').classList.contains('show')
         };
-      }, target);
-      check('the agent terminal opens inside the project tile', opened.inTile,
-        JSON.stringify(opened));
+      }, target) : { inTile: false, tabs: 0, headerButton: 'none', modalOpen: false };
+      if (target) {
+        check('the agent terminal opens inside the project tile', opened.inTile,
+          JSON.stringify(opened));
+      }
       await screenshot(win, '08-tile-terminal');
       check('a tile session stays out of the modal and its tab bar',
         opened.tabs === 0 && !opened.modalOpen && opened.headerButton === 'none',
