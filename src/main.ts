@@ -1513,87 +1513,39 @@ function composePathFor(projectName: string): string | null {
   return fs.existsSync(composePath) ? composePath : null;
 }
 
-// Display metadata (friendly name, description, emoji) is a GUI-only concern —
-// the CLI no longer writes or reports an x-metadata block, and `podium status`
-// does not return these fields. The GUI keeps them in the project's
-// docker-compose.yaml under the compose-standard `x-` extension prefix, which
-// Docker ignores, and reads them back itself.
-ipcMain.handle('get-project-metadata', async (event: IpcMainInvokeEvent, projectName: string): Promise<ProjectMetadata | null> => {
-  try {
-    const composePath = composePathFor(projectName);
-    if (!composePath) return null;
+// Display metadata is no longer read here. `podium status --json-output` carries
+// it per project (CLI 36109a7), so the GUI parses it alongside operational state
+// instead of opening each project's docker-compose.yaml. That removed a
+// per-project filesystem read, the cache it fed, and the two bugs that existed
+// only because the two arrived by different routes.
 
-    const content = fs.readFileSync(composePath, 'utf8');
-    const block = content.match(/x-metadata:\s*\n([\s\S]*?)(?=\n\s*\S+:\s*$|\n\S|$)/);
-    const body = block?.[1];
-    if (!body) return null;
+// Metadata writes go through `podium set-metadata` (CLI 36109a7) rather than
+// editing docker-compose.yaml here.
+//
+// The careful part — replacing only the three keys the GUI owns and leaving the
+// CLI's last_on and status untouched — is now a property of that command, which
+// writes one key at a time through the CLI's own helper. It used to be a
+// property of three targeted regexes in this file. The test pinning that
+// behaviour still earns its place; it tests the CLI's code now, which is where
+// it belongs.
+//
+// This was also the last filesystem write, which is what lets a remote host
+// need no file access at all.
+ipcMain.handle('update-project-metadata', async (
+  _event: IpcMainInvokeEvent,
+  projectName: string,
+  metadata: ProjectMetadata
+): Promise<{ success: boolean; error?: string }> => {
+  const args = ['set-metadata', projectName, '--json-output'];
+  if (metadata.emoji) args.push('--emoji', metadata.emoji);
+  if (metadata.display_name) args.push('--name', metadata.display_name);
+  if (metadata.description) args.push('--description', metadata.description);
 
-    const read = (key: string): string => {
-      const match = body.match(new RegExp(`^\\s*${key}:\\s*"?(.*?)"?\\s*$`, 'm'));
-      return match?.[1] ?? '';
-    };
-
-    return {
-      display_name: read('name'),
-      description: read('description'),
-      emoji: read('emoji'),
-      last_on: read('last_on'),
-      status: read('status')
-    };
-  } catch (error) {
-    debugLog('Error reading project metadata', { projectName, error: (error as Error).message });
-    return null;
+  const result = await runPodium(args);
+  if (result.code !== 0) {
+    return { success: false, error: result.stderr || result.stdout || 'set-metadata failed' };
   }
-});
-
-// Handler for updating project metadata directly in docker-compose.yaml
-ipcMain.handle('update-project-metadata', async (event: IpcMainInvokeEvent, projectName: string, metadata: ProjectMetadata): Promise<{ success: boolean; error?: string }> => {
-  try {
-    const composePath = composePathFor(projectName);
-    if (!composePath) {
-      return { success: false, error: 'Project docker-compose.yaml not found' };
-    }
-
-    let content = fs.readFileSync(composePath, 'utf8');
-
-    // Escape double quotes so a name like `My "Cool" App` can't break the YAML.
-    const quote = (value: string): string => `"${(value || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
-
-    if (/x-metadata:/.test(content)) {
-      content = content.replace(/(x-metadata:\s*\n(?:[\s\S]*?\n)??\s*emoji:\s*).*/, `$1${quote(metadata.emoji)}`);
-      content = content.replace(/(x-metadata:\s*\n(?:[\s\S]*?\n)??\s*name:\s*).*/, `$1${quote(metadata.display_name)}`);
-      content = content.replace(/(x-metadata:\s*\n(?:[\s\S]*?\n)??\s*description:\s*).*/, `$1${quote(metadata.description)}`);
-    } else {
-      // `podium new` no longer emits an x-metadata block, so create one on the
-      // web-facing service, matching the indentation the CLI's compose uses.
-      const service = content.match(/^(\s{2})(\w[\w-]*):\s*\n(\s{4})image:/m);
-      if (!service) {
-        return { success: false, error: 'Could not locate a service to attach metadata to' };
-      }
-
-      const indent = service[3];
-      const block = [
-        `${indent}x-metadata:`,
-        `${indent}  type: "podium-project"`,
-        `${indent}  version: "1.0.0"`,
-        `${indent}  emoji: ${quote(metadata.emoji)}`,
-        `${indent}  name: ${quote(metadata.display_name)}`,
-        `${indent}  description: ${quote(metadata.description)}`,
-        ''
-      ].join('\n');
-
-      // Insert immediately after the service's image line.
-      content = content.replace(/^(\s{4}image:.*\n)/m, `$1${block}`);
-    }
-
-    fs.writeFileSync(composePath, content, 'utf8');
-
-    debugLog('Updated project metadata', { projectName, metadata, composePath });
-    return { success: true };
-  } catch (error) {
-    debugLog('Error updating project metadata', { error: (error as Error).message, stack: (error as Error).stack });
-    return { success: false, error: (error as Error).message };
-  }
+  return { success: true };
 });
 
 // Handler for getting service statistics
