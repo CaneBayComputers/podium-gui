@@ -90,6 +90,12 @@ document.addEventListener('DOMContentLoaded', (): void => {
         showAboutVersions()
     ])).then(() => {
         setupEventListeners();
+
+        // Deliberately not awaited. It talks to GitHub, and nothing on screen
+        // depends on the answer — putting it on the startup path would delay the
+        // dashboard for a check nobody has asked for yet. The badge appears when
+        // it lands.
+        checkUpdatesInBackground();
         
         // Show debug indicator if in debug mode
         if (isDebugMode) {
@@ -2551,6 +2557,19 @@ function renderSshCredentials(): void {
     }
 }
 
+// Hosts and profiles are separate lists that happen to reference each other,
+// and stacking them made the panel a scroll. Two subtabs, hosts first because
+// that is what people come here to add.
+function showRemotesTab(which: 'hosts' | 'profiles'): void {
+    document.querySelectorAll('[data-remotes-panel]').forEach((el) => {
+        (el as HTMLElement).style.display =
+            el.getAttribute('data-remotes-panel') === which ? '' : 'none';
+    });
+    document.querySelectorAll('[data-remotes-tab]').forEach((el) => {
+        el.classList.toggle('active', el.getAttribute('data-remotes-tab') === which);
+    });
+}
+
 async function addSshCredential(): Promise<void> {
     sshCredentials.push({
         id: `cred-${Date.now()}`, label: '', user: '', authType: 'key', keyPath: ''
@@ -3394,87 +3413,6 @@ const terminalSessions = new Map<string, TerminalSession>();
 let activeTerminalId = '';
 let terminalResizeHandler: (() => void) | null = null;
 
-// The modal only ever knows about its own sessions. Tile sessions are visible
-// in their project's card, so putting them in the tab bar too would give one
-// terminal two homes and two × buttons that mean different things.
-function modalSessions(): TerminalSession[] {
-    return [...terminalSessions.values()].filter((s) => s.host === 'modal');
-}
-
-function updateTerminalsButton(): void {
-    const button = document.getElementById('terminals-button');
-    if (!button) return;
-
-    const live = modalSessions().length;
-    button.style.display = live > 0 ? '' : 'none';
-    button.textContent = live > 1 ? `🖥️ Terminals (${live})` : '🖥️ Terminals';
-}
-
-function renderTerminalTabs(): void {
-    const bar = document.getElementById('terminal-tabs');
-    if (!bar) return;
-
-    bar.innerHTML = modalSessions().map((session) => `
-        <div class="terminal-tab${session.id === activeTerminalId ? ' active' : ''}${session.exited ? ' exited' : ''}"
-             onclick="activateTerminal('${session.id}')"
-             data-testid="terminal-tab-${escapeHtml(session.key)}">
-            <span>${escapeHtml(session.label)}</span>
-            <button class="tab-close" title="End this session"
-                    onclick="event.stopPropagation(); killTerminal('${session.id}')">&times;</button>
-        </div>
-    `).join('');
-
-    bar.style.display = modalSessions().length > 1 ? 'flex' : 'none';
-    updateTerminalsButton();
-}
-
-function fitTerminal(session: TerminalSession): void {
-    try {
-        session.fit.fit();
-        ipcRenderer.invoke('pty-resize', session.id, session.term.cols, session.term.rows);
-    } catch (error) {
-        // A fit racing teardown is not worth surfacing.
-    }
-}
-
-function activateTerminal(id: string): void {
-    const session = terminalSessions.get(id);
-    if (!session) return;
-
-    activeTerminalId = id;
-    terminalSessions.forEach((s) => {
-        s.pane.style.display = s.id === id ? 'block' : 'none';
-    });
-
-    const status = document.getElementById('build-terminal-status');
-    if (status) status.textContent = session.status;
-
-    const title = document.getElementById('build-terminal-title');
-    if (title) title.textContent = modalSessions().length > 1 ? '🖥️ Terminals' : session.label;
-
-    renderTerminalTabs();
-
-    // Fit only once visible — measuring a hidden pane gives the wrong rows.
-    setTimeout(() => {
-        fitTerminal(session);
-        session.term.focus();
-    }, 30);
-}
-
-function showTerminals(): void {
-    const open = modalSessions();
-    if (open.length === 0) return;
-    showModal('build-terminal-modal');
-    const active = terminalSessions.get(activeTerminalId);
-    activateTerminal(active && active.host === 'modal' ? activeTerminalId : open[0]!.id);
-}
-
-// Closing the window does NOT end the sessions — that is what the tab × is for.
-function hideTerminals(): void {
-    closeModal();
-    updateTerminalsButton();
-    loadProjects();
-}
 
 function killTerminal(id: string): void {
     const session = terminalSessions.get(id);
@@ -3492,26 +3430,10 @@ function killTerminal(id: string): void {
         terminalResizeHandler = null;
     }
 
-    if (session.host === 'tile') {
-        updateTerminalsButton();
-        loadProjects();
-        return;
-    }
-
-    const remaining = modalSessions();
-    if (remaining.length === 0) {
-        activeTerminalId = '';
-        // Clear the bar too. Leaving the last tab's markup behind meant a
-        // hidden-but-present tab for a session that no longer exists.
-        renderTerminalTabs();
-        closeModal();
-    } else if (activeTerminalId === id) {
-        activateTerminal(remaining[0]!.id);
-    } else {
-        renderTerminalTabs();
-    }
-
-    updateTerminalsButton();
+    // Every terminal lives in a project tile now, so closing one is just
+    // removing it from that card. There is no window to tidy up, no tab bar to
+    // reconcile, and no "which one is active" to track.
+    if (activeTerminalId === id) activeTerminalId = '';
     loadProjects();
 }
 
@@ -3577,6 +3499,17 @@ function refitTileTerminals(): void {
             if (session.host === 'tile' && !session.collapsed) fitTerminal(session);
         }
     }, 30);
+}
+
+// Tile terminals resize when a tile expands or the window changes, so the pty
+// has to be told the new size or its output wraps at the old width.
+function fitTerminal(session: TerminalSession): void {
+    try {
+        session.fit.fit();
+        ipcRenderer.invoke('pty-resize', session.id, session.term.cols, session.term.rows);
+    } catch (error) {
+        // A fit racing teardown is not worth surfacing.
+    }
 }
 
 function tileTerminalStatus(session: TerminalSession): void {
@@ -3721,8 +3654,8 @@ async function openAgentTerminal(options: AgentTerminalOptions): Promise<void> {
             existing.term.focus();
             return;
         }
-        showModal('build-terminal-modal');
-        activateTerminal(existing.id);
+        // Its tile is gone — the project was removed or filtered out of view.
+        existing.term.focus();
         return;
     }
 
@@ -3775,8 +3708,10 @@ async function openAgentTerminal(options: AgentTerminalOptions): Promise<void> {
         session.wrapper!.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         setTimeout(() => { fitTerminal(session); term.focus(); }, 30);
     } else {
-        showModal('build-terminal-modal');
-        activateTerminal(id);
+        // Terminals live in project tiles now. Without one there is nowhere to
+        // put it, so say what to run instead of starting something invisible.
+        showError(`No tile for ${options.tileProject || 'this project'}. `
+            + `Run it yourself: ${options.fallbackHint}`);
     }
 
     const started = await ipcRenderer.invoke('pty-start-on', options.hostId || 'local',
@@ -3790,7 +3725,7 @@ async function openAgentTerminal(options: AgentTerminalOptions): Promise<void> {
         term.writeln(`\x1b[36m  ${options.fallbackHint || `cd ${options.cwd} && ${options.command} ${options.args.join(' ')}`}\x1b[0m`);
         session.status = 'Embedded terminal unavailable — run the command above.';
         session.exited = true;
-        if (inTile) tileTerminalStatus(session); else activateTerminal(id);
+        tileTerminalStatus(session);
     }
 }
 
@@ -3847,15 +3782,22 @@ async function modifyWithAI(projectName: string): Promise<void> {
 // Phase 3 of create: hand the original idea to the agent inside the finished
 // project, which picks up the AGENTS.md handoff file written there.
 async function openBuildTerminal(projectName: string, idea: string): Promise<void> {
-    const projectsDir = await ipcRenderer.invoke('get-projects-dir');
+    const host = newProjectHost || 'local';
+    const projectsDir = await ipcRenderer.invoke('get-projects-dir-on', host);
+
+    // The grid has to hold the new project before its tile can host a terminal.
+    await loadProjects();
+
     await openAgentTerminal({
         title: `🛠️ ${projectName}`,
         status: 'Session running — type to answer the agent.',
         cwd: `${projectsDir}/${projectName}`,
         command: 'podium',
         args: ['ai', idea],
-        sessionKey: `build-${projectName}`,
-        fallbackHint: `cd ${projectsDir}/${projectName} && podium ai`
+        sessionKey: `build-${host}-${projectName}`,
+        fallbackHint: `cd ${projectsDir}/${projectName} && podium ai`,
+        tileProject: projectName,
+        hostId: host
     });
 }
 
@@ -3891,7 +3833,6 @@ ipcRenderer.on('pty-exit', (_event: any, payload: { sessionId: string; exitCode:
         const status = document.getElementById('build-terminal-status');
         if (status) status.textContent = session.status;
     }
-    renderTerminalTabs();
     loadProjects();
 });
 
@@ -4846,6 +4787,10 @@ async function submitEditProject(): Promise<void> {
 (window as any).updateSshProfile = updateSshProfile;
 (window as any).removeSshProfile = removeSshProfile;
 (window as any).testSshProfile = testSshProfile;
+(window as any).showRemotesTab = showRemotesTab;
+(window as any).showUpdates = showUpdates;
+(window as any).runUpdate = runUpdate;
+(window as any).__updateStatus = () => updateStatus;
 (window as any).addSshCredential = addSshCredential;
 (window as any).updateSshCredential = updateSshCredential;
 (window as any).removeSshCredential = removeSshCredential;
@@ -4863,9 +4808,6 @@ async function submitEditProject(): Promise<void> {
 (window as any).handleCreateFromChoice = handleCreateFromChoice;
 (window as any).renderClassification = renderClassification;
 (window as any).setCreateStage = setCreateStage;
-(window as any).hideTerminals = hideTerminals;
-(window as any).showTerminals = showTerminals;
-(window as any).activateTerminal = activateTerminal;
 (window as any).killTerminal = killTerminal;
 (window as any).closeActiveTerminal = closeActiveTerminal;
 (window as any).openAgentTerminal = openAgentTerminal;
@@ -4948,14 +4890,91 @@ function toggleDropdown(): void {
     }
 }
 
-function showAboutModal(): void {
-    console.log('DEBUG: showAboutModal called');
-    const modal = document.getElementById('about-modal');
-    console.log('DEBUG: about-modal element found:', !!modal);
-    if (modal) {
-        modal.classList.add('show');
-        console.log('DEBUG: about-modal show class added');
+// --- Updates ---------------------------------------------------------------
+
+let updateStatus: any[] = [];
+
+// Checked once at startup, in the background. A network call on the critical
+// path would delay the dashboard for something nobody asked for yet.
+async function checkUpdatesInBackground(): Promise<void> {
+    try {
+        updateStatus = await ipcRenderer.invoke('check-updates') || [];
+    } catch {
+        updateStatus = [];
     }
+    const behind = updateStatus.filter((r) => r.behind > 0);
+    const badge = document.getElementById('update-badge');
+    if (badge) {
+        // Only shown when there is something to do. A permanent badge is
+        // wallpaper within a day.
+        badge.style.display = behind.length > 0 ? '' : 'none';
+        badge.textContent = behind.length > 0 ? String(behind.length) : '';
+    }
+}
+
+function renderUpdates(): void {
+    const host = document.getElementById('updates-list');
+    if (!host) return;
+
+    if (updateStatus.length === 0) {
+        host.innerHTML = `<p class="app-list-empty">No Podium checkouts found to update.</p>`;
+        return;
+    }
+
+    host.innerHTML = updateStatus.map((r) => {
+        let state: string;
+        let cls: string;
+        if (r.error)            { state = r.error; cls = 'bad'; }
+        else if (r.behind > 0)  { state = `${r.behind} commit${r.behind === 1 ? '' : 's'} behind`; cls = 'bad'; }
+        else if (r.ahead > 0)   { state = `${r.ahead} ahead — nothing to pull`; cls = 'ok'; }
+        else                    { state = 'up to date'; cls = 'ok'; }
+
+        return `
+        <div class="update-row" data-testid="update-${escapeHtml(r.id)}">
+            <div class="update-head">
+                <strong>${escapeHtml(r.label)}</strong>
+                <span class="update-branch">${escapeHtml(r.branch)} @ ${escapeHtml(r.local || '?')}</span>
+            </div>
+            <p class="ssh-status ${cls}" data-testid="update-state-${escapeHtml(r.id)}">${escapeHtml(state)}</p>
+            ${r.dirty ? `<p class="settings-note">Uncommitted changes — commit or stash before updating.</p>` : ''}
+            ${r.behind > 0 && !r.dirty
+                ? `<button class="btn btn-primary btn-small" data-testid="update-run-${escapeHtml(r.id)}"
+                           onclick="runUpdate('${escapeHtml(r.id)}')">Update</button>`
+                : ''}
+        </div>`;
+    }).join('');
+}
+
+async function showUpdates(): Promise<void> {
+    showModal('updates-modal');
+    const host = document.getElementById('updates-list');
+    if (host) host.innerHTML = `<p class="app-list-empty">Checking…</p>`;
+    await checkUpdatesInBackground();
+    renderUpdates();
+}
+
+async function runUpdate(repoId: string): Promise<void> {
+    const row = document.querySelector(`[data-testid="update-state-${repoId}"]`);
+    if (row) { row.textContent = 'Updating…'; row.className = 'ssh-status testing'; }
+
+    const result = await ipcRenderer.invoke('update-repo', repoId);
+    if (result.ok) {
+        showSuccess(result.detail);
+    } else {
+        // A refusal or a conflict is shown as-is. Summarising git's own message
+        // loses the part that says which file, which is the part that matters.
+        showError(result.detail);
+    }
+    await checkUpdatesInBackground();
+    renderUpdates();
+}
+
+function showAboutModal(): void {
+    const modal = document.getElementById('about-modal');
+    if (modal) modal.classList.add('show');
+    // Versions are read from the CLI, so refresh them each time rather than
+    // showing whatever was true when the app started.
+    showAboutVersions();
     // Close dropdown when opening modal (if it exists)
     const dropdown = document.getElementById('help-dropdown');
     if (dropdown) {

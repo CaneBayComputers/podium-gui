@@ -840,6 +840,110 @@ ipcMain.handle('get-podium-status', async (): Promise<string> => checkPodiumStat
 // Whether this machine can run Podium locally at all. The dashboard uses it to
 // decide whether "local" is an option when creating a project, and to explain
 // an empty project list on a machine with no hosts configured yet.
+// --- Updates ---------------------------------------------------------------
+//
+// Both Podium repos are source checkouts, so an update is a git pull. This
+// reports where each one stands relative to its remote, and can pull them.
+//
+// Read-only by default: checking must never modify a working tree. `git fetch`
+// is the only network call, and it touches remote refs, not the checkout.
+
+function repoPaths(): Array<{ id: string; label: string; dir: string }> {
+  const repos: Array<{ id: string; label: string; dir: string }> = [];
+
+  // The GUI is running from its own checkout, so find it relative to this file
+  // rather than guessing a path.
+  const guiDir = path.resolve(__dirname, '..');
+  if (fs.existsSync(path.join(guiDir, '.git'))) {
+    repos.push({ id: 'gui', label: 'Podium GUI', dir: guiDir });
+  }
+
+  // The CLI is wherever `podium` resolves to. The binary is a symlink into the
+  // install, so follow it rather than assuming /usr/local/share or /opt.
+  try {
+    const podium = resolvePodium().command;
+    const real = fs.realpathSync(podium);           // <install>/src/podium
+    const cliDir = path.resolve(path.dirname(real), '..');
+    if (fs.existsSync(path.join(cliDir, '.git'))) {
+      repos.push({ id: 'cli', label: 'Podium CLI', dir: cliDir });
+    }
+  } catch {
+    // No podium on PATH, or not a checkout — normal on Windows.
+  }
+  return repos;
+}
+
+function git(dir: string, args: string[]): { code: number; out: string } {
+  try {
+    const out = execSync(`git ${args.join(' ')}`, {
+      cwd: dir, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 30000
+    });
+    return { code: 0, out: out.trim() };
+  } catch (error: any) {
+    return { code: error.status ?? 1, out: ((error.stdout || '') + (error.stderr || '')).trim() };
+  }
+}
+
+interface RepoStatus {
+  id: string; label: string; dir: string;
+  branch: string; local: string; remote: string;
+  behind: number; ahead: number;
+  dirty: boolean;
+  error?: string;
+}
+
+ipcMain.handle('check-updates', async (): Promise<RepoStatus[]> => {
+  return repoPaths().map(({ id, label, dir }) => {
+    const branch = git(dir, ['rev-parse', '--abbrev-ref', 'HEAD']).out;
+    const base: RepoStatus = {
+      id, label, dir, branch, local: '', remote: '', behind: 0, ahead: 0, dirty: false
+    };
+
+    // Fetch touches remote-tracking refs only; the working tree is untouched.
+    const fetched = git(dir, ['fetch', '--quiet', 'origin', branch]);
+    if (fetched.code !== 0) {
+      return { ...base, error: `Could not reach the remote: ${fetched.out.split('\n')[0]}` };
+    }
+
+    const local = git(dir, ['rev-parse', '--short', 'HEAD']).out;
+    const remote = git(dir, ['rev-parse', '--short', `origin/${branch}`]).out;
+    // Counted both ways: being ahead is not a problem to fix by pulling, and
+    // saying "out of date" to someone with unpushed work would be wrong.
+    const counts = git(dir, ['rev-list', '--left-right', '--count', `HEAD...origin/${branch}`]).out;
+    const [ahead, behind] = counts.split(/\s+/).map((n) => parseInt(n, 10) || 0);
+    const dirty = git(dir, ['status', '--porcelain']).out !== '';
+
+    return { ...base, local, remote, ahead: ahead || 0, behind: behind || 0, dirty };
+  });
+});
+
+// Pull one repo. Refuses rather than risking someone's uncommitted work.
+ipcMain.handle('update-repo', async (
+  _event: IpcMainInvokeEvent,
+  repoId: string
+): Promise<{ ok: boolean; detail: string }> => {
+  const repo = repoPaths().find((r) => r.id === repoId);
+  if (!repo) return { ok: false, detail: `No checkout found for ${repoId}.` };
+
+  // A dirty tree is the case where a pull can destroy work, and it is also the
+  // case where the fix is a human decision — commit, stash or discard — not
+  // something to guess at.
+  if (git(repo.dir, ['status', '--porcelain']).out !== '') {
+    return { ok: false, detail:
+      `${repo.label} has uncommitted changes. Commit or stash them first — `
+      + `pulling over them could lose work.` };
+  }
+
+  const branch = git(repo.dir, ['rev-parse', '--abbrev-ref', 'HEAD']).out;
+  // --ff-only so a divergent history stops instead of producing a merge commit
+  // or a conflicted tree that the person then has to unpick by hand.
+  const pulled = git(repo.dir, ['pull', '--ff-only', 'origin', branch]);
+  if (pulled.code !== 0) {
+    return { ok: false, detail: pulled.out.split('\n').slice(0, 4).join(' ') || 'git pull failed' };
+  }
+  return { ok: true, detail: pulled.out.split('\n')[0] || 'Updated.' };
+});
+
 ipcMain.handle('get-platform-capabilities', async (): Promise<{
   platform: string; localPodium: boolean; remoteOnly: boolean;
 }> => ({

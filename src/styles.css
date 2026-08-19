@@ -1890,6 +1890,58 @@ span.status-indicator {
     flex: 0 0 auto;
 }
 
+.update-badge {
+    display: inline-block;
+    min-width: 1.1rem;
+    margin-left: 0.35rem;
+    padding: 0 0.3rem;
+    font-size: 0.7rem;
+    line-height: 1.1rem;
+    text-align: center;
+    color: #000;
+    background: var(--neon-orange);
+    border-radius: 999px;
+}
+
+.update-row {
+    padding: 0.8rem 0;
+    border-bottom: 1px solid var(--border-subtle);
+}
+.update-row:last-child { border-bottom: none; }
+.update-head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.6rem;
+    margin-bottom: 0.3rem;
+}
+.update-branch {
+    font-family: monospace;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+}
+
+.settings-subtabs {
+    display: flex;
+    gap: 0.4rem;
+    margin-bottom: 1rem;
+    border-bottom: 1px solid var(--border-subtle);
+}
+.settings-subtab {
+    padding: 0.45rem 0.9rem;
+    font-family: inherit;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    cursor: pointer;
+}
+.settings-subtab:hover { color: var(--text-primary); }
+.settings-subtab.active {
+    color: var(--neon-cyan);
+    border-bottom-color: var(--neon-cyan);
+}
+
 #services-host {
     margin-left: 0.75rem;
     padding: 0.3rem 0.55rem;
