@@ -2831,6 +2831,11 @@ async function showSettings(tab: 'appearance' | 'layout' | 'hosts' | 'ai' = 'app
 
     const dictBox = document.getElementById('dictation-enabled') as HTMLInputElement | null;
     if (dictBox) dictBox.checked = dictationEnabled();
+    // The panel reflects the live state; reopening it must not reset one.
+    if (dictationEnabled() && whisperPipeline) {
+        dictationState = 'ready';
+        void listMicrophones();
+    }
     renderDictationStatus();
     switchSettingsTab(tab);
     // Populate BEFORE showing. Loading afterwards made Appearance open a beat
@@ -3732,6 +3737,8 @@ async function setDictationEnabled(on: boolean): Promise<void> {
         // would punish a person for changing their mind.
         try { await whisperPipeline?.dispose?.(); } catch { /* nothing to free */ }
         whisperPipeline = null;
+        dictationState = 'off';
+        stopLevelMeter();
         // A recording in flight has nowhere to go now.
         if (activeRecorder) {
             try { activeRecorder.recorder.stop(); } catch { /* already stopped */ }
@@ -3742,29 +3749,140 @@ async function setDictationEnabled(on: boolean): Promise<void> {
         return;
     }
 
-    renderDictationStatus();
     // Fetch it now rather than at first use, so the wait happens where it was
     // asked for and can be watched.
     if (!whisperPipeline) {
+        dictationState = 'downloading';
+        dictationDetail = 'Downloading speech model…';
+        renderDictationStatus();
         try {
-            await loadWhisper((msg) => renderDictationStatus(msg));
-            renderDictationStatus();
+            await loadWhisper((msg) => {
+                dictationState = msg ? 'downloading' : 'starting';
+                dictationDetail = msg;
+                renderDictationStatus();
+            });
+            dictationState = 'ready';
         } catch (error) {
-            renderDictationStatus(`Could not download the model: ${(error as Error).message}`);
+            dictationState = 'error';
+            dictationDetail = `Could not load the model: ${(error as Error).message}`;
         }
+    } else {
+        dictationState = 'ready';
     }
+
+    renderDictationStatus();
+    if (dictationState === 'ready') await listMicrophones();
     refreshMicButtons();
 }
 
-function renderDictationStatus(progress?: string): void {
+// --- Microphone selection and level ----------------------------------------
+
+function dictationDeviceId(): string { return localStorage.getItem('podium-mic-device') || ''; }
+function dictationGain(): number { return parseFloat(localStorage.getItem('podium-mic-gain') || '1') || 1; }
+
+function setDictationDevice(id: string): void {
+    localStorage.setItem('podium-mic-device', id);
+    startLevelMeter();
+}
+
+function setDictationGain(value: string): void {
+    localStorage.setItem('podium-mic-gain', value);
+    const label = document.getElementById('dictation-gain-value');
+    if (label) label.textContent = `${parseFloat(value).toFixed(1)}×`;
+}
+
+// Labels are only populated once permission has been granted, so ask first —
+// otherwise the list is a set of blank entries with opaque ids.
+async function listMicrophones(): Promise<void> {
+    const select = document.getElementById('dictation-device') as HTMLSelectElement | null;
+    if (!select) return;
+    try {
+        const probe = await navigator.mediaDevices.getUserMedia({ audio: true });
+        probe.getTracks().forEach((t) => t.stop());
+    } catch {
+        select.innerHTML = '<option value="">No microphone access</option>';
+        return;
+    }
+
+    const devices = (await navigator.mediaDevices.enumerateDevices())
+        .filter((d) => d.kind === 'audioinput');
+    select.innerHTML = devices.map((d, i) =>
+        `<option value="${escapeHtml(d.deviceId)}">${escapeHtml(d.label || `Microphone ${i + 1}`)}</option>`).join('');
+    if (dictationDeviceId()) select.value = dictationDeviceId();
+
+    const gainInput = document.getElementById('dictation-gain') as HTMLInputElement | null;
+    if (gainInput) gainInput.value = String(dictationGain());
+    setDictationGain(String(dictationGain()));
+    startLevelMeter();
+}
+
+let levelStream: MediaStream | null = null;
+let levelCtx: AudioContext | null = null;
+let levelTimer: number | null = null;
+
+// A live level bar, because "is this microphone the one that hears me" cannot be
+// answered by a device name — several will be plausible and only one is plugged in.
+async function startLevelMeter(): Promise<void> {
+    stopLevelMeter();
+    const bar = document.getElementById('dictation-level');
+    if (!bar) return;
+
+    try {
+        const id = dictationDeviceId();
+        levelStream = await navigator.mediaDevices.getUserMedia({
+            audio: id ? { deviceId: { exact: id } } : true
+        });
+        levelCtx = new AudioContext();
+        const src = levelCtx.createMediaStreamSource(levelStream);
+        const analyser = levelCtx.createAnalyser();
+        analyser.fftSize = 512;
+        src.connect(analyser);
+
+        const data = new Uint8Array(analyser.frequencyBinCount);
+        levelTimer = window.setInterval(() => {
+            analyser.getByteTimeDomainData(data);
+            let peak = 0;
+            for (const v of data) peak = Math.max(peak, Math.abs(v - 128) / 128);
+            bar.style.width = `${Math.min(100, peak * dictationGain() * 100)}%`;
+        }, 100);
+    } catch (error) {
+        bar.style.width = '0%';
+    }
+}
+
+function stopLevelMeter(): void {
+    if (levelTimer !== null) { clearInterval(levelTimer); levelTimer = null; }
+    levelStream?.getTracks().forEach((t) => t.stop());
+    levelStream = null;
+    void levelCtx?.close();
+    levelCtx = null;
+}
+
+// An explicit state rather than inferring one from whether the pipeline exists.
+//
+// Inferring it meant anything that re-rendered mid-download — switching settings
+// tabs, for one — replaced the progress with a bare "Preparing…" that then never
+// changed. It read as stuck because there was nothing left to say otherwise.
+type DictationState = 'off' | 'downloading' | 'starting' | 'ready' | 'error';
+let dictationState: DictationState = 'off';
+let dictationDetail = '';
+
+function renderDictationStatus(): void {
     const el = document.getElementById('dictation-status');
+    const group = document.getElementById('dictation-device-group');
     if (!el) return;
-    if (!dictationEnabled()) { el.innerHTML = ''; return; }
-    el.innerHTML = progress
-        ? `<p class="ssh-status testing" data-testid="dictation-progress">${escapeHtml(progress)}</p>`
-        : whisperPipeline
-            ? `<p class="ssh-status ok" data-testid="dictation-ready">Ready. Turning this off frees the memory; the download stays cached.</p>`
-            : `<p class="ssh-status testing">Preparing…</p>`;
+
+    if (group) group.style.display = dictationState === 'ready' ? '' : 'none';
+
+    const line: Record<DictationState, string> = {
+        off: '',
+        // Percentage included so a slow connection still looks like movement.
+        downloading: `<p class="ssh-status testing" data-testid="dictation-progress">${escapeHtml(dictationDetail)}</p>`,
+        starting: `<p class="ssh-status testing" data-testid="dictation-progress">Starting the model…</p>`,
+        ready: `<p class="ssh-status ok" data-testid="dictation-ready">Ready</p>`,
+        error: `<p class="ssh-status bad" data-testid="dictation-error">${escapeHtml(dictationDetail)}</p>`
+    };
+    el.innerHTML = line[dictationState];
 }
 
 // Mic buttons exist only when dictation is on and ready. A button that responds
@@ -3845,7 +3963,10 @@ async function toggleDictation(button: HTMLElement): Promise<void> {
 
     let stream: MediaStream;
     try {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const chosen = dictationDeviceId();
+        stream = await navigator.mediaDevices.getUserMedia({
+            audio: chosen ? { deviceId: { exact: chosen } } : true
+        });
     } catch (error) {
         // Denied or absent. Saying which is the difference between "click allow"
         // and "this machine has no microphone".
@@ -3868,9 +3989,18 @@ async function toggleDictation(button: HTMLElement): Promise<void> {
     const processor = ctx.createScriptProcessor(4096, 1, 1);
     const blocks: Float32Array[] = [];
 
+    const gain = dictationGain();
     processor.onaudioprocess = (e) => {
-        // Copied, because the event's buffer is reused for the next block.
-        blocks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+        // Copied, because the event's buffer is reused for the next block. Gain
+        // is applied here rather than with a GainNode so the samples Whisper
+        // sees are the ones the level meter showed.
+        const block = new Float32Array(e.inputBuffer.getChannelData(0));
+        if (gain !== 1) {
+            for (let i = 0; i < block.length; i++) {
+                block[i] = Math.max(-1, Math.min(1, block[i]! * gain));
+            }
+        }
+        blocks.push(block);
     };
     source.connect(processor);
     // ScriptProcessor only runs while connected to a destination, even though
@@ -5234,6 +5364,16 @@ async function submitEditProject(): Promise<void> {
 (window as any).toggleDictation = toggleDictation;
 (window as any).__resampleTo16k = resampleTo16k;
 (window as any).setDictationEnabled = setDictationEnabled;
+(window as any).setDictationDevice = setDictationDevice;
+(window as any).setDictationGain = setDictationGain;
+(window as any).__dictationState = () => dictationState;
+// Test-only: drive the panel through each state without a 150MB download.
+(window as any).__setDictationState = (st: DictationState) => {
+    dictationState = st;
+    dictationDetail = st === 'downloading' ? 'Downloading speech model 42%'
+        : st === 'error' ? 'Could not load the model: test' : '';
+    renderDictationStatus();
+};
 (window as any).refreshMicButtons = refreshMicButtons;
 (window as any).__dictationEnabled = dictationEnabled;
 (window as any).loadFrameworkCatalog = loadFrameworkCatalog;

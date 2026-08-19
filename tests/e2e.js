@@ -445,6 +445,24 @@ async function run() {
       !/decodeAudioData/.test(rendererDict.replace(/\/\/[^\n]*/g, '')),
       'the renderer crashes on it; capture raw PCM instead');
 
+    // Status is an explicit state, not inferred from whether the pipeline
+    // object exists. Inferring it meant anything re-rendering mid-download —
+    // switching settings tabs, for one — replaced the progress with a bare
+    // "Preparing…" that then never changed, and read as stuck.
+    const dictStates = await win.evaluate(() => {
+      const seen = [];
+      for (const st of ['off', 'downloading', 'starting', 'ready', 'error']) {
+        window.__setDictationState?.(st);
+        seen.push(document.getElementById('dictation-status')?.innerHTML || '');
+      }
+      return seen;
+    });
+    check('every dictation state renders something distinct',
+      new Set(dictStates).size === dictStates.length,
+      `${new Set(dictStates).size} distinct of ${dictStates.length}`);
+    check('no dictation state renders a dead-end "Preparing"',
+      !dictStates.some((h) => /Preparing/.test(h)));
+
     // Off until asked for, because turning it on downloads 150MB.
     check('dictation is off until enabled',
       await win.evaluate(() => window.__dictationEnabled()) === false);
