@@ -230,9 +230,19 @@ function createWindow(): void {
 
   // Check if Podium CLI is installed and configured
   const podiumStatus: string = checkPodiumStatus();
-  debugLog('Podium status check result', { status: podiumStatus });
-  
-  if (podiumStatus === 'not-installed') {
+  debugLog('Podium status check result', { status: podiumStatus, platform: process.platform });
+
+  // Windows has no local Podium and never will: Podium is Docker plus bash
+  // scripts, and the deliberate decision is remote hosts rather than WSL. So
+  // the installer — which installs and configures a LOCAL CLI — has nothing to
+  // do there, and showing it would offer an install that cannot succeed.
+  //
+  // Go straight to the dashboard, which is remote-only on Windows. Configuring
+  // a host is part of adding an SSH profile instead.
+  if (process.platform === 'win32') {
+    debugLog('Loading index.html - Windows is remote-only, no local install to make');
+    mainWindow.loadFile(path.join(__dirname, '..', 'src', 'index.html'));
+  } else if (podiumStatus === 'not-installed') {
     debugLog('Loading installer.html - Podium not installed');
     mainWindow.loadFile(path.join(__dirname, '..', 'src', 'installer.html'));
   } else if (podiumStatus === 'not-configured') {
@@ -517,7 +527,19 @@ ipcMain.handle('test-ssh-profile', async (
       // login shell to have a usable PATH — and a login shell sources rc files,
       // putting the user's aliases and version-manager chatter into a stream
       // being parsed as JSON.
-      const probe = REMOTE_PODIUM_CANDIDATES.map((c) => `test -x ${c} && echo ${c}`).join('; ');
+      // Probe for the binary AND for configuration, in one round trip.
+      //
+      // Locally these are separate states — checkPodiumStatus returns
+      // not-installed, not-configured or configured, and the GUI shows the
+      // installer for the middle one. A remote host has the same three states,
+      // and without this an installed-but-unconfigured host reports either
+      // "0 projects" or an unparseable-output error, neither of which tells
+      // anyone to run `podium configure`.
+      //
+      // `podium configure` writes PROJECTS_DIR into that file, and every project
+      // command depends on it — same file path on macOS as on Linux.
+      const probe = REMOTE_PODIUM_CANDIDATES.map((c) => `test -x ${c} && echo BIN=${c}`).join('; ')
+        + '; grep -q "^PROJECTS_DIR=" /etc/podium-cli/.env 2>/dev/null && echo CONFIGURED';
 
       conn.exec(probe, (probeErr: any, probeStream: any) => {
         if (probeErr) return done(false, 'exec', probeErr.message);
@@ -525,10 +547,19 @@ ipcMain.handle('test-ssh-profile', async (
         let found = '';
         probeStream.on('data', (d: Buffer) => { found += d.toString(); });
         probeStream.on('close', () => {
-          const bin = found.trim().split('\n')[0]?.trim();
+          const lines = found.split('\n').map((l) => l.trim()).filter(Boolean);
+          const bin = lines.find((l) => l.startsWith('BIN='))?.slice(4);
+          const configured = lines.includes('CONFIGURED');
+
           if (!bin) {
             return done(false, 'podium',
               `Not found at ${REMOTE_PODIUM_CANDIDATES.join(' or ')} — set the path in the host's settings.`);
+          }
+          if (!configured) {
+            // Distinct from "not installed": the fix is a command on that host,
+            // not an install, and saying so is the whole value of the message.
+            return done(false, 'configure',
+              'Podium is installed but not configured. Run `podium configure` on that host.');
           }
           resolvedPath = bin;
           runStatus(bin);
@@ -588,6 +619,51 @@ ipcMain.handle('get-podium-command', async (): Promise<{ command: string; prefix
 // checkPodiumStatus still ran a bare `podium`, so testing the first said
 // nothing about the second.
 ipcMain.handle('get-podium-status', async (): Promise<string> => checkPodiumStatus());
+
+// Whether this machine can run Podium locally at all. The dashboard uses it to
+// decide whether "local" is an option when creating a project, and to explain
+// an empty project list on a machine with no hosts configured yet.
+ipcMain.handle('get-platform-capabilities', async (): Promise<{
+  platform: string; localPodium: boolean; remoteOnly: boolean;
+}> => ({
+  platform: process.platform,
+  localPodium: process.platform !== 'win32' && checkPodiumStatus() === 'configured',
+  remoteOnly: process.platform === 'win32'
+}));
+
+// Run `podium configure` on a remote host.
+//
+// Offered when the connection test finds Podium installed but unconfigured.
+// It needs sudo — it writes /etc/hosts and sets up Docker networks — and sudo
+// over a non-interactive ssh session cannot answer a password prompt. Hosts with
+// passwordless sudo succeed; the rest get told exactly that rather than a
+// timeout, because the fix is a one-off on that machine and no amount of
+// retrying from here will help.
+ipcMain.handle('configure-ssh-host', async (
+  _event: IpcMainInvokeEvent,
+  profile: SshProfile
+): Promise<{ ok: boolean; detail: string }> => {
+  const exec = new SshExecutor(profile);
+  try {
+    // -n so sudo fails immediately rather than waiting on a prompt nobody can
+    // answer. Without it this hangs until the ssh timeout, and the user is told
+    // "timed out" for what is really "this host needs a password".
+    const probe = await exec.execRaw('sudo -n true');
+    if (probe.code !== 0) {
+      return { ok: false, detail:
+        'That host needs a password for sudo, which cannot be answered from here. '
+        + 'Run `podium configure` on it directly, once.' };
+    }
+
+    const result = await exec.exec(['configure', '--non-interactive', '--json-output']);
+    if (result.code !== 0) {
+      return { ok: false, detail: result.stderr || result.stdout || `configure exited ${result.code}` };
+    }
+    return { ok: true, detail: 'Configured.' };
+  } finally {
+    exec.dispose();
+  }
+});
 
 // The renderer asks for commands by name. Rewrite the one command that is ours
 // and leave everything else (docker, git) alone — those genuinely are expected
@@ -1753,6 +1829,27 @@ class SshExecutor implements Executor {
 
         let stdout = '';
         let stderr = '';
+        stream.on('data', (d: Buffer) => { stdout += d.toString(); });
+        stream.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
+        stream.on('close', (code: number) => {
+          resolve({ code: code ?? 1, stdout: stdout.trim(), stderr: stderr.trim() });
+        });
+      });
+    });
+  }
+
+  /** Run a raw command rather than a podium subcommand. Used for probes. */
+  async execRaw(command: string): Promise<CommandResult> {
+    let conn;
+    try {
+      conn = await this.connect();
+    } catch (error) {
+      return { code: 1, stdout: '', stderr: `${this.label}: ${(error as Error).message}` };
+    }
+    return new Promise((resolve) => {
+      conn.exec(command, (err: any, stream: any) => {
+        if (err) return resolve({ code: 1, stdout: '', stderr: err.message });
+        let stdout = ''; let stderr = '';
         stream.on('data', (d: Buffer) => { stdout += d.toString(); });
         stream.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
         stream.on('close', (code: number) => {

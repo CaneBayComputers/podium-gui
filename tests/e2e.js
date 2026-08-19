@@ -1282,6 +1282,51 @@ async function run() {
     check('the probe avoids a login shell',
       !/command -v podium/.test(withoutComments(sshBlock)));
 
+    // A remote host has the same three states the local one does, and the GUI
+    // shows the installer for the middle one locally. Remotely it has to at
+    // least SAY which state it is in: "0 projects" or an unparseable-output
+    // error for an unconfigured host tells nobody to run `podium configure`.
+    const sshSrc = require('fs').readFileSync(
+      require('path').join(require('./helpers').ROOT, 'src/main.ts'), 'utf8');
+    const testBlock = sshSrc.slice(sshSrc.indexOf("ipcMain.handle('test-ssh-profile'"),
+                                   sshSrc.indexOf('// Exposed so the resolution can be exercised'));
+    check('the connection test distinguishes not-installed from not-configured',
+      /stage: 'podium'|'podium',/.test(testBlock) && /'configure',/.test(testBlock)
+      && /PROJECTS_DIR=/.test(testBlock),
+      'expected separate podium-missing and not-configured outcomes');
+    check('the unconfigured message names the command that fixes it',
+      /podium configure/.test(testBlock));
+
+    // --- Windows is remote-only -------------------------------------------
+    //
+    // Cannot be verified by running it here, so assert the decision rather than
+    // the outcome. Podium is Docker plus bash scripts and the deliberate call is
+    // remote hosts rather than WSL, so on Windows there is no local install to
+    // make and the installer — which installs and configures a LOCAL CLI —
+    // would offer something that cannot succeed.
+    const winSrc = require('fs').readFileSync(
+      require('path').join(require('./helpers').ROOT, 'src/main.ts'), 'utf8');
+    const chooser = winSrc.slice(winSrc.indexOf('const podiumStatus: string = checkPodiumStatus()'),
+                                 winSrc.indexOf('// Open DevTools in development'));
+    check('Windows skips the installer and loads the dashboard',
+      /win32/.test(chooser) && chooser.indexOf('win32') < chooser.indexOf('installer.html'),
+      'expected the win32 branch to come before any installer.html load');
+
+    const platformCaps = await app.evaluate(async ({ ipcMain }) =>
+      ipcMain._invokeHandlers.get('get-platform-capabilities')({}));
+    check('the app reports whether it can run Podium locally',
+      typeof platformCaps.localPodium === 'boolean' && typeof platformCaps.remoteOnly === 'boolean'
+      && platformCaps.remoteOnly === (platformCaps.platform === 'win32'),
+      JSON.stringify(platformCaps));
+
+    // Remote configure must not hang on a sudo password prompt nobody can
+    // answer — `sudo -n` fails immediately instead, so the user is told the
+    // real reason rather than "timed out".
+    const cfgHandler = winSrc.slice(winSrc.indexOf("ipcMain.handle('configure-ssh-host'"));
+    check('remote configure fails fast rather than waiting on a sudo prompt',
+      /sudo -n true/.test(cfgHandler.slice(0, 1400))
+      && /password/i.test(cfgHandler.slice(0, 1400)));
+
     // --- Executor ---------------------------------------------------------
     //
     // Remote execution needs a reachable host, which a test suite cannot

@@ -2148,6 +2148,10 @@ function renderSshProfiles(): void {
                         onclick="testSshProfile(${i})">Test connection</button>
                 <button class="btn btn-danger btn-small" data-testid="ssh-remove-${i}"
                         onclick="removeSshProfile(${i})">Remove</button>
+                ${r?.stage === 'configure'
+                    ? `<button class="btn btn-primary btn-small" data-testid="ssh-configure-${i}"
+                               onclick="configureSshHost(${i})">Run configure</button>`
+                    : ''}
                 ${status}
             </div>
         </div>`;
@@ -2185,6 +2189,30 @@ async function removeSshProfile(index: number): Promise<void> {
     sshProfiles.splice(index, 1);
     renderSshProfiles();
     await persistSshProfiles();
+}
+
+// Offered only when the connection test found Podium installed but not
+// configured. Not offered speculatively: on a host that needs a sudo password
+// it cannot work, and a button that usually fails is worse than none.
+async function configureSshHost(index: number): Promise<void> {
+    const p = sshProfiles[index];
+    if (!p) return;
+
+    sshTestResults[p.id] = { ok: false, stage: '', detail: 'configuring…', testing: true };
+    renderSshProfiles();
+
+    const result = await ipcRenderer.invoke('configure-ssh-host', p);
+    if (result.ok) {
+        showSuccess(`${p.label || p.host} configured.`);
+        // Re-test rather than assuming: configure succeeding is not the same as
+        // the host now answering a status call.
+        await testSshProfile(index);
+        return;
+    }
+
+    showError(result.detail);
+    sshTestResults[p.id] = { ok: false, stage: 'configure', detail: result.detail };
+    renderSshProfiles();
 }
 
 async function testSshProfile(index: number): Promise<void> {
@@ -4272,6 +4300,7 @@ async function submitEditProject(): Promise<void> {
 (window as any).updateSshProfile = updateSshProfile;
 (window as any).removeSshProfile = removeSshProfile;
 (window as any).testSshProfile = testSshProfile;
+(window as any).configureSshHost = configureSshHost;
 (window as any).__sshProfiles = () => sshProfiles;
 (window as any).applyEndpoint = applyEndpoint;
 (window as any).revealApiBase = revealApiBase;
