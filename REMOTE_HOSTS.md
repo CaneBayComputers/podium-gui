@@ -60,7 +60,36 @@ not render a link it has not established is reachable** — an "open" button tha
 silently does nothing is worse than no button, and this is exactly the case that
 produces one.
 
-Reachability probing per host is the open question here, not URL construction.
+### Reachability is a property of the client, not the host
+
+Worth stating because it decides where the check lives: "can the user's browser
+reach this project" can only be answered from the machine the browser is on. The
+CLI is on the far side of the network being asked about — it can say a port is
+listening, which it already does, but not whether packets from here arrive.
+Security groups, NAT, VPNs and whether a laptop's lid is shut are all invisible
+from the host itself.
+
+So the GUI probes from its own process. `check-project-url` already does this
+for local projects; the remote version is the same request to a different
+address. No CLI command, no round trip.
+
+Three cases, which differ more than they look (the CLI session's breakdown):
+
+| host | what browsing needs |
+|---|---|
+| LAN | nothing |
+| cloud | a security group rule per port, a tunnel, or a proxy |
+| a laptop | nothing — but only while it is awake and on the same network |
+
+The third is the nastiest: it fails *intermittently* rather than consistently,
+which is the hardest kind to diagnose from a dead link.
+
+**Probe on click, not on render.** Probing every project on every poll is N
+requests per host per timer tick for information that rarely changes. Probing
+when someone actually clicks costs nothing until it matters, and lets the
+failure carry an explanation — "not reachable from here; this host is on EC2, so
+the port needs a security group rule" — rather than a dead link or a spinner.
+That still satisfies the rule above, because it does not fail silently.
 
 ## The real work is identity, not SSH
 
