@@ -437,6 +437,10 @@ ipcMain.handle('save-ssh-profiles', async (
   profiles: SshProfile[]
 ): Promise<{ success: boolean; error?: string }> => {
   try {
+    // Drop cached connections: a profile edit may have changed the host, user
+    // or key, and reusing a connection opened under the old details would run
+    // commands against a machine the profile no longer describes.
+    disposeExecutors();
     fs.mkdirSync(path.dirname(sshProfilesPath()), { recursive: true });
     fs.writeFileSync(sshProfilesPath(), JSON.stringify(profiles, null, 2), { mode: 0o600 });
     return { success: true };
@@ -1643,6 +1647,174 @@ function getProjectsDir(): string {
 // Run a podium subcommand and collect its text output. The service panels use
 // this rather than driving docker directly, so custom container names and any
 // future CLI fixes are picked up for free.
+// ---------------------------------------------------------------------------
+// Executors
+//
+// One interface over "run a podium command", with a local and an SSH
+// implementation. Everything that shells out to podium goes through this, so
+// remote support is a matter of which executor a call gets rather than a second
+// code path beside every existing one.
+//
+// Deliberately just `exec` for now. Streaming and pty are separate channels the
+// dashboard does not need, and adding them before there is a caller would be
+// guessing at their shape.
+// ---------------------------------------------------------------------------
+
+interface Executor {
+  /** Human-readable, for errors and for tagging which host a project is on. */
+  readonly label: string;
+  exec(args: string[]): Promise<CommandResult>;
+  dispose(): void;
+}
+
+class LocalExecutor implements Executor {
+  readonly label = 'local';
+  exec(args: string[]): Promise<CommandResult> { return runPodium(args); }
+  dispose(): void { /* nothing to release */ }
+}
+
+// One ssh2 connection per host, reused.
+//
+// The dashboard polls on a timer, and a fresh SSH handshake costs 200-500ms —
+// paid on every poll, per host, it is the difference between usable and not.
+// The connection is re-established on demand if the host drops it.
+class SshExecutor implements Executor {
+  readonly label: string;
+  private profile: SshProfile;
+  private conn: any = null;
+  private connecting: Promise<any> | null = null;
+
+  constructor(profile: SshProfile) {
+    this.profile = profile;
+    this.label = profile.label || profile.host;
+  }
+
+  private connect(): Promise<any> {
+    if (this.conn) return Promise.resolve(this.conn);
+    // Concurrent calls during connect must share one handshake rather than
+    // racing to open several.
+    if (this.connecting) return this.connecting;
+
+    this.connecting = new Promise((resolve, reject) => {
+      const { Client } = require('ssh2');
+      let key: Buffer;
+      try {
+        key = fs.readFileSync(this.profile.keyPath.replace(/^~/, os.homedir()));
+      } catch (error) {
+        this.connecting = null;
+        return reject(new Error(`Cannot read key ${this.profile.keyPath}: ${(error as Error).message}`));
+      }
+
+      const conn = new Client();
+      conn.on('ready', () => {
+        this.conn = conn;
+        this.connecting = null;
+        resolve(conn);
+      });
+      conn.on('error', (err: any) => {
+        this.conn = null;
+        this.connecting = null;
+        reject(err);
+      });
+      // A dropped connection must not leave a dead handle that every later
+      // call tries to reuse.
+      conn.on('close', () => { this.conn = null; });
+
+      conn.connect({
+        host: this.profile.host,
+        port: this.profile.port || 22,
+        username: this.profile.user,
+        privateKey: key,
+        readyTimeout: 10000,
+        keepaliveInterval: 20000
+      });
+    });
+    return this.connecting;
+  }
+
+  async exec(args: string[]): Promise<CommandResult> {
+    let conn;
+    try {
+      conn = await this.connect();
+    } catch (error) {
+      return { code: 1, stdout: '', stderr: `${this.label}: ${(error as Error).message}` };
+    }
+
+    // Absolute podium path, and an explicit PATH for the processes podium
+    // itself spawns. Both are required and for different reasons — see
+    // REMOTE_PODIUM_CANDIDATES and REMOTE_PATH_PREFIX.
+    const bin = this.profile.podiumPath || REMOTE_PODIUM_CANDIDATES[0];
+    const quoted = args.map((a) => `'${a.replace(/'/g, `'\\''`)}'`).join(' ');
+    const command = `${REMOTE_PATH_PREFIX} NO_COLOR=1 ${bin} ${quoted}`;
+
+    return new Promise((resolve) => {
+      conn.exec(command, (err: any, stream: any) => {
+        if (err) return resolve({ code: 1, stdout: '', stderr: `${this.label}: ${err.message}` });
+
+        let stdout = '';
+        let stderr = '';
+        stream.on('data', (d: Buffer) => { stdout += d.toString(); });
+        stream.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
+        stream.on('close', (code: number) => {
+          resolve({ code: code ?? 1, stdout: stdout.trim(), stderr: stderr.trim() });
+        });
+      });
+    });
+  }
+
+  dispose(): void {
+    try { this.conn?.end(); } catch { /* already gone */ }
+    this.conn = null;
+  }
+}
+
+// Cached so connections are reused across calls. Rebuilt when a profile changes,
+// since host, user or key may all have moved.
+const executors = new Map<string, Executor>();
+
+function executorFor(hostId: string): Executor {
+  if (hostId === 'local') {
+    if (!executors.has('local')) executors.set('local', new LocalExecutor());
+    return executors.get('local')!;
+  }
+
+  const profile = readSshProfiles().find((p) => p.id === hostId);
+  if (!profile) {
+    // A project pointing at a host that has been removed. Fail with something
+    // that says so rather than silently falling back to local, which would run
+    // a command against the wrong machine.
+    return {
+      label: hostId,
+      exec: async () => ({ code: 1, stdout: '', stderr: `No SSH host configured with id ${hostId}` }),
+      dispose: () => { /* nothing */ }
+    };
+  }
+
+  const cached = executors.get(hostId) as SshExecutor | undefined;
+  if (cached && (cached as any).profile
+      && JSON.stringify((cached as any).profile) === JSON.stringify(profile)) {
+    return cached;
+  }
+  cached?.dispose();
+
+  const made = new SshExecutor(profile);
+  executors.set(hostId, made);
+  return made;
+}
+
+function disposeExecutors(): void {
+  executors.forEach((e) => e.dispose());
+  executors.clear();
+}
+
+// Run a podium command on a named host. `local` is the local install.
+ipcMain.handle('execute-podium-on', async (
+  _event: IpcMainInvokeEvent,
+  hostId: string,
+  subcommand: string,
+  args: string[] = []
+): Promise<CommandResult> => executorFor(hostId).exec([subcommand, ...args]));
+
 function runPodium(args: string[]): Promise<CommandResult> {
   return new Promise((resolve) => {
     const podium = resolvePodium();
