@@ -984,12 +984,25 @@ ipcMain.handle('get-cli-capabilities', async (): Promise<{ qwen: boolean; cleara
 // is the right call for a CLI that cannot wait forever. The GUI was reading only
 // the exit code, so a crash-looping app produced a green "installed" toast and a
 // URL that had never served a request. Ask the app directly instead.
+// Two callers with genuinely different patience, so the timeout is a parameter
+// rather than a constant:
+//
+//   install verification — slow is expected and worth waiting for
+//   a clicked link       — the user is waiting, and fast-wrong beats frozen
+//
+// The failure that makes this matter is a dropped SYN with no RST, which is what
+// a cloud security group does. Measured: an unroutable address errors in 7ms and
+// bad DNS in 11ms, but a security-group-blocked port runs the timeout out in
+// full. Only the blocked case is slow, and it is the common one for a cloud host.
+//
+// `address` is a hostname for a local project and host:port for a remote one.
 ipcMain.handle('check-project-url', async (
   _event: IpcMainInvokeEvent,
-  projectName: string
-): Promise<{ code: number }> => {
+  address: string,
+  timeoutMs: number = 6000
+): Promise<{ code: number; timedOut?: boolean }> => {
   return new Promise((resolve) => {
-    const request = http.get(`http://${projectName}/`, { timeout: 6000 }, (res) => {
+    const request = http.get(`http://${address}/`, { timeout: timeoutMs }, (res) => {
       // Any response at all is the answer; the body is irrelevant.
       res.resume();
       resolve({ code: res.statusCode ?? 0 });
@@ -997,7 +1010,13 @@ ipcMain.handle('check-project-url', async (
 
     // 0 mirrors curl's "no response" convention, which is what the CLI prints.
     request.on('error', () => resolve({ code: 0 }));
-    request.on('timeout', () => { request.destroy(); resolve({ code: 0 }); });
+    // Distinguished from a refusal on purpose. "Nothing answered in 2.5s" and
+    // "the network said no" are different facts, and only one of them justifies
+    // telling someone their security group needs a rule.
+    request.on('timeout', () => {
+      request.destroy();
+      resolve({ code: 0, timedOut: true });
+    });
   });
 });
 

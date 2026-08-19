@@ -91,6 +91,27 @@ failure carry an explanation — "not reachable from here; this host is on EC2, 
 the port needs a security group rule" — rather than a dead link or a spinner.
 That still satisfies the rule above, because it does not fail silently.
 
+**The probe needs a short, explicit timeout.** Flagged by the CLI session and
+then measured, because the three failures behave completely differently:
+
+| failure | result | time |
+|---|---|---|
+| unroutable address | error | 7ms |
+| bad DNS | error | 11ms |
+| **port blocked by a security group** | timeout | **the full timeout** |
+
+Only the blocked case is slow — a dropped SYN with no RST, nothing to fail
+fast on — and it is the common case for a cloud host. At the old fixed 6s that
+is six seconds of a UI that looks frozen.
+
+So the timeout is a parameter: install verification stays patient because slow
+is expected there, and a clicked link gets ~2.5s because the user is waiting and
+a fast wrong-ish "cannot reach it" beats a frozen window.
+
+A timeout is also reported distinctly from a refusal. "Nothing answered in time"
+and "the network said no" are different facts, and only one of them justifies
+telling someone their security group needs a rule.
+
 ## The real work is identity, not SSH
 
 Everything is currently keyed on `project.name` alone:

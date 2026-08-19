@@ -1327,6 +1327,37 @@ async function run() {
       /sudo -n true/.test(cfgHandler.slice(0, 1400))
       && /password/i.test(cfgHandler.slice(0, 1400)));
 
+    // A probe against a blocked port is the slow case, and the one that makes a
+    // GUI look frozen: a dropped SYN with no RST runs the timeout out in full.
+    // Measured on a real security-group-blocked address — an unroutable IP errors
+    // in 7ms and bad DNS in 11ms, but a blocked port takes the whole timeout.
+    // So the timeout has to be a parameter, because install verification wants
+    // patience and a clicked link wants a fast answer.
+    const probeSrc = require('fs').readFileSync(
+      require('path').join(require('./helpers').ROOT, 'src/main.ts'), 'utf8');
+    const probeBlock = probeSrc.slice(probeSrc.indexOf("ipcMain.handle('check-project-url'"),
+                                      probeSrc.indexOf("ipcMain.handle('check-project-url'") + 1400);
+    check('the URL probe takes a caller-supplied timeout',
+      /timeoutMs/.test(probeBlock) && /timeout: timeoutMs/.test(probeBlock));
+
+    // "Nothing answered in time" and "the network refused" are different facts,
+    // and only one of them justifies telling someone about a firewall rule.
+    check('a timed-out probe is distinguishable from a refused one',
+      /timedOut: true/.test(probeBlock));
+
+    // Both outcomes must be fast enough not to look like a hang, and the values
+    // are asserted end to end rather than by reading the source.
+    const probeTiming = await app.evaluate(async ({ ipcMain }) => {
+      const handler = ipcMain._invokeHandlers.get('check-project-url');
+      const t0 = Date.now();
+      // TEST-NET-1, reserved and unroutable — no host can answer it.
+      const r = await handler({}, '192.0.2.1:80', 1200);
+      return { r, ms: Date.now() - t0 };
+    });
+    check('an unreachable probe returns within its timeout rather than hanging',
+      probeTiming.ms < 3000 && probeTiming.r.code === 0,
+      `${probeTiming.ms}ms, ${JSON.stringify(probeTiming.r)}`);
+
     // --- Executor ---------------------------------------------------------
     //
     // Remote execution needs a reachable host, which a test suite cannot
