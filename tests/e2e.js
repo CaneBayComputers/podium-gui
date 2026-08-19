@@ -1887,7 +1887,18 @@ async function run() {
                         'install-mac.sh', 'packaging/after-install.sh']) {
       const full = pathMod.join(ROOT, file);
       if (!fsMod.existsSync(full)) { check(`${file} exists`, false); continue; }
-      const body = fsMod.readFileSync(full, 'utf8');
+      // Strip full-line comments before matching. A comment explaining WHY
+      // mapfile is banned would otherwise trip the guard on its own rationale —
+      // confirmed by adding one — and a lint that fails on its own explanation
+      // is a lint someone disables within a week. (Flagged by the CLI session,
+      // which hit it first.)
+      //
+      // Full-line only: stripping trailing comments means deciding whether a #
+      // is inside a string, and getting that wrong would silently stop matching
+      // real code. A ban explained in a trailing comment is the rarer case and
+      // failing loudly there is the safer error.
+      const body = fsMod.readFileSync(full, 'utf8')
+        .split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
       const found = BASH4.filter(([, re]) => re.test(body)).map(([label]) => label);
       check(`${file} avoids bash 4+ constructs (macOS has 3.2)`,
         found.length === 0, found.join('; '));
