@@ -1901,9 +1901,14 @@ span.status-indicator {
     border-radius: 6px;
 }
 
-/* Which machine a project lives on. Only rendered with more than one host. */
+/* Which machine a project lives on. Only rendered with more than one host.
+ *
+ * NOT margin-left:auto. The status dot is absolutely positioned in the card's
+ * top-right corner, so pushing the badge to the right edge put the two on top
+ * of each other. It sits next to the title instead, and the right margin keeps
+ * a long host label clear of the dot when the header wraps. */
 .host-badge {
-    margin-left: auto;
+    margin-right: 2rem;
     padding: 0.15rem 0.5rem;
     font-size: 0.68rem;
     text-transform: uppercase;

@@ -602,6 +602,10 @@ const FILTER_STORAGE_KEY = 'podium-gui-filters';
 let runFilter: RunFilter = 'all';
 let sortKey: SortKey = 'name';
 let emojiFilter: Set<string> = new Set();
+// '' means every host. Persisted like the others, but validated against the
+// CURRENT host list on load — a filter naming a host whose profile was deleted
+// would hide every project with no visible reason.
+let hostFilter = '';
 
 function loadFilterState(): void {
     try {
@@ -611,13 +615,14 @@ function loadFilterState(): void {
         if (['all', 'running', 'stopped', 'disabled'].includes(v.runFilter)) runFilter = v.runFilter;
         if (['name', 'newest', 'last-on'].includes(v.sortKey)) sortKey = v.sortKey;
         if (Array.isArray(v.emoji)) emojiFilter = new Set(v.emoji);
+        if (typeof v.hostFilter === 'string') hostFilter = v.hostFilter;
     } catch { /* corrupt or unavailable; defaults are fine */ }
 }
 
 function saveFilterState(): void {
     try {
         localStorage.setItem(FILTER_STORAGE_KEY, JSON.stringify({
-            runFilter, sortKey, emoji: [...emojiFilter]
+            runFilter, sortKey, emoji: [...emojiFilter], hostFilter
         }));
     } catch { /* private mode */ }
 }
@@ -655,6 +660,11 @@ function visibleProjects(): Project[] {
     // would leave a live session with no window and no way to reach it — the
     // filter would look like it had killed the agent.
     const pinned = (p: Project) => hasTileTerminal(p.name);
+
+    // Host first: it narrows the set every other filter then works within, and
+    // the counts shown beside them should describe what is actually reachable
+    // through them.
+    if (hostFilter) list = list.filter((p) => ((p as any).hostId || 'local') === hostFilter);
 
     if (runFilter === 'disabled') {
         // The only view that shows them, and therefore the only route back to a
@@ -696,9 +706,12 @@ function renderFilterBar(): void {
     const host = document.getElementById('project-filters');
     if (!host) return;
 
-    // Counts exclude disabled projects, matching what the other views show —
-    // an emoji chip saying 3 that yields 2 tiles is worse than no chip.
-    const active = projects.filter(p => !isDisabled(p));
+    // Counts exclude disabled projects AND respect the host filter, so every
+    // number describes what its own control would actually show. A chip saying
+    // 3 that yields 2 tiles is worse than no chip, and that is exactly what a
+    // host-wide count beside a host-filtered grid would be.
+    const active = projects.filter(p => !isDisabled(p)
+        && (!hostFilter || ((p as any).hostId || 'local') === hostFilter));
     const counts = new Map<string, number>();
     for (const p of active) {
         const e = projectEmoji(p);
@@ -711,6 +724,23 @@ function renderFilterBar(): void {
               title="${n} project${n === 1 ? '' : 's'}">${e}<span class="emoji-count">${n}</span></button>`)
         .join('');
 
+    // A persisted filter naming a host whose profile has since been removed
+    // would hide everything with nothing on screen explaining why. Drop it.
+    if (hostFilter && !dashboardHosts.some((h) => h.id === hostFilter)) hostFilter = '';
+
+    // Only offered with more than one host: filtering by the only host there is
+    // would be a control that can never change anything.
+    const hostSelect = dashboardHosts.length > 1
+        ? `<select data-testid="filter-host" onchange="setHostFilter(this.value)">
+               <option value=""${hostFilter === '' ? ' selected' : ''}>All hosts (${dashboardHosts.length})</option>
+               ${dashboardHosts.map((h) => {
+                   const n = projects.filter((p) => ((p as any).hostId || 'local') === h.id
+                       && !isDisabled(p)).length;
+                   return `<option value="${escapeHtml(h.id)}"${hostFilter === h.id ? ' selected' : ''}>${escapeHtml(h.label)} (${n})</option>`;
+               }).join('')}
+           </select>`
+        : '';
+
     const running = active.filter(p => p.dockerRunning).length;
     const stopped = active.length - running;
     const disabled = projects.length - active.length;
@@ -721,6 +751,7 @@ function renderFilterBar(): void {
     // read from the same render that just hid it.
     host.innerHTML = `
         <div class="filter-group">
+            ${hostSelect}
             <select data-testid="filter-run" onchange="setRunFilter(this.value)">
                 <option value="all"${runFilter === 'all' ? ' selected' : ''}>All (${active.length})</option>
                 <option value="running"${runFilter === 'running' ? ' selected' : ''}>Running (${running})</option>
@@ -739,7 +770,12 @@ function renderFilterBar(): void {
 }
 
 function resetFilters(): void {
-    runFilter = 'all'; sortKey = 'name'; emojiFilter.clear();
+    runFilter = 'all'; sortKey = 'name'; emojiFilter.clear(); hostFilter = '';
+    saveFilterState(); renderProjects(); renderFilterBar();
+}
+
+function setHostFilter(v: string): void {
+    hostFilter = dashboardHosts.some((h) => h.id === v) ? v : '';
     saveFilterState(); renderProjects(); renderFilterBar();
 }
 
@@ -3406,6 +3442,8 @@ interface AgentTerminalOptions {
     fallbackHint?: string;
     /** Which project's tile hosts this session. Omitted means the modal. */
     tileProject?: string;
+    /** Which machine the command runs on. Defaults to this one. */
+    hostId?: string;
 }
 
 // One embedded-terminal implementation for both agent entry points: the build
@@ -3490,7 +3528,8 @@ async function openAgentTerminal(options: AgentTerminalOptions): Promise<void> {
         activateTerminal(id);
     }
 
-    const started = await ipcRenderer.invoke('pty-start', id, options.cwd, options.command, options.args);
+    const started = await ipcRenderer.invoke('pty-start-on', options.hostId || 'local',
+        id, options.cwd, options.command, options.args);
 
     if (!started.ok) {
         term.writeln('\r\n\x1b[31mCould not start an embedded terminal.\x1b[0m');
@@ -3510,15 +3549,24 @@ async function openAgentTerminal(options: AgentTerminalOptions): Promise<void> {
 // reopens the agent with its previous conversation (claude --continue,
 // codex resume --last, gemini --resume latest, aider --restore-chat-history).
 async function modifyWithAI(projectName: string): Promise<void> {
-    const { agent } = await ipcRenderer.invoke('get-ai-agent');
+    // A remote project's agent runs on that host, so everything here is asked
+    // of that host: whether an agent is configured, where its projects live,
+    // and which machine the terminal opens on.
+    const host = hostOf(projectName);
+    const hostLabel = dashboardHosts.find((h) => h.id === host)?.label || host;
+
+    const { agent } = await ipcRenderer.invoke('get-ai-agent', host);
     if (!agent) {
-        showError('No AI agent is configured. Run `podium ai-set` in a terminal first.');
+        showError(host === 'local'
+            ? 'No AI agent is configured. Run `podium ai-set` in a terminal first.'
+            : `No AI agent is configured on ${hostLabel}. The agent runs there, `
+              + `so run \`podium ai-set\` on that machine.`);
         return;
     }
 
     // resume takes the project name and cds itself, so run it from the projects
     // directory rather than inside the project.
-    const projectsDir = await ipcRenderer.invoke('get-projects-dir');
+    const projectsDir = await ipcRenderer.invoke('get-projects-dir-on', host);
 
     if (terminalHost === 'system') {
         const opened = await ipcRenderer.invoke('open-system-terminal',
@@ -3536,9 +3584,12 @@ async function modifyWithAI(projectName: string): Promise<void> {
         cwd: projectsDir,
         command: 'podium',
         args: ['resume', projectName],
-        sessionKey: `resume-${projectName}`,
+        // Host-scoped: two hosts can each have a project of this name, and a
+        // shared key would focus the wrong machine's session.
+        sessionKey: `resume-${host}-${projectName}`,
         fallbackHint: `cd ${projectsDir} && podium resume ${projectName}`,
-        tileProject: projectName
+        tileProject: projectName,
+        hostId: host
     });
 }
 
@@ -4525,6 +4576,8 @@ async function submitEditProject(): Promise<void> {
 (window as any).showSettings = showSettings;
 (window as any).showDonateModal = showDonateModal;
 (window as any).setRunFilter = setRunFilter;
+(window as any).setHostFilter = setHostFilter;
+(window as any).__hostFilter = () => hostFilter;
 (window as any).setSortKey = setSortKey;
 (window as any).toggleEmojiFilter = toggleEmojiFilter;
 (window as any).clearEmojiFilter = clearEmojiFilter;
