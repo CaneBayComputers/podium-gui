@@ -422,14 +422,15 @@ async function run() {
       userDataInUse === require('./helpers').testUserDataDir(),
       `using ${userDataInUse}`);
 
-    // --- About and updates ------------------------------------------------
+    // --- Updates ----------------------------------------------------------
     await win.evaluate(() => window.closeModal());
     await win.waitForTimeout(200);
-    await win.click(t('about-open'));
-    await win.waitForTimeout(400);
-    check('the About window has a button that opens it',
-      await win.isVisible('#about-modal'));
-    await win.evaluate(() => window.closeModal());
+
+    // The About window is gone entirely, not just unlinked.
+    const htmlNoAbout = require('fs').readFileSync(
+      require('path').join(require('./helpers').ROOT, 'src/index.html'), 'utf8');
+    check('the About window is removed, not merely hidden',
+      !/about-modal|about-open/.test(htmlNoAbout));
 
     // Both Podium repos are source checkouts, so an update is a git pull. The
     // check must be read-only — it fetches remote refs and never touches a
@@ -1496,7 +1497,9 @@ async function run() {
         .map((m) => m.id));
     check('no modal is nested inside another', badlyNested.length === 0, badlyNested.join(','));
 
-    for (const id of ['about-modal']) {
+    // Modals that should open from a standing start. About was here and is
+    // gone; updates replaced it as the footer window.
+    for (const id of ['updates-modal']) {
       await win.evaluate((m) => window.showModal(m), id);
       await win.waitForTimeout(400);
       check(`${id} actually becomes visible`, await win.isVisible(`#${id}`));

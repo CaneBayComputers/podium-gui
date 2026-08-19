@@ -95,7 +95,7 @@ document.addEventListener('DOMContentLoaded', (): void => {
         // depends on the answer — putting it on the startup path would delay the
         // dashboard for a check nobody has asked for yet. The badge appears when
         // it lands.
-        checkUpdatesInBackground();
+        if (autoUpdateCheckEnabled()) checkUpdatesInBackground();
         
         // Show debug indicator if in debug mode
         if (isDebugMode) {
@@ -118,11 +118,8 @@ document.addEventListener('DOMContentLoaded', (): void => {
 });
 
 function setupEventListeners(): void {
-    // Project type radio buttons
-    const projectTypeRadios: NodeListOf<HTMLInputElement> = document.querySelectorAll('input[name="project-type"]');
-    projectTypeRadios.forEach((radio: HTMLInputElement) => {
-        radio.addEventListener('change', toggleVersionGroups);
-    });
+    // The framework picker is two dropdowns now, and each wires its own
+    // onchange in the markup it generates.
     
     // GitHub repository checkbox
     const githubCheckbox: HTMLInputElement | null = document.getElementById('create-github-repo') as HTMLInputElement;
@@ -217,37 +214,58 @@ async function loadFrameworkCatalog(hostId: string = 'local'): Promise<void> {
         if (!runtimes.includes(fw.runtime)) runtimes.push(fw.runtime);
     }
 
-    list.innerHTML = runtimes.map((runtime) => {
-        const rows = frameworkCatalog
-            .filter((fw) => fw.runtime === runtime)
-            .map((fw) => `
-                <label class="framework-option" data-testid="framework-${escapeHtml(fw.slug)}">
-                    <input type="radio" name="project-type" value="${escapeHtml(fw.slug)}"
-                           onchange="onFrameworkChange()">
-                    <span>${escapeHtml(fw.display)}</span>
-                </label>
-            `).join('');
-
-        return `
-            <div class="framework-runtime">
-                <span class="runtime-label">${escapeHtml(runtime)}</span>
-                <div class="framework-options">${rows}</div>
+    // Two dropdowns rather than twenty-one radio buttons: pick a runtime, then a
+    // framework within it. The full grid made the common case (Laravel, Django,
+    // Express) as much work as the rare one, and grew every time the CLI added a
+    // framework.
+    list.innerHTML = `
+        <div class="ssh-row">
+            <div class="form-group">
+                <label>Runtime</label>
+                <select id="framework-runtime" data-testid="framework-runtime"
+                        onchange="onRuntimeChange()">
+                    ${runtimes.map((r) => `<option value="${escapeHtml(r)}">${escapeHtml(r)}</option>`).join('')}
+                </select>
             </div>
-        `;
-    }).join('');
+            <div class="form-group">
+                <label>Framework</label>
+                <select id="framework-choice" data-testid="framework-choice"
+                        onchange="onFrameworkChange()"></select>
+            </div>
+        </div>
+        <p id="framework-note" class="settings-note" data-testid="framework-note"></p>`;
 
-    // Laravel stays the default, as before.
-    const preferred = (list.querySelector('input[value="laravel"]')
-        || list.querySelector('input[name="project-type"]')) as HTMLInputElement | null;
-    if (preferred) preferred.checked = true;
+    // Laravel stays the default, so its runtime is what opens.
+    const laravel = frameworkCatalog.find((fw) => fw.slug === 'laravel');
+    const runtimeSelect = document.getElementById('framework-runtime') as HTMLSelectElement | null;
+    if (runtimeSelect && laravel) runtimeSelect.value = laravel.runtime;
+
+    onRuntimeChange();
+}
+
+// Fill the second dropdown from the first. Keeps the current framework selected
+// when it belongs to the newly chosen runtime, so re-picking the same runtime
+// does not silently move the selection.
+function onRuntimeChange(): void {
+    const runtime = (document.getElementById('framework-runtime') as HTMLSelectElement | null)?.value;
+    const choice = document.getElementById('framework-choice') as HTMLSelectElement | null;
+    if (!choice) return;
+
+    const inRuntime = frameworkCatalog.filter((fw) => fw.runtime === runtime);
+    const keep = choice.value;
+    choice.innerHTML = inRuntime.map((fw) =>
+        `<option value="${escapeHtml(fw.slug)}">${escapeHtml(fw.display)}</option>`).join('');
+
+    if (inRuntime.some((fw) => fw.slug === keep)) choice.value = keep;
+    else if (inRuntime.some((fw) => fw.slug === 'laravel')) choice.value = 'laravel';
 
     onFrameworkChange();
 }
 
 function selectedFramework(): CatalogFramework | null {
-    const checked = document.querySelector('input[name="project-type"]:checked') as HTMLInputElement | null;
-    if (!checked) return null;
-    return frameworkCatalog.find((fw) => fw.slug === checked.value) || null;
+    const choice = document.getElementById('framework-choice') as HTMLSelectElement | null;
+    if (!choice || !choice.value) return null;
+    return frameworkCatalog.find((fw) => fw.slug === choice.value) || null;
 }
 
 function onFrameworkChange(): void {
@@ -1608,9 +1626,15 @@ async function showProjectHostStep(): Promise<void> {
                        note: 'The Podium install on this machine.' });
     }
     for (const p of sshProfiles) {
-        if (!p.host) continue;   // half-entered profile
-        options.push({ id: p.id, label: p.label || p.host,
-                       note: `${p.user}@${p.host}` });
+        if (!p.host) continue;   // half-entered host
+        // The username lives on the credential now. Reading it off the host
+        // gave "undefined@192.168.1.10" — the field moved and this did not.
+        const cred = sshCredentials.find((c) => c.id === p.credentialId);
+        options.push({
+            id: p.id,
+            label: p.label || p.host,
+            note: cred?.user ? `${cred.user}@${p.host}` : p.host
+        });
     }
 
     if (options.length === 0) {
@@ -2799,6 +2823,10 @@ async function showSettings(tab: 'appearance' | 'layout' | 'hosts' | 'ai' = 'app
     await loadSshProfiles();
     renderSshCredentials();
     renderSshProfiles();
+
+    // Reflect the stored preference rather than the markup's default.
+    const autoBox = document.getElementById('auto-update-check') as HTMLInputElement | null;
+    if (autoBox) autoBox.checked = autoUpdateCheckEnabled();
     switchSettingsTab(tab);
     // Populate BEFORE showing. Loading afterwards made Appearance open a beat
     // sooner, but it also meant the form finished loading after the panel was
@@ -4359,7 +4387,7 @@ async function submitNewProject(): Promise<void> {
     const projectName = (document.getElementById('project-name') as HTMLInputElement)?.value;
     const projectDescription = (document.getElementById('project-description') as HTMLInputElement)?.value || '';
     const projectEmoji = (document.getElementById('project-emoji') as HTMLSelectElement)?.value || '🚀';
-    const projectType = (document.querySelector('input[name="project-type"]:checked') as HTMLInputElement)?.value;
+    const projectType = (document.getElementById('framework-choice') as HTMLInputElement)?.value;
     
     console.log('DEBUG: Form values:', { projectName, projectDescription, projectEmoji, projectType });
     
@@ -4807,6 +4835,9 @@ async function submitEditProject(): Promise<void> {
 (window as any).testSshProfile = testSshProfile;
 (window as any).showRemotesTab = showRemotesTab;
 (window as any).showUpdates = showUpdates;
+(window as any).setAutoUpdateCheck = setAutoUpdateCheck;
+(window as any).dismissUpdateBanner = dismissUpdateBanner;
+(window as any).__autoUpdateCheck = autoUpdateCheckEnabled;
 (window as any).runUpdate = runUpdate;
 (window as any).__updateStatus = () => updateStatus;
 (window as any).addSshCredential = addSshCredential;
@@ -4888,6 +4919,7 @@ async function submitEditProject(): Promise<void> {
 (window as any).stopAutoRefresh = stopAutoRefresh;
 (window as any).showCreateProject = showCreateProject;
 (window as any).onFrameworkChange = onFrameworkChange;
+(window as any).onRuntimeChange = onRuntimeChange;
 (window as any).loadFrameworkCatalog = loadFrameworkCatalog;
 (window as any).startProject = startProject;
 (window as any).stopProject = stopProject;
@@ -4912,6 +4944,42 @@ function toggleDropdown(): void {
 
 let updateStatus: any[] = [];
 
+// Checked at startup by default. Off is a deliberate choice someone makes, so
+// the absence of the setting means on rather than off.
+function autoUpdateCheckEnabled(): boolean {
+    return localStorage.getItem('podium-auto-update-check') !== 'off';
+}
+
+function setAutoUpdateCheck(on: boolean): void {
+    localStorage.setItem('podium-auto-update-check', on ? 'on' : 'off');
+    if (!on) dismissUpdateBanner();
+}
+
+function dismissUpdateBanner(): void {
+    const bar = document.getElementById('update-banner');
+    if (bar) bar.style.display = 'none';
+}
+
+// A bar at the top, not a toast: a toast disappears, and this is a state rather
+// than an event.
+function renderUpdateBanner(): void {
+    const bar = document.getElementById('update-banner');
+    if (!bar) return;
+
+    const behind = updateStatus.filter((r) => r.behind > 0);
+    if (behind.length === 0 || !autoUpdateCheckEnabled()) {
+        bar.style.display = 'none';
+        return;
+    }
+    const names = behind.map((r) => `${r.label} (${r.behind} behind)`).join(', ');
+    bar.style.display = '';
+    bar.innerHTML = `
+        <span>Update available — ${escapeHtml(names)}</span>
+        <button class="btn btn-primary btn-small" onclick="showUpdates()">Review</button>
+        <button class="btn btn-secondary btn-small" data-testid="update-banner-dismiss"
+                onclick="dismissUpdateBanner()">Dismiss</button>`;
+}
+
 // Checked once at startup, in the background. A network call on the critical
 // path would delay the dashboard for something nobody asked for yet.
 async function checkUpdatesInBackground(): Promise<void> {
@@ -4920,6 +4988,7 @@ async function checkUpdatesInBackground(): Promise<void> {
     } catch {
         updateStatus = [];
     }
+    renderUpdateBanner();
     const behind = updateStatus.filter((r) => r.behind > 0);
     const badge = document.getElementById('update-badge');
     if (badge) {
