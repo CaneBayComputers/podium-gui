@@ -12,21 +12,42 @@
 # does not kill the window).
 set -uo pipefail
 
-REPO="${PODIUM_GUI_REPO:-$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)}"
+# `readlink -f` exists on macOS 13+ but not on older releases, where BSD
+# readlink has no -f and prints nothing — which would resolve REPO to the
+# filesystem root. Capability-checked so it costs nothing where -f works.
+_resolve() {
+    if readlink -f / >/dev/null 2>&1; then readlink -f "$1"
+    else python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$1"
+    fi
+}
+
+REPO="${PODIUM_GUI_REPO:-$(cd "$(dirname "$(_resolve "${BASH_SOURCE[0]}")")/.." && pwd)}"
 LOG=/tmp/podium-gui-dev.log
+IS_MAC=0
+[ "$(uname -s)" = Darwin ] && IS_MAC=1
 
 # Launched from the menu there is no terminal to print to, so failures have to
 # reach the desktop or they look like "clicking the icon does nothing".
 fail() {
     echo "podium-gui: $1" >&2
-    command -v notify-send >/dev/null 2>&1 &&
-        notify-send -u critical -i dialog-error "Podium GUI" "$1"
+    if [ "$IS_MAC" = 1 ]; then
+        # macOS has no notify-send; osascript is always present.
+        osascript -e "display notification \"$1\" with title \"Podium GUI\"" 2>/dev/null
+    else
+        command -v notify-send >/dev/null 2>&1 &&
+            notify-send -u critical -i dialog-error "Podium GUI" "$1"
+    fi
     exit 1
 }
 
 # npm is installed via nvm, which is set up in .bashrc. A .desktop launcher
 # runs with a minimal environment and never sources it, so `npm` is missing
 # when started from the menu even though it works fine from a terminal.
+# Homebrew's bin is added by ~/.zprofile, which a GUI launch never sources —
+# npm's shebang is `#!/usr/bin/env node`, so npm fails with a confusing
+# "env: node: No such file or directory" rather than "npm not found".
+[ "$IS_MAC" = 1 ] && [ -d /opt/homebrew/bin ] && export PATH="/opt/homebrew/bin:$PATH"
+
 if ! command -v npm >/dev/null 2>&1; then
     export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
     # shellcheck disable=SC1091
@@ -45,7 +66,11 @@ cd "$REPO" || fail "Cannot enter $REPO"
 # Already running? Raise the existing window instead of starting a second copy
 # that would fight over the same debug port and project state.
 if pgrep -f "electron .*dist/main\.js" >/dev/null 2>&1; then
-    command -v wmctrl >/dev/null 2>&1 && wmctrl -a "Podium - PHP Development Platform" 2>/dev/null
+    if [ "$IS_MAC" = 1 ]; then
+        osascript -e 'tell application "Electron" to activate' 2>/dev/null
+    else
+        command -v wmctrl >/dev/null 2>&1 && wmctrl -a "Podium - PHP Development Platform" 2>/dev/null
+    fi
     echo "podium-gui: already running (raised existing window)"
     exit 0
 fi
@@ -56,7 +81,13 @@ if ! npm run build-ts > "$LOG" 2>&1; then
 fi
 
 echo "podium-gui: starting..."
-setsid nohup npx electron dist/main.js >> "$LOG" 2>&1 < /dev/null &
+# setsid is a util-linux tool and does not exist on macOS; nohup plus a
+# background job with disown achieves the same detachment there.
+if [ "$IS_MAC" = 1 ]; then
+    nohup npx electron dist/main.js >> "$LOG" 2>&1 < /dev/null &
+else
+    setsid nohup npx electron dist/main.js >> "$LOG" 2>&1 < /dev/null &
+fi
 disown 2>/dev/null || true
 
 # Confirm it actually came up rather than reporting success on a launch that
