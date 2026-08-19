@@ -1282,6 +1282,36 @@ async function run() {
     check('the probe avoids a login shell',
       !/command -v podium/.test(withoutComments(sshBlock)));
 
+    // --- Executor ---------------------------------------------------------
+    //
+    // Remote execution needs a reachable host, which a test suite cannot
+    // guarantee, so the network path is verified by hand. What IS tested here
+    // is the part that must hold with no network at all: a command must never
+    // run against the wrong machine.
+    const localExec = await app.evaluate(async ({ ipcMain }) =>
+      ipcMain._invokeHandlers.get('execute-podium-on')({}, 'local', 'status', ['--all', '--json-output']));
+    check('the executor runs commands on the local host',
+      localExec.code === 0 && localExec.stdout.startsWith('{'),
+      `code ${localExec.code}: ${(localExec.stderr || '').slice(0, 80)}`);
+
+    // The dangerous failure: a project pointing at a host that has since been
+    // removed. Falling back to local would run the command against a different
+    // machine and report success — worse than any error.
+    const ghost = await app.evaluate(async ({ ipcMain }) =>
+      ipcMain._invokeHandlers.get('execute-podium-on')({}, 'no-such-host-id', 'status', ['--json-output']));
+    check('an unknown host fails rather than silently running locally',
+      ghost.code !== 0 && /no ssh host/i.test(ghost.stderr) && ghost.stdout === '',
+      JSON.stringify(ghost).slice(0, 120));
+
+    // Saving profiles must drop cached connections: a host or key edit means a
+    // reused connection is talking to a machine the profile no longer
+    // describes.
+    const mainSrcExec = require('fs').readFileSync(
+      require('path').join(require('./helpers').ROOT, 'src/main.ts'), 'utf8');
+    const saveHandler = mainSrcExec.slice(mainSrcExec.indexOf("ipcMain.handle('save-ssh-profiles'"));
+    check('saving profiles disposes cached connections',
+      /disposeExecutors\(\)/.test(saveHandler.slice(0, 700)));
+
     // Clean up so the suite does not leave hosts behind on a real machine.
     await win.evaluate(async (n) => {
       const list = window.__sshProfiles();

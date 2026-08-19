@@ -131,6 +131,43 @@ array indices, `coproc` and `|&`.
 `bash -n` alone would not have caught it — `mapfile` parses fine and fails at
 runtime, which is precisely how it broke.
 
+## Built so far
+
+**SSH profiles tab** (PR #36) — multiple hosts, each with a connection test that
+probes for podium and remembers where it found it.
+
+**Executor** (PR #37) — one `exec` interface with a local and an SSH
+implementation, and `execute-podium-on <hostId> <subcommand>`. One ssh2
+connection per host, reused: measured against the dell-laptop, the first call
+costs 1035ms and later ones 772-786ms, so roughly 250ms of handshake is
+amortised away. Paid per poll per host, that is the difference between usable
+and not.
+
+An unknown host id **fails** rather than falling back to local. A project
+pointing at a removed host running its command against a different machine and
+reporting success is worse than any error.
+
+Not yet built: streaming and pty channels. Both are separate from `exec` and
+neither has a caller yet; designing them before one exists would be guessing.
+
+### A fourth PATH surface, found by running it
+
+Resolving podium absolutely is necessary but **not sufficient**. Podium's own
+scripts shell out to `docker`, `git` and `sed`, and those inherit the same
+PATH-less environment:
+
+```
+$ ssh mac '/usr/local/bin/podium status --all --json-output'
+status.sh: line 137: docker: command not found     # /usr/local/bin/docker exists
+
+$ ssh mac 'PATH=/usr/local/bin:/opt/homebrew/bin:$PATH /usr/local/bin/podium status ...'
+{ "shared_services": { ...                          # works
+```
+
+So every remote command carries an explicit PATH prefix. Same fact as the other
+three surfaces, one layer deeper: it is not only what Podium invokes, but what
+Podium invokes invokes.
+
 ## Things that are per-host, not per-project
 
 - **Shared services.** `enable-service` affects one machine, and each host has
