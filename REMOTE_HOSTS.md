@@ -64,6 +64,52 @@ Windows, and it does exec, sftp and pty channels. **Connection multiplexing is
 not optional**: the dashboard polls on a timer, and a fresh handshake per poll
 is 200-500ms of nothing.
 
+## Invoke podium by absolute path, never by name
+
+Reported by the CLI session from the Mac rig, 2026-08-19, before the executor
+existed — which is the only reason it is not a bug yet.
+
+`ssh <mac> 'podium status --json-output'` fails with **command not found**, on a
+machine where Podium is installed and working:
+
+```
+non-interactive (ssh host 'cmd'):  PATH=/usr/bin:/bin:/usr/sbin:/sbin   -> not found
+login shell      (zsh -lc):        PATH=/usr/local/bin:...:/opt/homebrew/bin:... -> found
+```
+
+macOS builds PATH from `/etc/paths` via `path_helper`, which runs only for
+**login** shells. A non-interactive `ssh host 'cmd'` gets a bare four-entry PATH
+with `/usr/local/bin` missing — exactly where podium lives.
+
+This is the worst shape of the bug because **it works against a Linux host**,
+where `/usr/local/bin` is normally on PATH regardless. So the naive executor
+passes every test against `cassie` and fails against a Mac, looking like the host
+is misconfigured or Podium is not installed when both are fine.
+
+**Use `/usr/local/bin/podium`, not `zsh -lc "podium ..."`.** A login shell also
+sources the user's rc files, so their aliases, version managers and shell noise
+end up in a stream being parsed as JSON. The absolute path is the same on macOS
+and Linux — both installers symlink there.
+
+This is the third instance of one pattern in this codebase: `resolvePodium()`
+exists because a `.desktop` launch has no `/usr/local/bin`, `resolveBinary()`
+because a Finder launch has no `/opt/homebrew/bin`, and now an SSH exec has
+neither. The executor should resolve remotely the same way the local one does.
+
+## Shell scripts must run on bash 3.2
+
+macOS ships bash 3.2.57 and always will — Apple froze it at the last GPLv2
+release. Every script here uses `#!/usr/bin/env bash`, which resolves to that
+unless Homebrew's bash is installed; on the Mac rig it is not.
+
+The CLI's `podium configure` crashed there on `mapfile: command not found`.
+Verified: all three scripts here parse under the rig's real bash 3.2, and a test
+now rejects `mapfile`, `readarray`, `declare -A`, `${v,,}`, `${v^^}`, negative
+array indices, `coproc` and `|&`.
+
+`bash -n` alone would not have caught it — `mapfile` parses fine and fails at
+runtime, which is precisely how it broke.
+
 ## Things that are per-host, not per-project
 
 - **Shared services.** `enable-service` affects one machine, and each host has

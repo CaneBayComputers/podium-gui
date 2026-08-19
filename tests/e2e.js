@@ -1867,6 +1867,32 @@ async function run() {
         offered.length === 0, offered.join(','));
     }
 
+    // macOS ships bash 3.2.57 and always will — Apple froze it at the last
+    // GPLv2 release. Every script here uses `#!/usr/bin/env bash`, which on a
+    // Mac resolves to that unless Homebrew's bash is installed, and on the test
+    // rig it is not. `bash -n` alone does NOT catch this: `mapfile` parses fine
+    // and fails at runtime with "command not found", which is exactly how the
+    // CLI's `podium configure` broke on the Mac.
+    const BASH4 = [
+      ['mapfile', /\bmapfile\b/],
+      ['readarray', /\breadarray\b/],
+      ['associative arrays', /declare\s+-A\b/],
+      ['case conversion \${v,,}', /\$\{[A-Za-z_][A-Za-z0-9_]*,,?\}/],
+      ['case conversion \${v^^}', /\$\{[A-Za-z_][A-Za-z0-9_]*\^\^?\}/],
+      ['negative array index', /\$\{[A-Za-z_][A-Za-z0-9_]*\[-[0-9]+\]\}/],
+      ['coproc', /\bcoproc\b/],
+      ['|& pipe', /\|&/]
+    ];
+    for (const file of ['scripts/podium-sync.sh', 'scripts/podium-gui-dev.sh',
+                        'install-mac.sh', 'packaging/after-install.sh']) {
+      const full = pathMod.join(ROOT, file);
+      if (!fsMod.existsSync(full)) { check(`${file} exists`, false); continue; }
+      const body = fsMod.readFileSync(full, 'utf8');
+      const found = BASH4.filter(([, re]) => re.test(body)).map(([label]) => label);
+      check(`${file} avoids bash 4+ constructs (macOS has 3.2)`,
+        found.length === 0, found.join('; '));
+    }
+
     // Arch-only landmines, both from the CLI's installer.
     const archBody = fsMod.readFileSync(pathMod.join(ROOT, 'install-arch.sh'), 'utf8');
     check('arch initialises the pacman keyring', /pacman-key --init/.test(archBody));
