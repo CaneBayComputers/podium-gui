@@ -285,6 +285,42 @@ async function run() {
     await win.evaluate(() => window.loadProjects());
     await win.waitForTimeout(3000);
 
+    // --- Dashboard union --------------------------------------------------
+    //
+    // The bug this pins: loadServices used to call the full status parser,
+    // which rebuilds the project list. On a multi-host dashboard that wiped the
+    // union and refilled it from the local host alone, so whichever of
+    // loadProjects and loadServices finished last decided what the grid showed.
+    // Same shape as the metadata-cache race removed earlier — two loaders
+    // owning one piece of state.
+    const rendererSource = require('fs').readFileSync(
+      require('path').join(require('./helpers').ROOT, 'src/renderer.ts'), 'utf8');
+    const servicesLoader = rendererSource.slice(
+      rendererSource.indexOf('async function loadServices'),
+      rendererSource.indexOf('async function loadServices') + 1400);
+    check('loadServices does not rebuild the project list',
+      !/parseProjectStatusJSON/.test(servicesLoader),
+      'loadServices must own shared services only');
+
+    // Every project carries the host it lives on, so an action can be aimed at
+    // the right machine and two same-named projects stay distinct.
+    const hostTagged = await win.evaluate(() =>
+      window.__allProjects().every((p) => typeof p.hostId === 'string' && p.hostId.length > 0));
+    check('every project is tagged with the host it lives on', hostTagged);
+
+    // Identity is (host, name). Two hosts can each have a drupal-test.
+    check('project identity is host-scoped, not name-only',
+      /function projectKey/.test(rendererSource) && /\$\{hostId\}:\$\{name\}/.test(rendererSource));
+
+    // A host that fails its poll must be visible. Contributing no tiles is
+    // indistinguishable from a host that simply has no projects.
+    const loaderBlock = rendererSource.slice(rendererSource.indexOf('async function loadProjects'),
+                                             rendererSource.indexOf('async function loadProjects') + 2200);
+    check('a host that does not answer is recorded rather than dropped',
+      /hostErrors\[host\.id\]/.test(loaderBlock));
+    check('hosts are polled in parallel, not one after another',
+      /Promise\.all\(dashboardHosts\.map/.test(loaderBlock));
+
     // --- Tile filters ----------------------------------------------------
     if (expectedProjects > 0) {
       console.log('\nfilters');
@@ -610,12 +646,16 @@ async function run() {
       ]) {
         let i = 0;
         window.confirm = () => answers[i++];
-        require('electron').ipcRenderer.invoke = async (channel, cmd, args) => {
-          if (channel === 'execute-podium' && cmd === 'remove') {
-            runs[label] = args.slice();
+        // Removal routes through execute-podium-on now, so it lands on the
+        // project's own machine rather than always locally. The flags being
+        // checked are unchanged; only which channel carries them moved.
+        //   execute-podium-on(hostId, subcommand, args)
+        require('electron').ipcRenderer.invoke = async (channel, a, b, c) => {
+          if (channel === 'execute-podium-on' && b === 'remove') {
+            runs[label] = { host: a, args: (c || []).slice() };
             return { code: 1, stdout: '', stderr: 'intercepted by test' };
           }
-          return realInvoke(channel, cmd, args);
+          return realInvoke(channel, a, b, c);
         };
         await window.removeProject('__test_never_exists__');
       }
@@ -626,10 +666,14 @@ async function run() {
     });
 
     check('dismissing the data prompt preserves the database and volumes',
-      (removeFlags.dismissed || []).includes('--preserve-database'),
+      (removeFlags.dismissed?.args || []).includes('--preserve-database'),
       JSON.stringify(removeFlags.dismissed));
     check('deleting data requires a deliberate confirmation',
-      (removeFlags.accepted || []).includes('--force-db-delete'),
+      (removeFlags.accepted?.args || []).includes('--force-db-delete'),
+      JSON.stringify(removeFlags.accepted));
+    // And it must be aimed at a host, not implicitly at this machine.
+    check('removal is routed to a host rather than assumed local',
+      typeof removeFlags.accepted?.host === 'string' && removeFlags.accepted.host.length > 0,
       JSON.stringify(removeFlags.accepted));
     // --force is an undocumented alias for --force-db-delete, not "skip
     // prompts". Passing it once deleted databases users had asked to keep.

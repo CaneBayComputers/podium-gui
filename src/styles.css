@@ -1890,6 +1890,34 @@ span.status-indicator {
     flex: 0 0 auto;
 }
 
+/* Which machine a project lives on. Only rendered with more than one host. */
+.host-badge {
+    margin-left: auto;
+    padding: 0.15rem 0.5rem;
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-subtle);
+    border-radius: 999px;
+    white-space: nowrap;
+}
+
+/* A host that did not answer. Full width above the grid, because it explains
+   an absence rather than describing any tile. */
+.host-errors {
+    flex: 0 0 100%;
+    padding: 0.6rem 0.9rem;
+    margin-bottom: 0.5rem;
+    border: 1px solid var(--neon-orange);
+    border-radius: 6px;
+    background: rgba(255, 140, 0, 0.06);
+    color: var(--neon-orange);
+    font-size: 0.85rem;
+}
+.host-errors p { margin: 0.15rem 0; }
+
 /* SSH host profiles. */
 .ssh-profile {
     padding: 0.9rem;
