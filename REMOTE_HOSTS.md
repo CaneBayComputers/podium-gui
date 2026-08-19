@@ -91,10 +91,31 @@ sources the user's rc files, so their aliases, version managers and shell noise
 end up in a stream being parsed as JSON. The absolute path is the same on macOS
 and Linux — both installers symlink there.
 
-This is the third instance of one pattern in this codebase: `resolvePodium()`
-exists because a `.desktop` launch has no `/usr/local/bin`, `resolveBinary()`
-because a Finder launch has no `/opt/homebrew/bin`, and now an SSH exec has
-neither. The executor should resolve remotely the same way the local one does.
+### The general rule, because there will be a fourth
+
+These are not three bugs. They are **one fact showing up in three places**: a
+context that is not a login shell never gets the PATH a login shell builds.
+
+| surface | missing | why |
+|---|---|---|
+| `.desktop` launch | `/usr/local/bin` | Debian policy strips it from maintainer/launcher PATH |
+| Finder launch | `/opt/homebrew/bin` | added by `~/.zprofile`, never sourced |
+| `ssh host 'cmd'` | both | macOS `path_helper` runs for login shells only |
+
+**Anything Podium invokes must be resolved absolutely, never by name.** The
+fourth surface will look novel to whoever meets it — a launchd job, a cron entry,
+a systemd unit, a CI runner — and it will be this same fact again. Stating it as
+a rule rather than three fixes is the point.
+
+The executor resolves remotely the same way the local one does.
+
+### Smoke-test against the Mac, not a Linux host
+
+`ssh cassie 'podium status'` works, because `/usr/local/bin` is on PATH there
+regardless. So a Linux target passes and proves nothing. The first executor
+smoke test goes against the Mac at `192.168.1.193` — recommended by the CLI
+session, whose own week has been every macOS bug being invisible on Linux and
+none of them subtle once a real Mac ran the code.
 
 ## Shell scripts must run on bash 3.2
 
