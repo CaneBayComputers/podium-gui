@@ -29,122 +29,41 @@ Projects get PHP 8.3, Python 3 or Node 22 containers with nginx, supervisor and 
 
 ---
 
-## Requirements
-
-- **Podium CLI** — installed automatically if missing; the GUI cannot run without it.
-- **Docker** — for the containers.
-- **Node 20+** — for building from source only. Not needed to run a release.
-
----
-
 ## Install
+
+**Linux**
 
 ```bash
 git clone https://github.com/CaneBayComputers/podium-gui.git
 cd podium-gui
-./install-ubuntu.sh          # or install-fedora.sh / install-arch.sh / install-mac.sh
+./install-ubuntu.sh          # or install-fedora.sh / install-arch.sh
 ```
 
-**The Podium CLI is installed first if it is missing.** The GUI is a front end for the CLI and is useless without it, so it is never installable alone — if `podium` is not on PATH, the matching CLI installer runs first (from a sibling `podium-cli/` checkout when there is one, otherwise fetched from GitHub).
+**macOS**
 
-Run the installer from a checkout and *that* checkout is installed (symlinked) rather than a fresh clone, so a development tree stays the live install.
+```bash
+git clone https://github.com/CaneBayComputers/podium-gui.git
+cd podium-gui
+./install-mac.sh
+```
 
-On first launch, if Podium has not been configured yet, the GUI collects what `podium configure` needs and runs it for you.
+**Windows**
 
-Three things the installers handle that are worth knowing about:
+Download [install-windows.bat](https://raw.githubusercontent.com/CaneBayComputers/podium-gui/master/scripts/install-windows.bat) and double-click it.
 
-- **Node is version-checked, not just detected.** Ubuntu 24.04 still ships Node 18, which is too old for the build tooling, so the installer upgrades to 20+.
-- **`node-pty` is rebuilt against Electron's ABI**, or the embedded build terminal cannot load. A failure here is a warning, not an abort — the GUI works without it.
-- **`xdotool`/`wmctrl`** are installed to support `--no-focus`; without them the window still opens unfocused.
+Every installer sets up from source, so the checkout you install from is the one that runs. Updating is a `git pull`, and re-running an installer is safe.
 
 ---
 
-## Development
+## Where Podium runs
 
-```bash
-npm install
-npm run dev          # build TypeScript, then launch
-npm run build-ts     # types only
-npm run build        # package for distribution
-```
+Podium itself is Docker plus shell scripts, so where it can run differs by platform — and that is the one thing worth understanding before you start.
 
-### Launching without stealing focus
+**Linux and macOS** — the installer puts Podium CLI on the same machine if it is not already there. The GUI is a front end for the CLI and is useless without it, so it is never installed alone. Projects live locally; on first launch the GUI collects what `podium configure` needs and runs it for you.
 
-```bash
-electron dist/main.js --no-focus
-```
+**Windows** — there is no local Podium, and the installer does not try to add one. The GUI runs on Windows and drives Podium on *other* machines over SSH: a Linux box, a Mac, a Raspberry Pi, an EC2 instance. Add them under **Settings → SSH Hosts**, and each one needs Podium already installed and configured. Projects, containers and files all live on the host that runs them.
 
-Opens the window **unfocused and behind the other windows**, for background or automated launches — a test run should not grab the keyboard from whoever is at the machine. The e2e harness passes it automatically.
-
-On X11 the stacking part uses `wmctrl`/`xdotool` if either is installed; without them the window still opens unfocused, which is the part that matters. The `below` hint is cleared the first time the window is focused, so once you click it, it behaves like any other window. A normal launch focuses as usual.
-
----
-
-## Testing
-
-The GUI is driven end-to-end with Playwright, which supports Electron natively — it launches the real app, queries and clicks the renderer DOM, and can call into the **main** process to exercise IPC handlers directly.
-
-```bash
-npm run test:e2e     # builds TypeScript, then runs tests/e2e.js
-```
-
-The suite is deliberately **read-only**: it never creates, installs, clones or removes a project, and never stops the shared services. It does require Podium to be installed and configured (`/etc/podium-cli/.env` with `PROJECTS_DIR`), since it asserts against real `podium status` output. A real `podium install` run is verified separately on a throwaway box.
-
-Screenshots land in a gitignored `debug/` directory with predictable names (`01-dashboard.png`, `02-install-picker.png`, …), so a failing run can point at an exact image.
-
-### Writing tests
-
-Select elements by `data-testid`, never by CSS class or DOM position — restyling must not break selectors, or an agent silently clicks the wrong thing:
-
-```js
-const { launchApp, screenshot, t } = require('./helpers');
-
-const { app, win } = await launchApp();
-await win.click(t('install-app'));
-await screenshot(win, 'install-picker');
-
-// Reach into the main process. `require` is NOT in scope inside app.evaluate(),
-// but the electron module is injected and ipcMain exposes its invoke handlers,
-// so the real handler runs rather than a reimplementation of it.
-const catalog = await app.evaluate(async ({ ipcMain }) =>
-  ipcMain._invokeHandlers.get('get-app-catalog')({})
-);
-
-await app.close();
-```
-
-Two traps, both of which produced convincing false results here:
-
-- **Screenshot animations.** Modals animate in (`fadeIn` + `scaleIn`, 0.3s). Capturing immediately yields a half-transparent overlay that looks like a serious CSS bug. `helpers.screenshot()` passes `animations: 'disabled'` to fast-forward them; use it rather than `win.screenshot()` directly.
-- **`offsetParent` on fixed elements.** The loading splash is `position: fixed`, and fixed elements always report `offsetParent === null` — so using that to detect "hidden" passes instantly and every subsequent assertion races the initial render. Check `display`/`visibility` instead.
-
----
-
-## Themes
-
-Five, in **Settings → Appearance**. The choice is remembered and applied before
-first paint, so there is no flash of the previous theme on launch.
-
-| Theme | |
-|---|---|
-| **Retro** | The original synthwave look. The default. |
-| **Dark** | Neutral slate, no neon. |
-| **Light** | For bright rooms. |
-| **Matrix** | Green on black. |
-| **Podium** | Matches [podiumcli.com](https://podiumcli.com). |
-
-Each theme carries its own **16-colour ANSI palette** for the embedded
-terminals, not just a background and foreground. This is the part that is easy
-to get wrong: xterm paints ANSI colours from its own palette rather than from
-CSS, so a theme that only restyles the page leaves terminal output in the
-previous scheme. It matters most in Light, where the standard ANSI brights
-assume a dark terminal — bright yellow on white measures 2.9:1 and is what npm
-and composer print their warnings in.
-
-The e2e suite asserts this numerically rather than by eye: body text must clear
-4.5:1 against its background, muted text 3:1, and every ANSI colour 3:1 against
-its own terminal background. A theme that looks fine in a thumbnail and is
-miserable to actually read fails the suite.
+Remote hosts work from Linux and macOS too — a Windows machine simply has no local option to fall back on.
 
 ---
 
