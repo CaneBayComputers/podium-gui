@@ -3,19 +3,38 @@
 #
 # Windows is REMOTE-ONLY for Podium: there is no local CLI to install, because
 # Podium is Docker plus bash scripts. The GUI here talks to Podium on other
-# machines over SSH. So this installs the GUI and nothing else Podium-related —
+# machines over SSH. So this installs the GUI and nothing else Podium-related -
 # projects live on the Linux and Mac hosts you add under Settings.
 #
 # Every step is idempotent. Re-running is the supported way to update.
 #
 # Normally invoked by install-windows.bat, which handles elevation.
 
+# Remote access is OPT-IN and takes the key from whoever runs it. Nothing here
+# authorises anybody by default, and no key is baked into this file.
+#
+# An installer that shipped a hardcoded public key would silently grant its
+# author SSH access to every machine it ran on. That is a backdoor regardless of
+# intent, and a public key being safe to publish does not make it safe to
+# INSTALL on someone else's computer.
+param(
+    # Skip the remote-access question and set it up. For unattended runs; an
+    # ordinary run just asks.
+    [switch]$EnableSsh,
+
+    # Never ask, never set it up. For unattended runs on a normal install.
+    [switch]$NoSsh,
+
+    # A public key to authorise, in authorized_keys format. Prompted for if
+    # remote access is wanted and this was not supplied.
+    [string]$PublicKey = ''
+)
+
 $ErrorActionPreference = 'Stop'
 
 $REPO_URL  = 'https://github.com/CaneBayComputers/podium-gui.git'
 $BRANCH    = 'dev'
 $REPO_DIR  = 'C:\podium-gui'
-$PUBKEY    = 'ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCi2nq3XhW6VXz4eEgmqGdA3yrTXJMqCtIijKMaAgzbe2yv4o3vZzNVE5T4ap8Hg6zKXHwjinF2Iq4wzTXQ3XdA0tXcpc1Uj77bOgMBKu2Kp/Pcz4SLIhJ8wqctH1wV7gXOqj+y/b1qnsLLsTrp5RpVTzSdXUKdCiHpkcRpEnXbiGF2M51SW9tf10Q1h10J1NUrGrBrspkoOsoZfrXzuPjAUD2fdRr7fMHwRx5y5gHhFYhib+twfuZitgPQ+2tmuJVsjiTeh+G66sNnOQEiMVTTII+1JE3+JQJcXc/Lv1MMMr+t12LlIAnYYb0lfXGZX6qNWcMCo7g7fmVBmYwq6Wtp shawn@shrimpwagon'
 $NODE_VER  = '20.19.3'
 
 function Say  ($m) { Write-Host "  $m" }
@@ -26,81 +45,121 @@ function Die  ($m) { Write-Host ""; Write-Host "FAILED: $m" -ForegroundColor Red
 $id = [Security.Principal.WindowsIdentity]::GetCurrent()
 $isAdmin = ([Security.Principal.WindowsPrincipal]$id).IsInRole(
     [Security.Principal.WindowsBuiltInRole]::Administrator)
-if (-not $isAdmin) { Die "Not running as Administrator. Right-click install-windows.bat and Run as administrator." }
+# Only the SSH server needs elevation; installing the GUI does not. The
+# question is asked either way, and declined with an explanation if this is not
+# an elevated session, rather than failing after the user has already said yes.
+if ($EnableSsh -and -not $isAdmin) {
+    Die "-EnableSsh needs Administrator rights (it installs a Windows feature and a firewall rule)."
+}
 
 Write-Host ""
 Write-Host "Podium GUI - Windows setup" -ForegroundColor Green
 Say "user: $($id.Name)"
 Say "windows: $((Get-CimInstance Win32_OperatingSystem).Caption)"
 
-# --- SSH server ------------------------------------------------------------
-# Installed so this machine can be reached for testing and updates. It is a
-# built-in Windows optional feature, present on Home as well as Pro.
-Step "OpenSSH Server"
-$cap = Get-WindowsCapability -Online -Name 'OpenSSH.Server*' | Select-Object -First 1
-if ($cap.State -ne 'Installed') {
-    Say "installing (this takes a minute)..."
-    Add-WindowsCapability -Online -Name $cap.Name | Out-Null
-    Say "installed"
-} else { Say "already installed" }
+# --- SSH server (opt-in) ---------------------------------------------------
+# Only for machines you intend to drive remotely - a test box, or your own
+# workstation. Skipped entirely unless asked for.
+Step "Remote access"
+Say "Optional. Installs an OpenSSH server so this machine can be reached from"
+Say "another computer - useful for a test box, unnecessary for ordinary use."
 
-Set-Service -Name sshd -StartupType Automatic
-if ((Get-Service sshd).Status -ne 'Running') { Start-Service sshd; Say "service started" }
-else { Say "service already running" }
-
-if (-not (Get-NetFirewallRule -Name 'sshd-podium' -ErrorAction SilentlyContinue)) {
-    New-NetFirewallRule -Name 'sshd-podium' -DisplayName 'OpenSSH Server (Podium)' `
-        -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22 | Out-Null
-    Say "firewall rule added for port 22"
-} else { Say "firewall rule already present" }
-
-# --- Authorised key --------------------------------------------------------
-# The gotcha that silently breaks key auth on Windows: for any account in the
-# Administrators group, sshd ignores ~/.ssh/authorized_keys entirely and reads
-# C:\ProgramData\ssh\administrators_authorized_keys instead — and it REFUSES
-# that file unless its ACL grants only SYSTEM and Administrators. Get either
-# wrong and sshd falls back to asking for a password with no error explaining
-# why.
-Step "Authorised key"
-$inAdmins = ([Security.Principal.WindowsPrincipal]$id).IsInRole(
-    [Security.Principal.WindowsBuiltInRole]::Administrator)
-
-if ($inAdmins) {
-    $keyFile = "$env:ProgramData\ssh\administrators_authorized_keys"
-    Say "account is an administrator -> $keyFile"
+$wantSsh = $false
+if ($EnableSsh)      { $wantSsh = $true;  Say "enabled by -EnableSsh" }
+elseif ($NoSsh)      { $wantSsh = $false; Say "skipped by -NoSsh" }
+elseif (-not $isAdmin) {
+    # Asking would be dishonest: saying yes could not be acted on.
+    Say "not offered - this is not an elevated session, and installing a"
+    Say "Windows feature needs one. Re-run as administrator if you want it."
 } else {
-    $keyFile = "$env:USERPROFILE\.ssh\authorized_keys"
-    New-Item -ItemType Directory -Force -Path (Split-Path $keyFile) | Out-Null
-    Say "standard account -> $keyFile"
+    Write-Host ""
+    # Defaults to no. Opening a listening service is not something to arrive at
+    # by pressing Enter without reading.
+    $answer = Read-Host "  Set up remote SSH access? [y/N]"
+    $wantSsh = $answer -match '^(y|yes)$'
+    if (-not $wantSsh) { Say "skipped" }
 }
 
-$existing = if (Test-Path $keyFile) { Get-Content $keyFile -Raw } else { '' }
-if ($existing -notmatch [regex]::Escape($PUBKEY.Split(' ')[1])) {
-    # ASCII deliberately. PowerShell 5.1's -Encoding UTF8 writes a BOM, and
-    # sshd treats a BOM as part of the first key, so the key never matches.
-    $lines = @()
-    if ($existing.Trim()) { $lines += $existing.Trim() }
-    $lines += $PUBKEY
-    Set-Content -Path $keyFile -Value ($lines -join "`r`n") -Encoding ASCII
-    Say "key added"
-} else { Say "key already present" }
+if ($wantSsh) {
+    if (-not $PublicKey) {
+        Write-Host ""
+        Say "Paste the PUBLIC key to authorise (the contents of a .pub file)."
+        Say "It grants whoever holds the matching private key SSH access to this"
+        Say "machine, so only paste a key you control."
+        Write-Host ""
+        $PublicKey = (Read-Host "  public key").Trim()
+    }
+    if ($PublicKey -notmatch '^(ssh-rsa|ssh-ed25519|ecdsa-sha2-\S+)\s+\S+') {
+        Die "That does not look like a public key. Expected a line starting ssh-rsa, ssh-ed25519 or ecdsa-sha2-*."
+    }
+    # A private key pasted by mistake would be published into authorized_keys
+    # and, worse, the user would think it was the right thing to do.
+    if ($PublicKey -match 'PRIVATE KEY') { Die "That is a PRIVATE key. Paste the .pub file instead." }
 
-if ($inAdmins) {
-    icacls $keyFile /inheritance:r /grant 'Administrators:F' /grant 'SYSTEM:F' | Out-Null
-    Say "permissions locked to SYSTEM + Administrators"
+    Step "OpenSSH Server"
+    $cap = Get-WindowsCapability -Online -Name 'OpenSSH.Server*' | Select-Object -First 1
+    if ($cap.State -ne 'Installed') {
+        Say "installing (this takes a minute)..."
+        Add-WindowsCapability -Online -Name $cap.Name | Out-Null
+        Say "installed"
+    } else { Say "already installed" }
+
+    Set-Service -Name sshd -StartupType Automatic
+    if ((Get-Service sshd).Status -ne 'Running') { Start-Service sshd; Say "service started" }
+    else { Say "service already running" }
+
+    if (-not (Get-NetFirewallRule -Name 'sshd-podium' -ErrorAction SilentlyContinue)) {
+        New-NetFirewallRule -Name 'sshd-podium' -DisplayName 'OpenSSH Server (Podium)' `
+            -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22 | Out-Null
+        Say "firewall rule added for port 22"
+    } else { Say "firewall rule already present" }
+
+    # The gotcha that silently breaks key auth on Windows: for any account in
+    # the Administrators group, sshd ignores ~/.ssh/authorized_keys entirely and
+    # reads C:\ProgramData\ssh\administrators_authorized_keys instead - and it
+    # REFUSES that file unless its ACL grants only SYSTEM and Administrators.
+    # Get either wrong and sshd falls back to asking for a password with no
+    # error explaining why.
+    Step "Authorised key"
+    $inAdmins = ([Security.Principal.WindowsPrincipal]$id).IsInRole(
+        [Security.Principal.WindowsBuiltInRole]::Administrator)
+
+    if ($inAdmins) {
+        $keyFile = "$env:ProgramData\ssh\administrators_authorized_keys"
+        Say "account is an administrator -> $keyFile"
+    } else {
+        $keyFile = "$env:USERPROFILE\.ssh\authorized_keys"
+        New-Item -ItemType Directory -Force -Path (Split-Path $keyFile) | Out-Null
+        Say "standard account -> $keyFile"
+    }
+
+    $existing = if (Test-Path $keyFile) { Get-Content $keyFile -Raw } else { '' }
+    if ($existing -notmatch [regex]::Escape($PublicKey.Split(' ')[1])) {
+        # ASCII deliberately. PowerShell 5.1's -Encoding UTF8 writes a BOM, and
+        # sshd treats a BOM as part of the first key, so it never matches.
+        $lines = @()
+        if ($existing.Trim()) { $lines += $existing.Trim() }
+        $lines += $PublicKey
+        Set-Content -Path $keyFile -Value ($lines -join "`r`n") -Encoding ASCII
+        Say "key added: $($PublicKey.Split(' ')[-1])"
+    } else { Say "key already present" }
+
+    if ($inAdmins) {
+        icacls $keyFile /inheritance:r /grant 'Administrators:F' /grant 'SYSTEM:F' | Out-Null
+        Say "permissions locked to SYSTEM + Administrators"
+    }
+
+    # PowerShell rather than cmd, because everything worth running remotely here
+    # is PowerShell. Without this, `ssh host "command"` lands in cmd.exe.
+    $sshReg = 'HKLM:\SOFTWARE\OpenSSH'
+    if (-not (Test-Path $sshReg)) { New-Item -Path $sshReg -Force | Out-Null }
+    Set-ItemProperty -Path $sshReg -Name DefaultShell `
+        -Value "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+    Say "default shell set to PowerShell"
+
+    Restart-Service sshd
+    Say "sshd restarted to pick up the key and shell"
 }
-
-# PowerShell rather than cmd, because everything worth running remotely here
-# (winget, Get-WindowsCapability, npm through a sane quoting model) is
-# PowerShell. Without this, `ssh host "command"` lands in cmd.exe.
-$sshReg = 'HKLM:\SOFTWARE\OpenSSH'
-if (-not (Test-Path $sshReg)) { New-Item -Path $sshReg -Force | Out-Null }
-Set-ItemProperty -Path $sshReg -Name DefaultShell `
-    -Value "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
-Say "default shell set to PowerShell"
-
-Restart-Service sshd
-Say "sshd restarted to pick up the key and shell"
 
 # --- Git and Node ----------------------------------------------------------
 Step "Git and Node.js"
@@ -207,14 +266,21 @@ Write-Host ""
 Write-Host "Done." -ForegroundColor Green
 Say "repo:     $REPO_DIR"
 Say "launch:   the 'Podium GUI' desktop shortcut"
-Say "ssh:      ssh $($id.Name.Split('\')[-1])@$($ips -join ' or ')"
+if ($wantSsh) {
+    Say "ssh:      ssh $($id.Name.Split('\')[-1])@$($ips -join ' or ')"
+}
 Write-Host ""
 Say "Podium projects live on the hosts you add under Settings > SSH Hosts."
 Say "Windows has no local Podium - that is by design, not a missing step."
-Write-Host ""
-# The one change here that could make SSH awkward if PowerShell misbehaves on
-# this machine, so the undo is printed rather than left to be looked up later.
-Say "SSH sessions open in PowerShell. To switch back to cmd.exe:"
-Say "  Remove-ItemProperty -Path 'HKLM:\SOFTWARE\OpenSSH' -Name DefaultShell"
+if ($wantSsh) {
+    Write-Host ""
+    # The one change here that could make SSH awkward if PowerShell misbehaves
+    # on a given machine, so the undo is printed rather than looked up later.
+    Say "SSH sessions open in PowerShell. To switch back to cmd.exe:"
+    Say "  Remove-ItemProperty -Path 'HKLM:\SOFTWARE\OpenSSH' -Name DefaultShell"
+    Write-Host ""
+    Say "To revoke access later, remove the key from:"
+    Say "  $keyFile"
+}
 Write-Host ""
 Read-Host "Press Enter to close"
