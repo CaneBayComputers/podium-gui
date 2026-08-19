@@ -270,25 +270,37 @@ const PODIUM_CLI_DIR = '/usr/local/share/podium-cli';
 // Deliberately not cached. It is a handful of stat calls at human frequency,
 // and a cache would make the resolution untestable — the first call would fix
 // the answer before any test could vary the environment.
-function resolvePodium(): { command: string; prefix: string[] } {
-  // PATH first — a dev checkout or a user-installed copy should win over the
-  // packaged one, the same way it would in a shell.
+// Find an executable without trusting PATH.
+//
+// A .desktop launch on Linux has no /usr/local/bin, and a macOS app launched
+// from Finder has no /opt/homebrew/bin — Homebrew adds that in ~/.zprofile,
+// which a GUI launch never sources. Both are silent: the command simply is not
+// found, and whatever depended on it degrades without saying why.
+function resolveBinary(name: string): string | null {
   const pathDirs = (process.env.PATH || '').split(path.delimiter).filter(Boolean);
   const candidates = [
-    ...pathDirs.map((dir) => path.join(dir, 'podium')),
-    '/usr/local/bin/podium',
-    '/usr/bin/podium',
-    '/opt/homebrew/bin/podium'
+    // PATH first, so a dev or user-installed copy wins the way it would in a
+    // shell, then the locations a GUI launch cannot see.
+    ...pathDirs.map((dir) => path.join(dir, name)),
+    `/usr/local/bin/${name}`,
+    `/usr/bin/${name}`,
+    `/opt/homebrew/bin/${name}`
   ];
 
   for (const candidate of candidates) {
     try {
       fs.accessSync(candidate, fs.constants.X_OK);
-      return { command: candidate, prefix: [] };
+      return candidate;
     } catch {
       // Not there, or not executable — keep looking.
     }
   }
+  return null;
+}
+
+function resolvePodium(): { command: string; prefix: string[] } {
+  const found = resolveBinary('podium');
+  if (found) return { command: found, prefix: [] };
 
   // Last resort: the CLI's own entry script, run through bash so it does not
   // need its executable bit.
@@ -380,6 +392,12 @@ function resolveOnPath(bin: string): string | null {
 ipcMain.handle('get-podium-command', async (): Promise<{ command: string; prefix: string[] }> =>
   resolvePodium());
 
+// Same, for the install check. It is a separate handler because it exercises a
+// separate code path: `resolvePodium` was already PATH-independent while
+// checkPodiumStatus still ran a bare `podium`, so testing the first said
+// nothing about the second.
+ipcMain.handle('get-podium-status', async (): Promise<string> => checkPodiumStatus());
+
 // The renderer asks for commands by name. Rewrite the one command that is ours
 // and leave everything else (docker, git) alone — those genuinely are expected
 // to be on PATH, and silently rewriting them would hide a real misconfiguration.
@@ -408,8 +426,14 @@ function readEnvValue(key: string): string | null {
 
 function checkPodiumStatus(): PodiumStatus {
   try {
-    // Check if podium command exists in PATH
-    execSync('podium help --no-colors', { stdio: 'pipe' });
+    // Resolve rather than trusting PATH. This ran a bare `podium`, so on any
+    // launch without /usr/local/bin on PATH — a .desktop entry, or a macOS app
+    // opened from Finder — it threw and the app decided Podium was not
+    // installed, showing the installer instead of the dashboard. It is the
+    // first decision the app makes, so getting it wrong replaces the whole UI.
+    const podium = resolvePodium();
+    execSync([...[podium.command, ...podium.prefix].map((part) => `'${part}'`), 'help', '--no-colors'].join(' '),
+             { stdio: 'pipe' });
 
     // Installed. Configured means the env file exists AND names a projects
     // directory — `podium configure` writes PROJECTS_DIR, and every project
@@ -743,7 +767,13 @@ ipcMain.handle('list-ollama-models', async (event: IpcMainInvokeEvent, baseUrl: 
 // can end up offering an agent this machine cannot properly run.
 ipcMain.handle('get-node-major', async (): Promise<number> => {
   try {
-    const out = execSync('node -v', { encoding: 'utf8' }).trim();
+    // Bare `node` fails on a macOS GUI launch when node came from Homebrew:
+    // /opt/homebrew/bin is added by ~/.zprofile, which Finder does not source.
+    // It failed quietly, returning 0, which silently suppressed the Node
+    // version warning for qwen rather than showing a wrong one.
+    const nodeBin = resolveBinary('node');
+    if (!nodeBin) return 0;
+    const out = execSync(`'${nodeBin}' -v`, { encoding: 'utf8' }).trim();
     return parseInt(out.replace(/^v/, '').split('.')[0] || '0', 10);
   } catch (error) {
     return 0;
