@@ -227,6 +227,49 @@ async function run() {
         wrong.length === 0, wrong.join('; '));
     }
 
+    // A project with an EMPTY metadata object is the normal case for anything
+    // predating x-metadata, and it cannot occur on this machine — all 14
+    // projects here have a block. Seen for real on the Arch EC2 box, whose one
+    // project returns `"metadata": {}`, so it is worth pinning rather than
+    // assuming the `||` defaults hold.
+    const emptyMeta = await win.evaluate(() => {
+      const before = window.__allProjects().length;
+      const synthetic = JSON.stringify({
+        shared_services: {},
+        projects: [
+          { name: 'no-meta', docker_running: false, metadata: {} },
+          { name: 'absent-meta', docker_running: false }
+        ]
+      });
+      const parsed = window.__parseStatus(synthetic);
+      const out = parsed.map((p) => ({
+        name: p.name,
+        emoji: p.emoji,
+        display_name: p.display_name,
+        last_on: p.last_on,
+        disabled: window.isDisabled(p)
+      }));
+      return { out, before };
+    });
+    check('a project with empty metadata gets the default emoji, not undefined',
+      emptyMeta.out.every((p) => p.emoji === '🚀'), JSON.stringify(emptyMeta.out));
+    check('an empty metadata block falls back to the project name for display',
+      emptyMeta.out.every((p) => p.display_name === p.name), JSON.stringify(emptyMeta.out));
+    check('a project with no status metadata is NOT treated as disabled',
+      emptyMeta.out.every((p) => p.disabled === false), JSON.stringify(emptyMeta.out));
+    // Compare only the metadata-derived fields. display_name legitimately
+    // differs because it falls back to the project name, and the two projects
+    // have different names — comparing it made the assertion fail on the one
+    // thing that is supposed to differ.
+    const metaDerived = (p) => JSON.stringify({ emoji: p.emoji, last_on: p.last_on, disabled: p.disabled });
+    check('a missing metadata key behaves the same as an empty one',
+      metaDerived(emptyMeta.out[0]) === metaDerived(emptyMeta.out[1]),
+      JSON.stringify(emptyMeta.out));
+
+    // Restore the real project list; the synthetic parse replaced it.
+    await win.evaluate(() => window.loadProjects());
+    await win.waitForTimeout(3000);
+
     // --- Tile filters ----------------------------------------------------
     if (expectedProjects > 0) {
       console.log('\nfilters');
