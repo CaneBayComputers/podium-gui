@@ -47,7 +47,8 @@
         </header>
 
         <!-- Main Content -->
-        <main class="main-content">
+        <div id="update-banner" class="update-banner" data-testid="update-banner" style="display: none;"></div>
+            <main class="main-content">
             <!-- Project Dashboard -->
             <section class="dashboard">
 
@@ -95,9 +96,7 @@
             <!-- Secondary links, moved out of the header -->
             <footer class="app-footer">
                 <div class="footer-links">
-                    <button class="btn btn-secondary btn-small" onclick="openUrl('https://github.com/CaneBayComputers/podium-gui')" data-testid="github-gui" title="Podium GUI on GitHub">🐙 GitHub</button>
-                    <button class="btn btn-secondary btn-small" onclick="showAboutModal()"
-                            data-testid="about-open" title="About Podium">ℹ️ About</button>
+                    <button class="btn btn-secondary btn-small" onclick="openUrl('https://github.com/CaneBayComputers/podium-gui')" data-testid="github-gui" title="Podium GUI on GitHub"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="currentColor" style="vertical-align:-2px"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg> GitHub</button>
                     <button class="btn btn-secondary btn-small" onclick="showUpdates()"
                             data-testid="updates-open" title="Check for updates">⬆️ Updates<span
                             id="update-badge" class="update-badge" data-testid="update-badge"
@@ -445,6 +444,14 @@
                 </div>
 
                 <div class="modal-body" data-settings-panel="appearance">
+                    <div class="form-group">
+                        <label class="checkbox-row">
+                            <input type="checkbox" id="auto-update-check" data-testid="auto-update-check"
+                                   onchange="setAutoUpdateCheck(this.checked)" checked>
+                            Check for updates when Podium starts
+                        </label>
+                    </div>
+
                     <div class="form-group">
                         <label>Theme</label>
                         <span class="form-help">Applies immediately, including any open terminals.</span>
@@ -796,52 +803,7 @@
         </div>
     </div>
 
-<div id="about-modal" class="modal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h2>About Podium</h2>
-                <span class="close" onclick="closeAboutModal()">&times;</span>
-            </div>
-            <div class="modal-body">
-                <div class="about-logo">
-                    <h1>Podium</h1>
-                    <span class="version" id="about-version" data-testid="about-version">Version —</span>
-                </div>
-                <p><strong>Professional PHP Development Platform</strong></p>
-                <p>Podium is a comprehensive Docker-based development environment for PHP projects, featuring both a powerful Command Line Interface (CLI) and an intuitive Graphical User Interface (GUI).</p>
-                
-                <div class="about-features">
-                    <h3>Features:</h3>
-                    <ul>
-                        <li>🚀 Multi-project support with isolated environments</li>
-                        <li>🗄️ Integrated database services (MySQL, PostgreSQL, MongoDB)</li>
-                        <li>⚡ Caching solutions (Redis, Memcached)</li>
-                        <li>📧 Email testing with MailHog</li>
-                        <li>🤖 Local AI integration with Ollama</li>
-                        <li>🌐 Instant LAN sharing for demos</li>
-                        <li>🎨 Modern GUI with retro synthwave theme</li>
-                    </ul>
-                </div>
 
-                <div class="about-links">
-                    <button class="btn btn-primary" onclick="openUrl('https://github.com/CaneBayComputers/podium')">
-                        ⭐ View on GitHub
-                    </button>
-                    <button class="btn btn-secondary" onclick="openUrl('https://patreon.com/canebaycomputers')">
-                        ❤️ Support on Patreon
-                    </button>
-                    <button class="btn btn-secondary" onclick="openUrl('https://donate.podiumcli.com')">
-                        💳 Donate
-                    </button>
-                </div>
-
-                <div class="about-footer">
-                    <p><small>© 2024 Cane Bay Computers. Made with ❤️ for the PHP community.</small></p>
-                </div>
-            </div>
-        </div>
-
-    </div>
 
 
     <script src="../dist/renderer.js"></script>
