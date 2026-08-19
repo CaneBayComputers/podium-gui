@@ -803,6 +803,68 @@ function clearEmojiFilter(): void {
     saveFilterState(); renderProjects(); renderFilterBar();
 }
 
+// The addresses a project can be reached at FROM THIS MACHINE.
+//
+// A remote project's own URLs are useless here and were the thing I got wrong
+// first time: `local_url` is http://<name>, resolved through the REMOTE host's
+// /etc/hosts, and `lan_url` is that host's own view of its network — on EC2 the
+// private VPC address, unroutable from anywhere else. Only `external_port` is
+// portable: a port is the same number wherever the host is.
+//
+// So a remote project gets one link, composed from the address configured for
+// that host plus its port.
+function projectUrls(project: Project): string {
+    if (project.status === 'stopped') return '';
+
+    const hostId = (project as any).hostId || 'local';
+    const link = (url: string) =>
+        `<a href="#" class="url-link" data-testid="url-${escapeHtml(project.name)}"
+            onclick="event.preventDefault(); openProjectUrl('${escapeHtml(url)}', '${escapeHtml(hostId)}'); return false;"
+            >${escapeHtml(url)}</a>`;
+
+    if (hostId === 'local') {
+        return [
+            project.localUrl ? link(project.localUrl) : '',
+            project.portMapped && project.lanUrl ? link(project.lanUrl) : ''
+        ].join('');
+    }
+
+    const profile = sshProfiles.find((p) => p.id === hostId);
+    if (!profile || !project.port) return '';
+    return link(`http://${profile.host}:${project.port}`);
+}
+
+// Probe before opening, and explain a failure rather than handing the browser a
+// dead address.
+//
+// On click rather than on render: probing every project on every poll is N
+// requests per host per tick for something that rarely changes, and a result
+// from the last tick can be stale by the time anyone clicks it. Asked at the
+// moment it matters, the answer is always current.
+async function openProjectUrl(url: string, hostId: string): Promise<void> {
+    const address = url.replace(/^https?:\/\//, '').replace(/\/$/, '');
+
+    // Short deliberately. A blocked port is the slow failure — a dropped SYN
+    // with no RST runs the timeout out in full, and that is the common case for
+    // a cloud host. A fast wrong-ish "cannot reach it" beats a frozen window.
+    const probe = await ipcRenderer.invoke('check-project-url', address, 2500);
+
+    if (probe.code >= 200 && probe.code < 500) {
+        openUrl(url);
+        return;
+    }
+
+    const label = dashboardHosts.find((h) => h.id === hostId)?.label || hostId;
+    // A timeout and a refusal are different facts and point at different fixes,
+    // so they get different sentences rather than one vague failure.
+    showError(probe.timedOut
+        ? `${url} did not respond within 2.5s. If ${label} is a cloud host, the port `
+          + `probably needs a firewall or security group rule — it is reachable on the `
+          + `machine itself but not from here.`
+        : `${url} could not be reached. ${label} may be asleep, off this network, or `
+          + `refusing the connection.`);
+}
+
 function renderProjects(): void {
     const grid: HTMLElement | null = document.getElementById('projects-grid');
     if (!grid) return;
@@ -900,10 +962,7 @@ function renderProjects(): void {
                 </div>
                 ${descriptionHtml}
                 <div class="project-details">
-                    <div class="project-urls">
-                        ${project.status !== 'stopped' && project.localUrl ? `<a href="#" class="url-link" onclick="event.preventDefault(); openUrl('${project.localUrl}'); return false;">${project.localUrl}</a>` : ''}
-                        ${project.status !== 'stopped' && project.portMapped && project.lanUrl ? `<a href="#" class="url-link" onclick="event.preventDefault(); openUrl('${project.lanUrl}'); return false;">${project.lanUrl}</a>` : ''}
-                    </div>
+                    <div class="project-urls">${projectUrls(parsed)}</div>
                     <div class="project-actions">
                         ${disabled ? `
                         <!--
@@ -4745,6 +4804,8 @@ document.addEventListener('click', function(event: Event) {
 (window as any).showModal = showModal;
 (window as any).hideModal = hideModal;
 (window as any).openUrl = openUrl;
+(window as any).openProjectUrl = openProjectUrl;
+(window as any).__projectUrls = projectUrls;
 (window as any).startServices = startServices;
 (window as any).stopServices = stopServices;
 (window as any).startAllProjects = startAllProjects;
