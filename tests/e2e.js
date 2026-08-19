@@ -47,6 +47,17 @@ function section(name) {
   return !sectionSkipped;
 }
 
+// Choosing a framework is two dropdowns now: its runtime, then the framework.
+// The lookup lives here so no test has to know which runtime a slug belongs to.
+async function selectFramework(win, catalog, slug) {
+  const runtime = catalog.frameworks.find((f) => f.slug === slug)?.runtime;
+  if (runtime) {
+    await win.selectOption('[data-testid="framework-runtime"]', runtime);
+    await win.waitForTimeout(150);
+  }
+  await win.selectOption('[data-testid="framework-choice"]', slug);
+}
+
 function check(name, condition, detail = '') {
   if (sectionSkipped) return;
   if (condition) {
@@ -1302,22 +1313,43 @@ async function run() {
       !fwCatalog.error && fwCatalog.frameworks.length > 0,
       fwCatalog.error || `${fwCatalog.frameworks?.length} frameworks`);
 
+    // Two dropdowns now, so "every framework is offered" means every one is
+    // reachable through some runtime — not that they are all on screen at once.
     await win.waitForFunction(
-      () => document.querySelectorAll('#framework-list input[name="project-type"]').length > 0,
+      () => document.querySelectorAll('#framework-runtime option').length > 0,
       null, { timeout: 10000 }
     );
 
-    const offered = await win.locator('#framework-list input[name="project-type"]')
-      .evaluateAll((els) => els.map((e) => e.value));
+    const offered = await win.evaluate(() => {
+      const runtimeSel = document.getElementById('framework-runtime');
+      const seen = [];
+      for (const opt of runtimeSel.options) {
+        runtimeSel.value = opt.value;
+        window.onRuntimeChange();
+        for (const f of document.getElementById('framework-choice').options) seen.push(f.value);
+      }
+      return seen;
+    });
     const expectedFw = fwCatalog.frameworks.map((f) => f.slug);
-    check(`offers every framework the CLI has (${expectedFw.length})`,
+    check(`every framework the CLI has is reachable (${expectedFw.length})`,
       expectedFw.length === offered.length && expectedFw.every((s) => offered.includes(s)),
       `missing: ${expectedFw.filter((s) => !offered.includes(s)).join(',') || 'none'}`);
+
+    // The runtime tiers come from the catalogue, not a list invented here — a
+    // hardcoded three would silently hide a fourth if the CLI added one.
+    const tiers = await win.evaluate(() =>
+      [...document.querySelectorAll('#framework-runtime option')].map((o) => o.value));
+    const catalogRuntimes = [...new Set(fwCatalog.frameworks.map((f) => f.runtime))];
+    check('runtime tiers come from the catalogue',
+      tiers.length === catalogRuntimes.length && catalogRuntimes.every((r) => tiers.includes(r)),
+      `${tiers.join(', ')} vs ${catalogRuntimes.join(', ')}`);
 
     // Each framework must offer only the engines it actually supports. This is
     // the bug that made the form send `--database mysql` for all of them.
     for (const fw of fwCatalog.frameworks) {
-      await win.click(`${t(`framework-${fw.slug}`)} input`);
+      await win.selectOption(t('framework-runtime'), fw.runtime);
+      await win.waitForTimeout(150);
+      await win.selectOption(t('framework-choice'), fw.slug);
       const opts = await win.locator('#project-database option')
         .evaluateAll((els) => els.map((e) => e.value));
 
@@ -1334,7 +1366,9 @@ async function run() {
     check('every framework offers exactly its supported engines', true);
 
     // WordPress is the sharp case: MySQL only.
-    await win.click(`${t('framework-wordpress')} input`);
+    await win.selectOption(t('framework-runtime'), 'PHP 8.3');
+    await win.waitForTimeout(150);
+    await win.selectOption(t('framework-choice'), 'wordpress');
     const wpEngines = await win.locator('#project-database option')
       .evaluateAll((els) => els.map((e) => e.value).filter((v) => v !== ''));
     check('wordpress offers only mysql', wpEngines.length === 1 && wpEngines[0] === 'mysql',
@@ -1345,19 +1379,29 @@ async function run() {
     // "8 or 7" is dead (frameworks/php.sh reads no version and the only image is
     // nginx-php8), and octobercms pins its own, so offering a control for those
     // would be lying about what the CLI will do.
-    await win.click(`${t('framework-laravel')} input`);
+    await win.selectOption(t('framework-runtime'), 'PHP 8.3');
+    await win.waitForTimeout(150);
+    await win.selectOption(t('framework-choice'), 'laravel');
     check('laravel offers a version field', await win.isVisible('#laravel-version-group'));
-    await win.click(`${t('framework-wordpress')} input`);
+    await win.selectOption(t('framework-runtime'), 'PHP 8.3');
+    await win.waitForTimeout(150);
+    await win.selectOption(t('framework-choice'), 'wordpress');
     check('wordpress offers a version field', await win.isVisible('#wordpress-version-group'));
     for (const fw of ['php', 'django', 'octobercms', 'express']) {
-      await win.click(`${t(`framework-${fw}`)} input`);
+      const fwRuntime = fwCatalog.frameworks.find((f) => f.slug === fw)?.runtime;
+      if (fwRuntime) {
+        await win.selectOption(t('framework-runtime'), fwRuntime);
+        await win.waitForTimeout(150);
+      }
+      await win.selectOption(t('framework-choice'), fw);
       const anyVersion = (await win.isVisible('#laravel-version-group'))
         || (await win.isVisible('#wordpress-version-group'));
       check(`${fw} offers no version field`, !anyVersion);
     }
 
     // The catalogue note is the only thing that explains an in-house framework.
-    await win.click(`${t('framework-kavera')} input`);
+    await selectFramework(win, fwCatalog, 'kavera');
+    await win.waitForTimeout(200);
     const kaveraNote = await win.textContent('#framework-note');
     check('shows the catalogue note for an in-house framework',
       (kaveraNote || '').length > 20, kaveraNote || '<empty>');
