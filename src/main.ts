@@ -387,6 +387,193 @@ function resolveOnPath(bin: string): string | null {
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// SSH host profiles
+//
+// A Podium installation on another machine. Stored in the main process rather
+// than localStorage because the executor lives here — the renderer only edits
+// them.
+//
+// No secrets are stored: a profile holds a PATH to a private key, never a key
+// or a password. Anything requiring a passphrase or a password is out of scope
+// deliberately; key-based auth is what the executor will use.
+// ---------------------------------------------------------------------------
+
+interface SshProfile {
+  id: string;
+  label: string;
+  host: string;
+  port: number;
+  user: string;
+  keyPath: string;
+  // Resolved by the connection test, editable in the form. Not a fixed path,
+  // because it genuinely varies: the four script installers put podium at
+  // /usr/local/bin -> /usr/local/share/podium-cli, while the .deb puts it at
+  // /usr/bin -> /opt/podium-cli, deliberately so the two can coexist. Hardcoding
+  // one would make a .deb install report "command not found", which — given a
+  // non-interactive PATH — is indistinguishable from "Podium is not installed".
+  podiumPath?: string;
+}
+
+function sshProfilesPath(): string {
+  return path.join(app.getPath('userData'), 'ssh-hosts.json');
+}
+
+function readSshProfiles(): SshProfile[] {
+  try {
+    const raw = fs.readFileSync(sshProfilesPath(), 'utf8');
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    // Absent or unreadable: no hosts configured is a normal state, not an error.
+    return [];
+  }
+}
+
+ipcMain.handle('get-ssh-profiles', async (): Promise<SshProfile[]> => readSshProfiles());
+
+ipcMain.handle('save-ssh-profiles', async (
+  _event: IpcMainInvokeEvent,
+  profiles: SshProfile[]
+): Promise<{ success: boolean; error?: string }> => {
+  try {
+    fs.mkdirSync(path.dirname(sshProfilesPath()), { recursive: true });
+    fs.writeFileSync(sshProfilesPath(), JSON.stringify(profiles, null, 2), { mode: 0o600 });
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: (error as Error).message };
+  }
+});
+
+// Prove a profile can actually reach a working Podium, in one connection.
+//
+// Deliberately runs `/usr/local/bin/podium` by ABSOLUTE path. A non-interactive
+// ssh command gets a PATH built without /usr/local/bin on macOS — path_helper
+// runs for login shells only — so `podium status` there fails with "command not
+// found" on a machine where Podium is installed and working. It succeeds on
+// Linux, which is what makes it dangerous: testing against a Linux host would
+// prove nothing. Reported by the CLI session from the Mac rig.
+//
+// Not `zsh -lc "podium ..."` either: a login shell sources the user's rc files,
+// and their aliases and version-manager output end up in a stream being parsed
+// as JSON.
+const REMOTE_PODIUM_CANDIDATES = ['/usr/local/bin/podium', '/usr/bin/podium'];
+
+// Podium's own scripts shell out to docker, git and sed. A non-interactive ssh
+// command inherits a PATH those are not on — verified on the Mac rig, where
+// `/usr/local/bin/podium status` ran and then died on
+// "status.sh: line 137: docker: command not found" while
+// /usr/local/bin/docker existed the whole time.
+//
+// So resolving podium absolutely is necessary but NOT sufficient: the child
+// processes it spawns need a usable PATH too. Prepending rather than replacing,
+// so a host with its own additions keeps them.
+const REMOTE_PATH_PREFIX = 'PATH=/usr/local/bin:/opt/homebrew/bin:$PATH';
+
+function remoteCommand(profile: SshProfile, args: string): string {
+  const bin = profile.podiumPath || REMOTE_PODIUM_CANDIDATES[0];
+  return `${REMOTE_PATH_PREFIX} ${bin} ${args}`;
+}
+
+ipcMain.handle('test-ssh-profile', async (
+  _event: IpcMainInvokeEvent,
+  profile: SshProfile
+): Promise<{ ok: boolean; stage: string; detail: string; podiumPath?: string }> => {
+  const { Client } = require('ssh2');
+
+  return new Promise((resolve) => {
+    let settled = false;
+    let resolvedPath = '';
+    const done = (ok: boolean, stage: string, detail: string) => {
+      if (settled) return;
+      settled = true;
+      try { conn.end(); } catch { /* already closed */ }
+      // Hand the resolved path back so the profile can remember it and the
+      // form can show it, rather than probing on every call.
+      resolve({ ok, stage, detail, podiumPath: resolvedPath });
+    };
+
+    let key: Buffer;
+    try {
+      key = fs.readFileSync(profile.keyPath.replace(/^~/, os.homedir()));
+    } catch (error) {
+      // Distinguished from a connection failure: the fix is a different path,
+      // not a different host.
+      return resolve({ ok: false, stage: 'key', detail: `Cannot read key: ${(error as Error).message}` });
+    }
+
+    const conn = new Client();
+
+    // A host that is off does not refuse, it goes silent — without this the
+    // dialog sits on "Testing..." indefinitely.
+    const timer = setTimeout(() => done(false, 'connect', 'Timed out after 12s'), 12000);
+
+    conn.on('ready', () => {
+      // Probe absolute paths rather than `command -v podium`, which needs a
+      // login shell to have a usable PATH — and a login shell sources rc files,
+      // putting the user's aliases and version-manager chatter into a stream
+      // being parsed as JSON.
+      const probe = REMOTE_PODIUM_CANDIDATES.map((c) => `test -x ${c} && echo ${c}`).join('; ');
+
+      conn.exec(probe, (probeErr: any, probeStream: any) => {
+        if (probeErr) return done(false, 'exec', probeErr.message);
+
+        let found = '';
+        probeStream.on('data', (d: Buffer) => { found += d.toString(); });
+        probeStream.on('close', () => {
+          const bin = found.trim().split('\n')[0]?.trim();
+          if (!bin) {
+            return done(false, 'podium',
+              `Not found at ${REMOTE_PODIUM_CANDIDATES.join(' or ')} — set the path in the host's settings.`);
+          }
+          resolvedPath = bin;
+          runStatus(bin);
+        });
+      });
+
+      const runStatus = (bin: string) => {
+      conn.exec(`${REMOTE_PATH_PREFIX} ${bin} status --all --json-output`, (err: any, stream: any) => {
+        if (err) return done(false, 'exec', err.message);
+
+        let out = '';
+        let errOut = '';
+        stream.on('data', (d: Buffer) => { out += d.toString(); });
+        stream.stderr.on('data', (d: Buffer) => { errOut += d.toString(); });
+        stream.on('close', (code: number) => {
+          clearTimeout(timer);
+          if (code !== 0) {
+            return done(false, 'podium', errOut.trim() || `podium exited ${code}`);
+          }
+          // Parse it, rather than trusting exit 0. The executor will parse this
+          // exact output, so a host that connects but returns something
+          // unparseable is not a working host.
+          try {
+            const parsed = JSON.parse(out);
+            const projects = Array.isArray(parsed.projects) ? parsed.projects.length : 0;
+            done(true, 'ok', `${projects} project${projects === 1 ? '' : 's'} · ${resolvedPath}`);
+          } catch {
+            done(false, 'parse', 'podium ran but its output was not JSON');
+          }
+        });
+      });
+      };
+    });
+
+    conn.on('error', (err: any) => {
+      clearTimeout(timer);
+      done(false, 'connect', err.message);
+    });
+
+    conn.connect({
+      host: profile.host,
+      port: profile.port || 22,
+      username: profile.user,
+      privateKey: key,
+      readyTimeout: 10000
+    });
+  });
+});
+
 // Exposed so the resolution can be exercised against a stripped PATH — the
 // exact condition that broke every packaged menu launch.
 ipcMain.handle('get-podium-command', async (): Promise<{ command: string; prefix: string[] }> =>

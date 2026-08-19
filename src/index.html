@@ -391,6 +391,9 @@
                     <button class="settings-tab" data-settings-tab="layout"
                             data-testid="settings-tab-layout"
                             onclick="switchSettingsTab('layout')">🧩 Project layout</button>
+                    <button class="settings-tab" data-settings-tab="hosts"
+                            data-testid="settings-tab-hosts"
+                            onclick="switchSettingsTab('hosts')">🖧 SSH Hosts</button>
                     <button class="settings-tab" data-settings-tab="ai"
                             data-testid="settings-tab-ai"
                             onclick="switchSettingsTab('ai')">🤖 AI Agent</button>
@@ -426,6 +429,20 @@
                         <span class="form-help">Applies immediately, including any open terminals.</span>
                         <div id="theme-picker" class="theme-picker" data-testid="theme-picker"></div>
                     </div>
+                </div>
+
+                <div class="modal-body" data-settings-panel="hosts" style="display: none;">
+                    <p class="stage-intro">
+                        Podium installations on other machines. A project is created on one of
+                        these or locally, and the dashboard shows everything from every host.
+                    </p>
+                    <div id="ssh-profile-list" data-testid="ssh-profile-list"></div>
+                    <button class="btn btn-primary btn-small" data-testid="ssh-add"
+                            onclick="addSshProfile()">+ Add a host</button>
+                    <p class="form-help">
+                        Key-based authentication only. The key path is stored, never the key
+                        itself and never a password.
+                    </p>
                 </div>
 
                 <div class="modal-body" data-settings-panel="ai" style="display: none;">

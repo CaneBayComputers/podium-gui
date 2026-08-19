@@ -2056,8 +2056,160 @@ function showDonateModal(): void {
     showModal('donate-modal');
 }
 
-async function showSettings(tab: 'appearance' | 'ai' = 'appearance'): Promise<void> {
+// ---------------------------------------------------------------------------
+// SSH host profiles
+//
+// Edited here, stored and used by the main process. No secrets: a profile holds
+// a path to a private key, never a key and never a password.
+// ---------------------------------------------------------------------------
+
+interface SshProfile {
+    id: string;
+    label: string;
+    host: string;
+    port: number;
+    user: string;
+    keyPath: string;
+    // Filled in by the connection test, editable. Not fixed: script installers
+    // use /usr/local/bin, the .deb uses /usr/bin.
+    podiumPath?: string;
+}
+
+let sshProfiles: SshProfile[] = [];
+// Keyed by profile id so a result belongs to the row that produced it — a
+// single shared status line would attribute a slow host's failure to whichever
+// row was tested last.
+let sshTestResults: Record<string, { ok: boolean; stage: string; detail: string; testing?: boolean }> = {};
+
+async function loadSshProfiles(): Promise<void> {
+    sshProfiles = await ipcRenderer.invoke('get-ssh-profiles') || [];
+}
+
+async function persistSshProfiles(): Promise<void> {
+    const result = await ipcRenderer.invoke('save-ssh-profiles', sshProfiles);
+    if (!result.success) showError(`Could not save SSH hosts: ${result.error}`);
+}
+
+function renderSshProfiles(): void {
+    const host = document.getElementById('ssh-profile-list');
+    if (!host) return;
+
+    if (sshProfiles.length === 0) {
+        host.innerHTML = `<p class="app-list-empty" data-testid="ssh-empty">
+            No hosts yet. Add one to create projects on another machine.</p>`;
+        return;
+    }
+
+    host.innerHTML = sshProfiles.map((p, i) => {
+        const r = sshTestResults[p.id];
+        const status = r?.testing
+            ? '<span class="ssh-status testing">testing…</span>'
+            : r
+                ? `<span class="ssh-status ${r.ok ? 'ok' : 'bad'}">${r.ok ? `reachable — ${escapeHtml(r.detail)}` : `${escapeHtml(r.stage)}: ${escapeHtml(r.detail)}`}</span>`
+                : '';
+
+        return `
+        <div class="ssh-profile" data-testid="ssh-profile-${i}">
+            <div class="form-group">
+                <label>Name</label>
+                <input type="text" value="${escapeHtml(p.label)}" data-testid="ssh-label-${i}"
+                       oninput="updateSshProfile(${i}, 'label', this.value)" placeholder="EC2 Ubuntu">
+            </div>
+            <div class="ssh-row">
+                <div class="form-group">
+                    <label>Host</label>
+                    <input type="text" value="${escapeHtml(p.host)}" data-testid="ssh-host-${i}"
+                           oninput="updateSshProfile(${i}, 'host', this.value)" placeholder="44.202.33.176">
+                </div>
+                <div class="form-group ssh-port">
+                    <label>Port</label>
+                    <input type="number" value="${p.port || 22}" data-testid="ssh-port-${i}"
+                           oninput="updateSshProfile(${i}, 'port', this.value)">
+                </div>
+                <div class="form-group">
+                    <label>User</label>
+                    <input type="text" value="${escapeHtml(p.user)}" data-testid="ssh-user-${i}"
+                           oninput="updateSshProfile(${i}, 'user', this.value)" placeholder="ubuntu">
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Private key</label>
+                <input type="text" value="${escapeHtml(p.keyPath)}" data-testid="ssh-key-${i}"
+                       oninput="updateSshProfile(${i}, 'keyPath', this.value)" placeholder="~/.ssh/id_rsa">
+            </div>
+            <div class="form-group">
+                <label>Podium path <span class="form-help">found automatically; override only if needed</span></label>
+                <input type="text" value="${escapeHtml(p.podiumPath || '')}" data-testid="ssh-podium-${i}"
+                       oninput="updateSshProfile(${i}, 'podiumPath', this.value)"
+                       placeholder="detected when you test the connection">
+            </div>
+            <div class="ssh-actions">
+                <button class="btn btn-secondary btn-small" data-testid="ssh-test-${i}"
+                        onclick="testSshProfile(${i})">Test connection</button>
+                <button class="btn btn-danger btn-small" data-testid="ssh-remove-${i}"
+                        onclick="removeSshProfile(${i})">Remove</button>
+                ${status}
+            </div>
+        </div>`;
+    }).join('');
+}
+
+function addSshProfile(): void {
+    sshProfiles.push({
+        // Stable across reorder and rename, so a test result cannot follow the
+        // wrong row.
+        id: `host-${Date.now()}-${sshProfiles.length}`,
+        label: '', host: '', port: 22, user: '', keyPath: '~/.ssh/id_rsa'
+    });
+    renderSshProfiles();
+    persistSshProfiles();
+}
+
+function updateSshProfile(index: number, field: string, value: string): void {
+    const p = sshProfiles[index];
+    if (!p) return;
+    (p as any)[field] = field === 'port' ? (parseInt(value, 10) || 22) : value;
+    // A stale "reachable" beside edited connection details is a claim about a
+    // host that is no longer described here. Editing the podium path clears it
+    // too — it is part of what "reachable" asserted.
+    delete sshTestResults[p.id];
+    persistSshProfiles();
+}
+
+async function removeSshProfile(index: number): Promise<void> {
+    const p = sshProfiles[index];
+    if (!p) return;
+    if (!confirm(`Remove the host "${p.label || p.host || 'unnamed'}"?\n\n`
+        + `Projects on it are not touched — this only removes it from Podium's list.`)) return;
+    delete sshTestResults[p.id];
+    sshProfiles.splice(index, 1);
+    renderSshProfiles();
+    await persistSshProfiles();
+}
+
+async function testSshProfile(index: number): Promise<void> {
+    const p = sshProfiles[index];
+    if (!p) return;
+
+    sshTestResults[p.id] = { ok: false, stage: '', detail: '', testing: true };
+    renderSshProfiles();
+
+    const result = await ipcRenderer.invoke('test-ssh-profile', p);
+    sshTestResults[p.id] = result;
+
+    // Remember where podium was found, so later calls skip the probe and the
+    // user can see and override what was chosen.
+    if (result.ok && result.podiumPath && result.podiumPath !== p.podiumPath) {
+        p.podiumPath = result.podiumPath;
+        await persistSshProfiles();
+    }
+    renderSshProfiles();
+}
+
+async function showSettings(tab: 'appearance' | 'layout' | 'hosts' | 'ai' = 'appearance'): Promise<void> {
     renderThemePicker();
+    await loadSshProfiles();
+    renderSshProfiles();
     switchSettingsTab(tab);
     // Populate BEFORE showing. Loading afterwards made Appearance open a beat
     // sooner, but it also meant the form finished loading after the panel was
@@ -4116,6 +4268,11 @@ async function submitEditProject(): Promise<void> {
 (window as any).switchSettingsTab = switchSettingsTab;
 (window as any).onAiAgentChange = onAiAgentChange;
 (window as any).onUnattendedChange = onUnattendedChange;
+(window as any).addSshProfile = addSshProfile;
+(window as any).updateSshProfile = updateSshProfile;
+(window as any).removeSshProfile = removeSshProfile;
+(window as any).testSshProfile = testSshProfile;
+(window as any).__sshProfiles = () => sshProfiles;
 (window as any).applyEndpoint = applyEndpoint;
 (window as any).revealApiBase = revealApiBase;
 (window as any).saveAiSettings = saveAiSettings;

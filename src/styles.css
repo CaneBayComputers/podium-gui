@@ -1890,6 +1890,31 @@ span.status-indicator {
     flex: 0 0 auto;
 }
 
+/* SSH host profiles. */
+.ssh-profile {
+    padding: 0.9rem;
+    margin-bottom: 0.9rem;
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    background: var(--bg-tertiary);
+}
+
+.ssh-row { display: flex; gap: 0.6rem; }
+.ssh-row .form-group { flex: 1; margin-bottom: 0.75rem; }
+.ssh-row .ssh-port { flex: 0 0 5.5rem; }
+
+.ssh-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+}
+
+.ssh-status { font-size: 0.8rem; }
+.ssh-status.ok { color: var(--accent-green); }
+.ssh-status.bad { color: var(--neon-pink); }
+.ssh-status.testing { color: var(--text-muted); }
+
 /* The row has to be a positioning context for the busy overlay. */
 .service-row { position: relative; }
 
