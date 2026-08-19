@@ -185,10 +185,16 @@ let frameworkCatalog: CatalogFramework[] = [];
 // offering a control for any of those would be lying to the user.
 const VERSIONED_FRAMEWORKS = ['laravel', 'wordpress'];
 
-async function loadFrameworkCatalog(): Promise<void> {
-    if (frameworkCatalog.length > 0) return;
+// Cached PER HOST. A single cache would serve the previous host's frameworks on
+// the next open, offering a remote machine's list for a local create or the
+// reverse — and the mismatch would only surface when creation failed.
+let frameworkCatalogHost = '';
 
-    const result = await ipcRenderer.invoke('get-framework-catalog');
+async function loadFrameworkCatalog(hostId: string = 'local'): Promise<void> {
+    if (frameworkCatalog.length > 0 && frameworkCatalogHost === hostId) return;
+
+    const result = await ipcRenderer.invoke('get-framework-catalog', hostId);
+    frameworkCatalogHost = hostId;
     frameworkCatalog = result.frameworks || [];
 
     const list = document.getElementById('framework-list');
@@ -1278,7 +1284,7 @@ function openUrl(url: string): void {
 
 async function showCreateProject(): Promise<void> {
     showModal('new-project-modal');
-    showProjectKindStep();
+    await showProjectHostStep();
 }
 
 // ---------------------------------------------------------------------------
@@ -1289,12 +1295,90 @@ async function showCreateProject(): Promise<void> {
 // competing buttons the user has to tell apart before clicking.
 // ---------------------------------------------------------------------------
 
+// Which machine a new project is created on. 'local' or an SSH profile id.
+let newProjectHost = 'local';
+
+// Step zero: pick the host, if there is a choice to make.
+//
+// Skipped when there is exactly one option, because a question with one answer
+// is friction rather than a choice. That is the common case: one machine, no
+// profiles.
+async function showProjectHostStep(): Promise<void> {
+    const hostEl = document.getElementById('new-project-host');
+    const choice = document.getElementById('new-project-choice');
+    const form = document.getElementById('new-project-form');
+    const footer = document.getElementById('new-project-footer');
+    if (!hostEl) return;
+
+    if (form) form.style.display = 'none';
+    if (footer) footer.style.display = 'none';
+
+    const caps = await ipcRenderer.invoke('get-platform-capabilities');
+    await loadSshProfiles();
+
+    // Windows has no local Podium and never will, so "local" is not offered
+    // there at all rather than offered and failing.
+    const options: Array<{ id: string; label: string; note: string }> = [];
+    if (caps.localPodium) {
+        options.push({ id: 'local', label: 'This computer',
+                       note: 'The Podium install on this machine.' });
+    }
+    for (const p of sshProfiles) {
+        if (!p.host) continue;   // half-entered profile
+        options.push({ id: p.id, label: p.label || p.host,
+                       note: `${p.user}@${p.host}` });
+    }
+
+    if (options.length === 0) {
+        // Windows with no hosts yet. Nothing to choose, and the fix is in
+        // Settings, so say so rather than showing an empty chooser.
+        hostEl.style.display = 'block';
+        if (choice) choice.style.display = 'none';
+        hostEl.innerHTML = `
+            <p class="app-list-empty" data-testid="no-hosts">
+                No Podium hosts available.<br>
+                ${caps.remoteOnly
+                    ? 'Windows runs projects on a remote host. Add one under Settings → SSH Hosts.'
+                    : 'Add an SSH host under Settings, or install Podium on this machine.'}
+            </p>
+            <button class="btn btn-primary" data-testid="no-hosts-settings"
+                    onclick="closeModal(); showSettings('hosts')">Open SSH Hosts settings</button>`;
+        return;
+    }
+
+    if (options.length === 1) {
+        newProjectHost = options[0]!.id;
+        hostEl.style.display = 'none';
+        showProjectKindStep();
+        return;
+    }
+
+    hostEl.style.display = 'grid';
+    if (choice) choice.style.display = 'none';
+    hostEl.innerHTML = options.map((o) => `
+        <button type="button" class="kind-option" data-testid="host-${escapeHtml(o.id)}"
+                onclick="chooseProjectHost('${escapeHtml(o.id)}')">
+            <span class="kind-icon">${o.id === 'local' ? '💻' : '🖧'}</span>
+            <strong>${escapeHtml(o.label)}</strong>
+            <span class="kind-note">${escapeHtml(o.note)}</span>
+        </button>`).join('');
+}
+
+function chooseProjectHost(hostId: string): void {
+    newProjectHost = hostId;
+    const hostEl = document.getElementById('new-project-host');
+    if (hostEl) hostEl.style.display = 'none';
+    showProjectKindStep();
+}
+
 function showProjectKindStep(): void {
     const choice = document.getElementById('new-project-choice');
     const form = document.getElementById('new-project-form');
     const footer = document.getElementById('new-project-footer');
+    const hostEl = document.getElementById('new-project-host');
 
-    if (choice) choice.style.display = '';
+    if (hostEl) hostEl.style.display = 'none';
+    if (choice) choice.style.display = 'grid';
     if (form) form.style.display = 'none';
     // The footer's Create button acts on the form; showing it beside the
     // choice would offer to submit a form that is not on screen.
@@ -1317,8 +1401,9 @@ async function chooseProjectKind(kind: 'framework' | 'app'): Promise<void> {
     if (form) form.style.display = '';
     if (footer) footer.style.display = '';
 
-    // Built from the CLI's catalogue on first open, then cached.
-    await loadFrameworkCatalog();
+    // From the chosen host's CLI, not this machine's — a remote host offers
+    // whatever ITS install ships.
+    await loadFrameworkCatalog(newProjectHost);
 }
 
 // Back out of the install picker to the choice, rather than closing outright
@@ -1761,8 +1846,9 @@ async function createNewProject(): Promise<void> {
 
     showModal('new-project-modal');
     // The catalogue is loaded when the framework path is chosen, not here —
-    // someone heading for the app installer should not wait on it.
-    showProjectKindStep();
+    // someone heading for the app installer should not wait on it. And the host
+    // comes first, because which catalogue to load depends on it.
+    await showProjectHostStep();
 }
 
 // Make this function available globally immediately
@@ -3958,8 +4044,13 @@ async function submitNewProject(): Promise<void> {
         // Streamed rather than buffered, so the overlay can show progress.
         // --json-output is dropped here: it suppresses exactly the human-readable
         // output we now want to display, and success is judged by exit code.
-        const result = await ipcRenderer.invoke('execute-command-stream', 'podium',
-            ['new', ...args.filter((a) => a !== '--json-output')]);
+        // Routed to the chosen host. The remote path streams on the same
+        // channel, so the progress pane above needs no knowledge of which
+        // machine is doing the work.
+        const cleanArgs = args.filter((a) => a !== '--json-output');
+        const result = newProjectHost === 'local'
+            ? await ipcRenderer.invoke('execute-command-stream', 'podium', ['new', ...cleanArgs])
+            : await ipcRenderer.invoke('execute-podium-stream-on', newProjectHost, 'new', cleanArgs);
 
         if (result.code !== 0) {
             // Leave the overlay up: the output pane above already holds the real
@@ -4359,6 +4450,9 @@ async function submitEditProject(): Promise<void> {
 (window as any).showInstallApp = showInstallApp;
 (window as any).showProjectKindStep = showProjectKindStep;
 (window as any).chooseProjectKind = chooseProjectKind;
+(window as any).showProjectHostStep = showProjectHostStep;
+(window as any).chooseProjectHost = chooseProjectHost;
+(window as any).__newProjectHost = () => newProjectHost;
 (window as any).backToProjectKind = backToProjectKind;
 (window as any).renderAppCatalog = renderAppCatalog;
 (window as any).selectApp = selectApp;

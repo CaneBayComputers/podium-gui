@@ -134,6 +134,15 @@
                         different flows, and asking here is what lets the header
                         drop its separate Install App button.
                     -->
+                    <!--
+                        Step zero: which machine. Before the kind choice because
+                        the framework and app catalogues come from the CLI on
+                        that host, and a remote host's list is whatever ITS CLI
+                        ships. Skipped entirely when there is only one option.
+                    -->
+                    <div id="new-project-host" class="kind-choice" data-testid="new-project-host"
+                         style="display: none;"></div>
+
                     <div id="new-project-choice" class="kind-choice" data-testid="new-project-choice">
                         <button type="button" class="kind-option" onclick="chooseProjectKind('framework')"
                                 data-testid="kind-framework">
