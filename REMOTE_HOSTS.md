@@ -26,13 +26,41 @@ The alternative — a GUI-side registry mapping project to host — is a second
 source of truth that can disagree with reality. Asking each host what it has
 cannot.
 
-## Browsing a remote project is nearly free
+## Browsing a remote project — half solved, and I had it wrong
 
-`podium status` already reports `external_port` and `lan_url`, and the GUI
-already renders `lanUrl`. A remote project's URL is `http://<host-ip>:<port>`:
-the same field, pointed elsewhere. No tunnels, no proxy, no wildcard DNS.
+`podium status` reports `external_port`, and that part IS free: the port a
+project listens on is the same number wherever the host is.
 
-This was the part that looked hardest and turned out to be already solved.
+**But `lan_url` cannot be used verbatim.** It is built from the host's own view
+of its network, which on EC2 is the private VPC address:
+
+```
+gui-remote-test on the Arch EC2 box -> lan_url: http://172.30.2.182:226
+```
+
+172.30.x is unroutable from here. So the GUI must compose the URL from the
+**profile's** host address plus `external_port`, never from `lan_url`. Same field
+pointed elsewhere was the right instinct; taking the whole URL was not.
+
+### And reachability is not implied
+
+Measured, not assumed:
+
+| | result |
+|---|---|
+| EC2 private IP + port | unreachable (not routable) |
+| EC2 public IP + port | unreachable (security group is SSH-only) |
+
+The port is open on the host and serves 200 *there* — `curl http://gui-remote-test/`
+on the box returns 200. It is the network in between that says no.
+
+So for a cloud host, a project URL needs one of: a security group rule per port,
+an SSH tunnel, or a proxy. For a LAN host none of that applies. **The GUI should
+not render a link it has not established is reachable** — an "open" button that
+silently does nothing is worse than no button, and this is exactly the case that
+produces one.
+
+Reachability probing per host is the open question here, not URL construction.
 
 ## The real work is identity, not SSH
 
