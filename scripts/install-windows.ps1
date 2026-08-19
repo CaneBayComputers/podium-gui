@@ -32,6 +32,18 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# Without this, an unhandled error closes the window instantly and the reason
+# goes with it - which is exactly what happened on the first real install: red
+# text flashed and the terminal vanished, leaving no way to know what failed.
+trap {
+    Write-Host ""
+    Write-Host "FAILED: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "  at: $($_.InvocationInfo.PositionMessage)" -ForegroundColor DarkGray
+    Write-Host ""
+    Read-Host "Press Enter to close"
+    exit 1
+}
+
 $REPO_URL  = 'https://github.com/CaneBayComputers/podium-gui.git'
 $BRANCH    = 'dev'
 $REPO_DIR  = 'C:\podium-gui'
@@ -229,18 +241,37 @@ Say "at $(git -C $REPO_DIR rev-parse --short HEAD) on $BRANCH"
 
 Push-Location $REPO_DIR
 try {
-    Say "installing dependencies (several minutes on a first run)..."
-    # node-pty ships win32 prebuilds, so this normally needs no compiler. If it
-    # does fail, the app still runs - it loses in-tile terminals and falls back
-    # to telling you the command to run yourself.
-    npm install --no-audit --no-fund 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) { Warn "npm install reported errors - embedded terminals may not work" }
-    else { Say "dependencies installed" }
+    # Native commands are run with ErrorActionPreference relaxed. npm writes
+    # warnings to stderr, and under 'Stop' PowerShell turns any stderr line from
+    # a native command into a terminating error - so a routine npm warning killed
+    # the first real run partway through, leaving node_modules without its .bin
+    # shims and no tsc.
+    #
+    # npm.cmd rather than npm: bare `npm` resolves to npm.ps1, which the default
+    # execution policy refuses to load.
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        Say "installing dependencies (several minutes on a first run)..."
+        & npm.cmd install --no-audit --no-fund 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Warn "npm install reported errors - retrying once"
+            & npm.cmd install --no-audit --no-fund 2>&1 | Out-Null
+        }
+        # The shim directory is the thing that actually has to exist; a partial
+        # install leaves the packages but not the executables.
+        if (-not (Test-Path "$REPO_DIR\node_modules\.bin")) {
+            Die "npm install did not complete - node_modules\.bin is missing. Run 'npm install' in $REPO_DIR."
+        }
+        Say "dependencies installed"
 
-    Say "building..."
-    npm run build-ts 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) { Die "TypeScript build failed. Run 'npm run build-ts' in $REPO_DIR to see why." }
-    Say "built"
+        Say "building..."
+        & npm.cmd run build-ts 2>&1 | Out-Null
+        if (-not (Test-Path "$REPO_DIR\dist\main.js")) {
+            Die "TypeScript build failed. Run 'npm run build-ts' in $REPO_DIR to see why."
+        }
+        Say "built"
+    } finally { $ErrorActionPreference = $prev }
 } finally { Pop-Location }
 
 # A launcher, so starting it is not a command to remember.
