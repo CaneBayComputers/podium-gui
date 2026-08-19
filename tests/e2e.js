@@ -166,19 +166,17 @@ async function run() {
     // This asserts the metadata actually REACHES the DOM. An earlier version
     // only counted .project-icon elements, which every card has regardless —
     // it passed while a race silently wiped the metadata before render.
+    // Metadata comes from the status JSON now, the same call the GUI parses.
+    // Skip parked projects: they are deliberately absent from the grid, so
+    // looking for their metadata there would assert against a view that is
+    // correctly hiding them.
     const metaCheck = await app.evaluate(async ({ ipcMain }) => {
       const status = await ipcMain._invokeHandlers.get('execute-podium')(
         {}, 'status', ['--all', '--json-output']
       );
-      const names = (JSON.parse(status.stdout || '{}').projects || []).map((p) => p.name);
-
-      const getMeta = ipcMain._invokeHandlers.get('get-project-metadata');
-      for (const name of names) {
-        const meta = await getMeta({}, name);
-        // Skip parked projects: they are deliberately absent from the grid, so
-        // looking for their metadata there would assert against a view that is
-        // correctly hiding them.
-        if (meta && meta.display_name && meta.status !== 'disabled') return { name, ...meta };
+      for (const p of JSON.parse(status.stdout || '{}').projects || []) {
+        const m = p.metadata || {};
+        if (m.display_name && m.status !== 'disabled') return { name: p.name, ...m };
       }
       return null;
     });
@@ -284,13 +282,14 @@ async function run() {
 
       const disabledRules = await win.evaluate(() => {
         const name = window.__visibleProjects()[0]?.name;
-        const before = window.isDisabled({ name });
+        const proj = () => window.__allProjects().find((p) => p.name === name);
+        const before = window.isDisabled(proj());
         // Only the exact string disables. Everything else means enabled —
         // a project must never be parked because a read returned junk.
         const readings = {};
         for (const v of ['disabled', 'DISABLED', 'enabled', 'paused', '', undefined, null, 'disable']) {
           window.__setMetaStatus(name, v);
-          readings[String(v)] = window.isDisabled({ name });
+          readings[String(v)] = window.isDisabled(proj());
         }
         window.__setMetaStatus(name, undefined);
         return { before, readings };
@@ -363,17 +362,13 @@ async function run() {
       // How many projects SHOULD have one is a fact about the compose files, so
       // read it from the main process. Without this the "skipping" branch below
       // is indistinguishable from the metadata path being broken.
-      const stampedOnDisk = await app.evaluate(async ({ ipcMain }, names) => {
-        const handler = ipcMain._invokeHandlers.get('get-project-metadata');
-        const out = [];
-        for (const name of names) {
-          const md = await handler({}, name);
-          // Disabled projects are not in the visible list by design, so counting
-          // their timestamps against it compares two different populations.
-          if (md?.last_on && md.status !== 'disabled') out.push(name);
-        }
-        return out;
-      }, (statusJson.projects || []).map((p) => p.name));
+      // Straight from the same status JSON the GUI parses — metadata arrives
+      // with operational state now, so there is no second source to reconcile.
+      // Disabled projects are hidden by design, so counting their timestamps
+      // against the visible list would compare two different populations.
+      const stampedOnDisk = (statusJson.projects || [])
+        .filter((p) => p.metadata?.last_on && p.metadata?.status !== 'disabled')
+        .map((p) => p.name);
 
       check('every last_on on disk reaches the project list',
         withStamp.length === stampedOnDisk.length,
@@ -1769,18 +1764,19 @@ async function run() {
       check(`${file} keeps every hard-won guard`, missing.length === 0, missing.join('; '));
     }
 
-    // The GUI and the CLI now both write into the same x-metadata block: the
-    // GUI owns emoji/name/description, the CLI owns last_on. The GUI's writer
-    // must replace only its own three keys — rewriting the block would silently
-    // drop the CLI's timestamp on every rename, and the loss would only show up
-    // as a sort order that quietly stopped working.
+    // Metadata writes go through `podium set-metadata` now. The guarantee is
+    // unchanged — only emoji/name/description are touched, and the CLI's own
+    // last_on and status survive — but it is the CLI's guarantee to keep, so
+    // this asserts the GUI delegates rather than editing the file itself.
     const mainBody = fsMod.readFileSync(pathMod.join(ROOT, 'src/main.ts'), 'utf8');
-    const writer = mainBody.slice(mainBody.indexOf("ipcMain.handle('update-project-metadata'"));
-    const replaced = [...writer.slice(0, writer.indexOf('} else {')).matchAll(/\\s\*(\w+):\\s\*/g)]
-      .map((m) => m[1]);
-    check('metadata writer replaces only the keys the GUI owns',
-      replaced.length === 3 && ['emoji', 'name', 'description'].every((k) => replaced.includes(k)),
-      replaced.join(','));
+    const writer = mainBody.slice(
+      mainBody.indexOf("ipcMain.handle('update-project-metadata'"),
+      mainBody.indexOf("ipcMain.handle('update-project-metadata'") + 1200);
+    check('metadata writes delegate to podium set-metadata',
+      /'set-metadata'/.test(writer)
+      && ['--emoji', '--name', '--description'].every((f) => writer.includes(f))
+      && !/writeFileSync/.test(writer),
+      writer.slice(0, 80));
 
     // The source launcher travels with the repo, so the other machines get it
     // by pulling rather than by having a copy installed alongside them.

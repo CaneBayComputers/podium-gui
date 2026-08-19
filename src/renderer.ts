@@ -309,7 +309,6 @@ async function loadProjects(): Promise<void> {
         }
 
         parseProjectStatusJSON(result.stdout);
-        await hydrateProjectMetadata();
         renderProjects();
         renderFilterBar();   // counts derive from the project list
     } catch (error) {
@@ -348,11 +347,21 @@ function parseProjectStatusJSON(statusOutput: string): void {
         // Parse projects
         if (data.projects && Array.isArray(data.projects)) {
             for (const projectData of data.projects) {
+                // Display metadata arrives WITH operational state now, in the
+                // same object from the same call (CLI 36109a7). It used to come
+                // from a separate pass that opened each project's compose file,
+                // and every bug in this area came from those two paths racing.
+                //
+                // Absent keys are absent rather than blank, so the `||` defaults
+                // still apply. Unknown keys (type, version) pass through and are
+                // ignored.
+                const meta = projectData.metadata || {};
+
                 const project: Project = {
                     name: projectData.name || '',
-                    display_name: projectData.display_name || projectData.name || '',
-                    description: projectData.description || '',
-                    emoji: projectData.emoji || '🚀',
+                    display_name: meta.display_name || projectData.name || '',
+                    description: meta.description || '',
+                    emoji: meta.emoji || '🚀',
                     type: 'php', // Default type
                     folderExists: projectData.folder_exists === true,
                     hostEntry: projectData.host_entry === true,
@@ -363,6 +372,12 @@ function parseProjectStatusJSON(statusOutput: string): void {
                     port: projectData.external_port ? parseInt(projectData.external_port) : null,
                     status: 'stopped'
                 };
+
+                // Carried for sorting and for the parked check. The CLI passes
+                // the raw status string through untouched; applying "only the
+                // exact string disabled disables" stays on this side.
+                (project as any).last_on = meta.last_on || '';
+                (project as any).status_meta = meta.status || '';
                 
                 // Determine overall status.
                 //
@@ -409,47 +424,19 @@ function parseProjectStatusJSON(statusOutput: string): void {
     }
 }
 
-// `podium status` reports operational state only — it has no display_name,
-// description or emoji, and the CLI no longer writes an x-metadata block. The
-// GUI owns that metadata and reads it back from each project's compose file.
-// Cached by project name and applied at RENDER time, not parse time.
-// parseProjectStatusJSON() rebuilds the shared `projects` array from scratch and
-// is called by both loadProjects() and loadServices() — so anything written onto
-// the project objects gets wiped by whichever call finishes last. Keeping
-// metadata in its own map makes it survive that.
-let projectMetadata: Record<string, {
-    display_name: string; description: string; emoji: string; last_on?: string; status?: string;
-}> = {};
-
-async function hydrateProjectMetadata(): Promise<void> {
-    await Promise.all(projects.map(async (project: Project) => {
-        try {
-            const metadata = await ipcRenderer.invoke('get-project-metadata', project.name);
-            if (metadata) {
-                projectMetadata[project.name] = metadata;
-            }
-        } catch (error) {
-            console.log(`No metadata for ${project.name}:`, error);
-        }
-    }));
-}
-
-/** Merge cached display metadata onto a freshly parsed project. */
+// Display metadata now arrives inside `podium status --json-output` (CLI
+// 36109a7), merged onto each project at parse time. What used to be here — a
+// per-project docker-compose.yaml read, a cache keyed by project name, and a
+// merge applied at render time — is gone, along with the two bugs that only
+// existed because operational state and display metadata arrived by different
+// routes and could disagree.
+//
+// withMetadata is kept as an identity function rather than removed: it is named
+// at eleven call sites, and reading `withMetadata(p).emoji` still says "this is
+// the display value" at each one. Deleting it would be a bigger diff that says
+// less.
 function withMetadata(project: Project): Project {
-    const metadata = projectMetadata[project.name];
-    if (!metadata) return project;
-
-    const merged: Project = { ...project };
-    if (metadata.display_name) merged.display_name = metadata.display_name;
-    if (metadata.description) merged.description = metadata.description;
-    if (metadata.emoji) merged.emoji = metadata.emoji;
-    // Written by the CLI on start AND stop, so it means "last time this was
-    // up". Absent on projects not started or stopped since the CLI began
-    // writing it — those sort last rather than to an invented epoch date.
-    if (metadata.last_on) (merged as any).last_on = metadata.last_on;
-    if (metadata.status) (merged as any).status_meta = metadata.status;
-
-    return merged;
+    return project;
 }
 
 // Legacy function - redirects to JSON version
@@ -756,7 +743,7 @@ function renderProjects(): void {
 
     grid.innerHTML = shown.map((parsed: Project) => {
         // Apply cached display metadata here rather than trusting the parsed
-        // object — see projectMetadata for why.
+        // object — display fields arrive on it directly from status now.
         const project = withMetadata(parsed);
 
         // Use emoji from metadata or fallback to type-based icon
@@ -4076,13 +4063,15 @@ async function submitEditProject(): Promise<void> {
         hideLoadingOverlay();
         
         if (result.success) {
-            // Keep the cache in step with what was just written to disk, so the
-            // grid reflects the edit immediately rather than after a refresh.
-            projectMetadata[currentProjectName] = {
-                display_name: displayName,
-                description: description,
-                emoji: emoji
-            };
+            // Update the project in place so the grid reflects the edit at once
+            // rather than after the next poll. There is no separate cache to
+            // keep in step any more — this IS the state the grid renders.
+            const edited = projects.find(p => p.name === currentProjectName);
+            if (edited) {
+                edited.display_name = displayName;
+                edited.description = description;
+                edited.emoji = emoji;
+            }
 
             showSuccess(`Project "${displayName}" updated successfully!`);
             renderProjects();
@@ -4169,10 +4158,9 @@ async function submitEditProject(): Promise<void> {
 // Test hook: drive the disabled state without shelling out to the CLI and
 // mutating a real project's compose file.
 (window as any).__setMetaStatus = (name: string, value: any) => {
-    projectMetadata[name] = projectMetadata[name]
-        || { display_name: '', description: '', emoji: '' };
-    if (value === undefined || value === null) delete projectMetadata[name].status;
-    else projectMetadata[name].status = value;
+    const p = projects.find(x => x.name === name) as any;
+    if (!p) return;
+    p.status_meta = (value === undefined || value === null) ? '' : value;
 };
 // The filtered+sorted list the grid is built from, so the suite can assert on
 // the ordering rather than on tile text.
