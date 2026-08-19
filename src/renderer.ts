@@ -2833,6 +2833,9 @@ async function showSettings(tab: 'appearance' | 'layout' | 'hosts' | 'ai' = 'app
     const autoBox = document.getElementById('auto-update-check') as HTMLInputElement | null;
     if (autoBox) autoBox.checked = autoUpdateCheckEnabled();
 
+    renderGithubHosts();
+    if (!githubStatus) void loadGithubStatus();
+
     const dictBox = document.getElementById('dictation-enabled') as HTMLInputElement | null;
     if (dictBox) dictBox.checked = dictationEnabled();
     // Enabled but not loaded means a restart happened; bring it back rather
@@ -3711,6 +3714,112 @@ function buildTileWrapper(session: TerminalSession, project: string): HTMLElemen
     // A newly built tile has to agree with the current setting, not the markup.
     setTimeout(refreshMicButtons, 0);
     return wrapper;
+}
+
+// --- GitHub ----------------------------------------------------------------
+//
+// `podium new --github` creates the repository from the machine running the
+// project, so gh has to be authenticated THERE. Per host, like services.
+
+let githubHost = 'local';
+let githubStatus: any = null;
+
+function setGithubHost(hostId: string): void {
+    githubHost = hostId;
+    void loadGithubStatus();
+}
+
+async function loadGithubStatus(): Promise<void> {
+    const el = document.getElementById('github-status');
+    if (el) el.innerHTML = `<p class="ssh-status testing">Checking…</p>`;
+    githubStatus = await ipcRenderer.invoke('get-github-status', githubHost);
+    renderGithubStatus();
+}
+
+function renderGithubHosts(): void {
+    const sel = document.getElementById('github-host') as HTMLSelectElement | null;
+    if (!sel) return;
+    if (!dashboardHosts.some((h) => h.id === githubHost)) {
+        githubHost = dashboardHosts[0]?.id || 'local';
+    }
+    sel.innerHTML = dashboardHosts.map((h) =>
+        `<option value="${escapeHtml(h.id)}"${h.id === githubHost ? ' selected' : ''}>${escapeHtml(h.label)}</option>`).join('');
+}
+
+function renderGithubStatus(): void {
+    const el = document.getElementById('github-status');
+    if (!el || !githubStatus) return;
+    const st = githubStatus;
+
+    if (!st.installed) {
+        el.innerHTML = `
+            <p class="ssh-status bad" data-testid="github-missing">
+                The GitHub CLI is not installed on this host.</p>
+            <p class="settings-note">Install <code>gh</code> there, then check again.
+               Projects can still be created without it — only the "create a repository"
+               option needs it.</p>
+            <button class="btn btn-secondary btn-small" onclick="loadGithubStatus()">Check again</button>`;
+        return;
+    }
+
+    if (!st.loggedIn) {
+        // A token rather than the browser flow: `gh auth login --web` wants a
+        // terminal to print a code in and a browser on the machine running it,
+        // and over SSH there is neither.
+        el.innerHTML = `
+            <p class="ssh-status bad" data-testid="github-signed-out">Not signed in.</p>
+            <div class="form-group">
+                <label for="github-token">Personal access token</label>
+                <input type="password" id="github-token" data-testid="github-token"
+                       placeholder="ghp_…">
+                <span class="form-help">
+                    Needs the <code>repo</code> scope. Add <code>admin:org</code> only if
+                    you create repositories under an organisation.
+                </span>
+            </div>
+            <button class="btn btn-primary btn-small" data-testid="github-signin"
+                    onclick="githubSignIn()">Sign in</button>
+            <button class="btn btn-secondary btn-small"
+                    onclick="openUrl('https://github.com/settings/tokens/new?scopes=repo&description=Podium')">
+                Create a token</button>
+            <p class="settings-note">The token is handed to <code>gh</code> on that host and stored by it.
+               Podium does not keep a copy.</p>`;
+        return;
+    }
+
+    const missing = st.missingScopes || [];
+    el.innerHTML = `
+        <p class="ssh-status ok" data-testid="github-signed-in">
+            Signed in as <strong>${escapeHtml(st.login)}</strong></p>
+        ${missing.length > 0
+            ? `<p class="ssh-status bad" data-testid="github-scopes">
+                 This token is missing ${escapeHtml(missing.join(', '))} — creating a
+                 repository will fail until it is replaced.</p>`
+            : ''}
+        <p class="settings-note">${escapeHtml(st.version || '')}</p>
+        <button class="btn btn-secondary btn-small" onclick="loadGithubStatus()">Check again</button>
+        <button class="btn btn-danger btn-small" data-testid="github-signout"
+                onclick="githubSignOut()">Sign out</button>`;
+}
+
+async function githubSignIn(): Promise<void> {
+    const field = document.getElementById('github-token') as HTMLInputElement | null;
+    const token = field?.value?.trim() || '';
+    if (!token) { showError('Paste a token first.'); return; }
+
+    const result = await ipcRenderer.invoke('github-login', githubHost, token);
+    // Cleared either way: a token that failed is no more welcome in the DOM
+    // than one that worked.
+    if (field) field.value = '';
+    if (result.ok) showSuccess(result.detail); else showError(result.detail);
+    await loadGithubStatus();
+}
+
+async function githubSignOut(): Promise<void> {
+    if (!confirm('Sign out of GitHub on this host?')) return;
+    const result = await ipcRenderer.invoke('github-logout', githubHost);
+    if (result.ok) showSuccess(result.detail); else showError(result.detail);
+    await loadGithubStatus();
 }
 
 // --- Dictation -------------------------------------------------------------
@@ -5405,6 +5514,11 @@ async function submitEditProject(): Promise<void> {
 (window as any).toggleDictation = toggleDictation;
 (window as any).__resampleTo16k = resampleTo16k;
 (window as any).setDictationEnabled = setDictationEnabled;
+(window as any).setGithubHost = setGithubHost;
+(window as any).loadGithubStatus = loadGithubStatus;
+(window as any).githubSignIn = githubSignIn;
+(window as any).githubSignOut = githubSignOut;
+(window as any).__githubStatus = () => githubStatus;
 (window as any).setDictationDevice = setDictationDevice;
 (window as any).setDictationGain = setDictationGain;
 (window as any).__dictationState = () => dictationState;

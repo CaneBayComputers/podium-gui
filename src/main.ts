@@ -944,6 +944,142 @@ ipcMain.handle('update-repo', async (
   return { ok: true, detail: pulled.out.split('\n')[0] || 'Updated.' };
 });
 
+// --- GitHub ----------------------------------------------------------------
+//
+// Creating a repo during `podium new` needs `gh` authenticated ON THE HOST that
+// runs the command, since that is where the git operations happen. So this is
+// per host, like services and the AI agent.
+
+interface GithubStatus {
+  installed: boolean;
+  version?: string;
+  loggedIn: boolean;
+  login?: string;
+  scopes?: string[];
+  /** Scopes `podium new --github` needs that the token does not have. */
+  missingScopes?: string[];
+  error?: string;
+}
+
+// What creating a repository actually requires. `repo` alone covers a personal
+// repo; `admin:org` is only needed for one under an organisation, so it is
+// reported rather than demanded.
+const GH_REQUIRED_SCOPES = ['repo'];
+
+async function ghOn(hostId: string, command: string): Promise<CommandResult> {
+  const exec = executorFor(hostId) as any;
+  if (hostId === 'local') {
+    return new Promise((resolve) => {
+      const child = spawn('sh', ['-c', command], { env: { ...process.env, NO_COLOR: '1' } });
+      let out = ''; let err = '';
+      child.stdout?.on('data', (d) => { out += d.toString(); });
+      child.stderr?.on('data', (d) => { err += d.toString(); });
+      child.on('close', (code) => resolve({ code: code ?? 1, stdout: out.trim(), stderr: err.trim() }));
+      child.on('error', (e) => resolve({ code: 1, stdout: '', stderr: e.message }));
+    });
+  }
+  if (typeof exec.execRaw !== 'function') {
+    return { code: 1, stdout: '', stderr: `Cannot run commands on ${hostId}` };
+  }
+  return exec.execRaw(`${REMOTE_PATH_PREFIX} ${command}`);
+}
+
+ipcMain.handle('get-github-status', async (
+  _event: IpcMainInvokeEvent,
+  hostId: string = 'local'
+): Promise<GithubStatus> => {
+  const version = await ghOn(hostId, 'gh --version');
+  if (version.code !== 0) {
+    return { installed: false, loggedIn: false };
+  }
+
+  // JSON rather than the human output: the prose form is a formatted block with
+  // ticks and indentation that changes between releases, and it goes to stderr.
+  const status = await ghOn(hostId, 'gh auth status --json hosts 2>/dev/null');
+  if (status.code !== 0 || !status.stdout.trim().startsWith('{')) {
+    return {
+      installed: true,
+      version: version.stdout.split('\n')[0] || 'gh',
+      loggedIn: false
+    };
+  }
+
+  try {
+    const parsed = JSON.parse(status.stdout);
+    const accounts = Object.values(parsed.hosts || {}).flat() as any[];
+    const active = accounts.find((a) => a.active) || accounts[0];
+    if (!active) {
+      return { installed: true, version: version.stdout.split('\n')[0] || 'gh', loggedIn: false };
+    }
+
+    const scopes = String(active.scopes || '').split(',').map((x) => x.trim()).filter(Boolean);
+    return {
+      installed: true,
+      version: version.stdout.split('\n')[0] || 'gh',
+      loggedIn: active.state === 'success',
+      login: active.login,
+      scopes,
+      missingScopes: GH_REQUIRED_SCOPES.filter((need) => !scopes.includes(need))
+    };
+  } catch (error) {
+    return { installed: true, loggedIn: false, error: 'Could not read gh auth status.' };
+  }
+});
+
+// Authenticate with a token the user pastes in.
+//
+// `--with-token` reads from stdin and is the only non-interactive way in. The
+// browser flow needs a terminal to show a code in and a browser on the machine
+// running it — neither of which exists over SSH.
+//
+// The token is piped straight through and never stored here: gh writes it to
+// its own config on that host, which is where anything else would look for it.
+ipcMain.handle('github-login', async (
+  _event: IpcMainInvokeEvent,
+  hostId: string,
+  token: string
+): Promise<{ ok: boolean; detail: string }> => {
+  if (!/^gh[pousr]_[A-Za-z0-9]{20,}$/.test(token.trim())) {
+    // Checked before it is sent anywhere, so a pasted password or a truncated
+    // copy fails here rather than as an opaque gh error.
+    return { ok: false, detail: 'That does not look like a GitHub token. They start with ghp_, gho_, ghu_, ghs_ or ghr_.' };
+  }
+
+  const exec = executorFor(hostId) as any;
+  const command = 'gh auth login --with-token';
+
+  if (hostId === 'local') {
+    return new Promise((resolve) => {
+      const child = spawn('sh', ['-c', command], { env: { ...process.env, NO_COLOR: '1' } });
+      let err = '';
+      child.stderr?.on('data', (d) => { err += d.toString(); });
+      child.on('close', (code) => resolve(code === 0
+        ? { ok: true, detail: 'Signed in.' }
+        : { ok: false, detail: err.trim().split('\n')[0] || `gh exited ${code}` }));
+      child.on('error', (e) => resolve({ ok: false, detail: e.message }));
+      child.stdin?.end(token.trim() + '\n');
+    });
+  }
+
+  if (typeof exec.execRawWithInput !== 'function') {
+    return { ok: false, detail: `Cannot sign in on ${hostId}.` };
+  }
+  const result = await exec.execRawWithInput(`${REMOTE_PATH_PREFIX} ${command}`, token.trim() + '\n');
+  return result.code === 0
+    ? { ok: true, detail: 'Signed in.' }
+    : { ok: false, detail: (result.stderr || result.stdout).split('\n')[0] || 'gh refused the token' };
+});
+
+ipcMain.handle('github-logout', async (
+  _event: IpcMainInvokeEvent,
+  hostId: string
+): Promise<{ ok: boolean; detail: string }> => {
+  const r = await ghOn(hostId, 'gh auth logout --hostname github.com');
+  return r.code === 0
+    ? { ok: true, detail: 'Signed out.' }
+    : { ok: false, detail: (r.stderr || r.stdout).split('\n')[0] || 'gh refused' };
+});
+
 ipcMain.handle('get-platform-capabilities', async (): Promise<{
   platform: string; localPodium: boolean; remoteOnly: boolean;
 }> => ({
@@ -2432,6 +2568,34 @@ class SshExecutor implements Executor {
     return new Promise((resolve, reject) => {
       conn.exec(full, { pty: { term: 'xterm-256color', cols: 100, rows: 28 } },
         (err: any, stream: any) => err ? reject(err) : resolve(stream));
+    });
+  }
+
+  /**
+   * A raw command with something on stdin.
+   *
+   * `gh auth login --with-token` reads the token from stdin, which is the only
+   * non-interactive way to authenticate — the browser flow wants a terminal and
+   * a browser on the machine running it, and over SSH there is neither.
+   */
+  async execRawWithInput(command: string, input: string): Promise<CommandResult> {
+    let conn;
+    try {
+      conn = await this.connect();
+    } catch (error) {
+      return { code: 1, stdout: '', stderr: `${this.label}: ${(error as Error).message}` };
+    }
+    return new Promise((resolve) => {
+      conn.exec(command, (err: any, stream: any) => {
+        if (err) return resolve({ code: 1, stdout: '', stderr: err.message });
+        let stdout = ''; let stderr = '';
+        stream.on('data', (d: Buffer) => { stdout += d.toString(); });
+        stream.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
+        stream.on('close', (code: number) => {
+          resolve({ code: code ?? 1, stdout: stdout.trim(), stderr: stderr.trim() });
+        });
+        stream.end(input);
+      });
     });
   }
 

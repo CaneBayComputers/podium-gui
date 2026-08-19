@@ -433,6 +433,41 @@ async function run() {
       userDataInUse === require('./helpers').testUserDataDir(),
       `using ${userDataInUse}`);
 
+    // --- GitHub -----------------------------------------------------------
+    //
+    // `podium new --github` creates the repository from the machine running the
+    // project, so gh has to be authenticated THERE, not here.
+    const ghLocal = await app.evaluate(async ({ ipcMain }) =>
+      ipcMain._invokeHandlers.get('get-github-status')({}, 'local'));
+    check('github status reports installed and signed-in separately',
+      typeof ghLocal.installed === 'boolean' && typeof ghLocal.loggedIn === 'boolean'
+      && !(ghLocal.loggedIn && !ghLocal.installed),
+      JSON.stringify(ghLocal).slice(0, 120));
+
+    // A host that does not exist must not be reported as a working local gh.
+    const ghGhost = await app.evaluate(async ({ ipcMain }) =>
+      ipcMain._invokeHandlers.get('get-github-status')({}, 'no-such-host'));
+    check('an unknown host does not fall back to the local gh',
+      ghGhost.installed === false && ghGhost.loggedIn === false,
+      JSON.stringify(ghGhost));
+
+    // Rejected here rather than sent somewhere and refused with an opaque error.
+    const ghBad = await app.evaluate(async ({ ipcMain }) =>
+      ipcMain._invokeHandlers.get('github-login')({}, 'local', 'not-a-token'));
+    check('a token that is not a token is refused before it is sent',
+      !ghBad.ok && /token/i.test(ghBad.detail), ghBad.detail.slice(0, 80));
+
+    // Parsed from JSON, not from the human output — which is a formatted block
+    // with ticks, goes to stderr, and changes between gh releases.
+    const ghSrc = require('fs').readFileSync(
+      require('path').join(require('./helpers').ROOT, 'src/main.ts'), 'utf8');
+    check('gh auth status is read as JSON, not scraped',
+      /gh auth status --json hosts/.test(ghSrc));
+    // --with-token is the only non-interactive route: the browser flow needs a
+    // terminal to print a code in and a browser on the machine running it.
+    check('sign-in uses the non-interactive token route',
+      /gh auth login --with-token/.test(ghSrc) && !/auth login --web/.test(ghSrc));
+
     // --- Dictation --------------------------------------------------------
     //
     // decodeAudioData CRASHES this Electron's renderer — not throws, crashes, so
@@ -1745,9 +1780,13 @@ async function run() {
       const idx = window.__sshProfiles().length - 1;
       window.testSshProfile; // referenced so the hook is real
       // Simulate a completed test, then edit the host.
-      const before = document.querySelector('.ssh-status') !== null;
+      // Scoped to the host list. The same status class is used elsewhere in
+      // Settings now — the GitHub panel renders one — and an unscoped query
+      // found that instead, so this passed or failed on an unrelated panel.
+      const list = document.getElementById('ssh-profile-list');
+      const before = list.querySelector('.ssh-status') !== null;
       window.updateSshProfile(idx, 'host', '192.0.2.100');
-      return { before, after: document.querySelector('.ssh-status.ok') === null };
+      return { before, after: list.querySelector('.ssh-status.ok') === null };
     });
     check('editing a host clears any stale reachability claim', staleCleared.after);
 
