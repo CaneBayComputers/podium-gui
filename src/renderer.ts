@@ -350,6 +350,7 @@ async function loadProjects(): Promise<void> {
 
         renderProjects();
         renderFilterBar();   // counts derive from the project list
+        renderServicesHostPicker();
     } catch (error) {
         console.error('Failed to load projects:', error);
         // Only show error if it's a real failure, not just empty state
@@ -909,15 +910,17 @@ function renderProjects(): void {
 
 async function loadServices(): Promise<void> {
     try {
-        const result = await ipcRenderer.invoke('execute-podium', 'status', ['--all', '--json-output']);
-        
+        const result = await ipcRenderer.invoke('execute-podium-on', servicesHost,
+            'status', ['--all', '--json-output']);
+
         if (result.code !== 0) {
             console.log('Services status command failed, likely no services running');
+            sharedServices = {};
             renderServices();
             return;
         }
         
-        // Services ONLY. This used to call the full parser, which rebuilds the
+        // Services ONLY, from the SELECTED host. This used to call the full parser, which rebuilds the
         // project list — so on a multi-host dashboard it wiped the union and
         // refilled it from the local host alone, and whichever of loadProjects
         // and loadServices finished last decided what the grid showed.
@@ -972,15 +975,54 @@ let enabledOptionalServices: string[] = [];
 
 let servicesInUse: Record<string, string[]> = {};
 
+// Which host the Shared Services panel is showing and acting on.
+//
+// Everything in that panel follows it — the cards, Start/Stop, the Manage
+// window, and the in-use guard. Before this the panel DISPLAYED whichever host
+// answered the status poll while its BUTTONS always acted locally, which on
+// Windows meant looking at a remote machine's services and operating on a local
+// Podium that does not exist.
+let servicesHost = 'local';
+
+function renderServicesHostPicker(): void {
+    const sel = document.getElementById('services-host') as HTMLSelectElement | null;
+    if (!sel) return;
+
+    // One host needs no choosing, and a dropdown with a single entry is noise.
+    if (dashboardHosts.length < 2) {
+        sel.style.display = 'none';
+        if (dashboardHosts.length === 1) servicesHost = dashboardHosts[0]!.id;
+        return;
+    }
+
+    // A host can disappear when its profile is removed; fall back rather than
+    // leaving the panel pointed at nothing.
+    if (!dashboardHosts.some((h) => h.id === servicesHost)) {
+        servicesHost = dashboardHosts[0]!.id;
+    }
+
+    sel.style.display = '';
+    sel.innerHTML = dashboardHosts.map((h) =>
+        `<option value="${escapeHtml(h.id)}"${h.id === servicesHost ? ' selected' : ''}>${escapeHtml(h.label)}</option>`
+    ).join('');
+}
+
+async function setServicesHost(hostId: string): Promise<void> {
+    servicesHost = hostId;
+    await loadOptionalServices();
+    await loadServices();
+    renderServices();
+}
+
 async function showServiceManager(): Promise<void> {
     showModal('service-manager-modal');
     await refreshServiceCatalog();
-    servicesInUse = await ipcRenderer.invoke('get-services-in-use') || {};
+    servicesInUse = await ipcRenderer.invoke('get-services-in-use', servicesHost) || {};
     renderServiceManager();
 }
 
 async function refreshServiceCatalog(): Promise<void> {
-    const catalog = await ipcRenderer.invoke('get-service-catalog');
+    const catalog = await ipcRenderer.invoke('get-service-catalog', servicesHost);
     optionalServices = catalog.services || [];
     alwaysOnServices = catalog.always_on || [];
     serviceCatalogError = catalog.error || '';
@@ -1081,7 +1123,7 @@ async function toggleOptionalService(name: string): Promise<void> {
     // looks like it did nothing, so people click again.
     setServiceRowBusy(name, on ? 'Stopping…' : 'Starting…');
 
-    const result = await ipcRenderer.invoke('execute-podium', command, [name, '--json-output']);
+    const result = await ipcRenderer.invoke('execute-podium-on', servicesHost, command, [name, '--json-output']);
     if (result.code !== 0) {
         showError(`Could not ${on ? 'disable' : 'enable'} ${name}: ${result.stderr || result.stdout}`);
     } else {
@@ -1093,7 +1135,7 @@ async function toggleOptionalService(name: string): Promise<void> {
     // show whichever of those is true rather than assuming.
     await loadOptionalServices();
     await refreshServiceCatalog();
-    servicesInUse = await ipcRenderer.invoke('get-services-in-use') || {};
+    servicesInUse = await ipcRenderer.invoke('get-services-in-use', servicesHost) || {};
     renderServiceManager();
     renderServices();
 }
@@ -1770,7 +1812,7 @@ async function startServices(): Promise<void> {
         // No flags: the podium dispatcher invokes start_services.sh/stop_services.sh
         // without forwarding arguments, so --json-output never reaches them.
         // Success is judged by the exit code.
-        const result = await ipcRenderer.invoke('execute-podium', 'start-services', []);
+        const result = await ipcRenderer.invoke('execute-podium-on', servicesHost, 'start-services', []);
         
         hideLoadingOverlay();
         
@@ -1794,7 +1836,7 @@ async function startServices(): Promise<void> {
 async function stopServices(): Promise<void> {
     try {
         showLoadingOverlay('Stopping Services', 'Stopping all shared services...');
-        const result = await ipcRenderer.invoke('execute-podium', 'stop-services', []);
+        const result = await ipcRenderer.invoke('execute-podium-on', servicesHost, 'stop-services', []);
         
         hideLoadingOverlay();
         
@@ -4536,6 +4578,8 @@ async function submitEditProject(): Promise<void> {
 (window as any).isDisabled = isDisabled;
 (window as any).showServiceManager = showServiceManager;
 (window as any).toggleOptionalService = toggleOptionalService;
+(window as any).setServicesHost = setServicesHost;
+(window as any).__servicesHost = () => servicesHost;
 (window as any).setServiceRowBusy = setServiceRowBusy;
 (window as any).__optionalServices = () => optionalServices.map(s => s.slug);
 // Unfiltered, unlike __visibleProjects — the suite needs to reason about

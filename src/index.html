@@ -71,6 +71,13 @@
             <section class="services">
                 <div class="services-header">
                     <h3>Shared Services</h3>
+                    <!-- Services are per host: each machine has its own Docker
+                         network, its own Redis and its own enabled set. There is
+                         no sensible merged view, so the panel shows one host at
+                         a time and everything in it follows this. Hidden when
+                         there is only one host. -->
+                    <select id="services-host" data-testid="services-host"
+                            onchange="setServicesHost(this.value)" style="display: none;"></select>
                     <div class="services-controls">
                         <button class="btn btn-success btn-small" onclick="startServices()" data-testid="start-services">▶ Start Services</button>
                         <button class="btn btn-warning btn-small" onclick="stopServices()" data-testid="stop-services">⏹ Stop Services</button>

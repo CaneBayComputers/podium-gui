@@ -1890,6 +1890,17 @@ span.status-indicator {
     flex: 0 0 auto;
 }
 
+#services-host {
+    margin-left: 0.75rem;
+    padding: 0.3rem 0.55rem;
+    font-family: inherit;
+    font-size: 0.85rem;
+    color: var(--text-primary);
+    background: var(--card-bg);
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+}
+
 /* Which machine a project lives on. Only rendered with more than one host. */
 .host-badge {
     margin-left: auto;
