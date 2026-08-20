@@ -1081,6 +1081,96 @@ ipcMain.handle('github-logout', async (
     : { ok: false, detail: (r.stderr || r.stdout).split('\n')[0] || 'gh refused' };
 });
 
+// --- Attaching files to a project ------------------------------------------
+//
+// Files land in <project>/uploads/ and the agent is told the path. Deliberately
+// no extraction here: Claude, Codex and Gemini all read PDFs, images and
+// documents themselves, and far better than a bundled parser would. Building a
+// pipeline to describe a PDF would duplicate — worse — something the thing on
+// the other end already does. Transport and a path is the whole job.
+//
+// Works for remote projects over sftp, because the file has to be next to the
+// code the agent is editing, and that code is on the host.
+
+const UPLOAD_DIR = 'uploads';
+
+// Keep the name, drop the path and anything that could climb out of the folder.
+function safeUploadName(original: string): string {
+  const base = path.basename(original).replace(/[/\\]/g, '');
+  return base.replace(/^\.+/, '').replace(/[\x00-\x1f]/g, '') || 'upload';
+}
+
+ipcMain.handle('attach-files', async (
+  _event: IpcMainInvokeEvent,
+  hostId: string,
+  projectName: string,
+  filePaths: string[]
+): Promise<{ ok: boolean; attached: string[]; error?: string }> => {
+  if (!Array.isArray(filePaths) || filePaths.length === 0) {
+    return { ok: false, attached: [], error: 'No files selected.' };
+  }
+
+  try {
+    if (hostId === 'local') {
+      const dir = path.join(getProjectsDir(), projectName, UPLOAD_DIR);
+      fs.mkdirSync(dir, { recursive: true });
+      const attached: string[] = [];
+      for (const src of filePaths) {
+        const name = safeUploadName(src);
+        fs.copyFileSync(src, path.join(dir, name));
+        attached.push(`${UPLOAD_DIR}/${name}`);
+      }
+      return { ok: true, attached };
+    }
+
+    // Remote: the projects directory is whatever THAT host's config says.
+    const executor = executorFor(hostId) as any;
+    const dirResult = await executor.exec(['projects-dir']);
+    const projectsDir = (dirResult.stdout || '').trim();
+    if (dirResult.code !== 0 || !projectsDir) {
+      return { ok: false, attached: [], error: `Could not find the projects directory on ${hostId}.` };
+    }
+
+    const remoteDir = `${projectsDir}/${projectName}/${UPLOAD_DIR}`;
+    const mk = await executor.execRaw(`mkdir -p ${JSON.stringify(remoteDir)}`);
+    if (mk.code !== 0) {
+      return { ok: false, attached: [], error: `Could not create ${remoteDir}: ${mk.stderr}` };
+    }
+
+    const conn = await executor.connect();
+    const attached = await new Promise<string[]>((resolve, reject) => {
+      conn.sftp((err: any, sftp: any) => {
+        if (err) return reject(err);
+        const done: string[] = [];
+        const next = (i: number): void => {
+          if (i >= filePaths.length) { resolve(done); return; }
+          const name = safeUploadName(filePaths[i]!);
+          sftp.fastPut(filePaths[i], `${remoteDir}/${name}`, (putErr: any) => {
+            if (putErr) return reject(putErr);
+            done.push(`${UPLOAD_DIR}/${name}`);
+            next(i + 1);
+          });
+        };
+        next(0);
+      });
+    });
+    return { ok: true, attached };
+  } catch (error) {
+    return { ok: false, attached: [], error: (error as Error).message };
+  }
+});
+
+// Pick files to attach. Multi-select, no extension filter: the agent decides
+// what it can make sense of, and a filter here would only be a guess at that.
+ipcMain.handle('choose-files', async (): Promise<string[]> => {
+  const result = await dialog.showOpenDialog({
+    title: 'Attach files to this project',
+    properties: ['openFile', 'multiSelections'],
+    buttonLabel: 'Attach'
+  });
+  return result.canceled ? [] : result.filePaths;
+});
+
 ipcMain.handle('get-platform-capabilities', async (): Promise<{
   platform: string; localPodium: boolean; remoteOnly: boolean;
 }> => ({
