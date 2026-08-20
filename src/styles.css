@@ -1947,6 +1947,20 @@ span.status-indicator {
 
 /* LOCAL / LAN scope markers beside a project's URLs. Deliberately quiet — they
    disambiguate two links rather than competing with them. */
+.tile-notice {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-top: 0.6rem;
+    padding: 0.6rem 0.8rem;
+    font-size: 0.85rem;
+    color: var(--neon-orange);
+    background: rgba(255, 140, 0, 0.08);
+    border: 1px solid var(--neon-orange);
+    border-radius: 6px;
+}
+.tile-notice span { flex: 1; }
+
 .url-scope {
     margin-right: 0.35rem;
     font-size: 0.62rem;
