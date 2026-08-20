@@ -2589,6 +2589,39 @@ async function run() {
           /setSelectionRange\(pendingFocus\.start/.test(focusSrc));
       }
 
+      // Ctrl+Enter sends; plain Enter is a newline. The inverse is the chat
+      // convention, but this box holds a paragraph written over a minute or two,
+      // and a stray Enter would fire it half-written at an agent that then acts
+      // on it.
+      const composeSrc = require('fs').readFileSync(
+        require('path').join(require('./helpers').ROOT, 'src/renderer.ts'), 'utf8');
+      check('plain Enter does not send the compose box',
+        /e\.key === 'Enter' && \(e\.ctrlKey \|\| e\.metaKey\)/.test(composeSrc));
+      check('the send chord is stated in the placeholder',
+        /Ctrl\+Enter to send/.test(composeSrc));
+
+      // Attaching writes into the compose box rather than sending on its own:
+      // a bare path tells the agent nothing about what to do with the file, and
+      // sending would interrupt whatever it is mid-way through.
+      const attachBlock = composeSrc.slice(composeSrc.indexOf('async function attachFiles'),
+                                           composeSrc.indexOf('function sendCompose'));
+      check('an attachment lands in the compose box, not straight at the agent',
+        /compose-input-/.test(attachBlock) && !/sendCompose\(/.test(attachBlock));
+      check('attachments are named in the message, not counted',
+        /result\.attached\.join/.test(attachBlock));
+
+      const attachMain = require('fs').readFileSync(
+        require('path').join(require('./helpers').ROOT, 'src/main.ts'), 'utf8');
+      const attachHandler = attachMain.slice(attachMain.indexOf("ipcMain.handle('attach-files'"),
+                                             attachMain.indexOf("ipcMain.handle('choose-files'"));
+      // A remote project's files have to sit next to the code the agent edits,
+      // and that code is on the host.
+      check('remote attachments go over sftp to the project host',
+        /fastPut/.test(attachHandler) && /projects-dir/.test(attachHandler));
+      // A filename is attacker-adjacent input the moment it is joined to a path.
+      check('an attachment cannot escape the uploads folder',
+        /safeUploadName/.test(attachHandler));
+
       // The real trap: a poll rebuilds #projects-grid.innerHTML underneath it.
       const survived = await win.evaluate(async (name) => {
         const before = document.querySelector('.tile-terminal .xterm-screen');

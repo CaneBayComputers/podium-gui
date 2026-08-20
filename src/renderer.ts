@@ -3769,7 +3769,7 @@ function buildTileWrapper(session: TerminalSession, project: string): HTMLElemen
     compose.innerHTML = `
         <textarea class="tile-compose-input" rows="5"
                   data-testid="compose-input-${escapeHtml(project)}"
-                  placeholder="Tell the agent what to change…"></textarea>
+                  placeholder="Tell the agent what to change…  (Ctrl+Enter to send)"></textarea>
         <div class="tile-compose-actions">
             <button class="btn btn-secondary btn-small mic-button"
                     data-testid="compose-mic-${escapeHtml(project)}"
@@ -3779,11 +3779,16 @@ function buildTileWrapper(session: TerminalSession, project: string): HTMLElemen
                     onclick="sendCompose('${escapeHtml(project)}')">Send</button>
         </div>`;
 
-    // Enter sends, Shift+Enter makes a newline — the convention every chat box
-    // uses, so it needs no explaining.
+    // Ctrl+Enter sends; plain Enter is a newline.
+    //
+    // The other way round is the chat convention, but this box is not a chat
+    // box: it holds a paragraph describing a change, written over a minute or
+    // two, and a stray Enter halfway through would fire it half-written at an
+    // agent that then acts on it. Sending is the rarer, more consequential
+    // action here, so it takes the deliberate chord.
     const input = compose.querySelector('.tile-compose-input') as HTMLTextAreaElement;
     input.addEventListener('keydown', (e: KeyboardEvent) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
+        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
             e.preventDefault();
             sendCompose(project);
         }
@@ -4295,6 +4300,52 @@ function stopDictation(button: HTMLElement): void {
 //
 // A trailing carriage return submits it, the same as pressing Enter in the
 // terminal would.
+// Attach files to a project and reference them in the message being written.
+//
+// The reference goes into the COMPOSE BOX rather than straight to the agent.
+// Sending on its own would interrupt whatever the agent is mid-way through, and
+// a bare path tells it nothing about what to do with the file — the person
+// attaching it is the one who knows that.
+//
+// No extraction here either: Claude, Codex and Gemini read PDFs, images and
+// documents themselves, and better than a bundled parser would. Handing over a
+// path is what makes the file usable, not describing it first.
+async function attachFiles(project: string): Promise<void> {
+    const paths: string[] = await ipcRenderer.invoke('choose-files');
+    if (!paths || paths.length === 0) return;
+
+    const host = hostOf(project);
+    const box = document.querySelector(
+        `[data-testid="compose-input-${CSS.escape(project)}"]`) as HTMLTextAreaElement | null;
+    const button = document.querySelector(
+        `[data-testid="compose-attach-${CSS.escape(project)}"]`) as HTMLButtonElement | null;
+
+    // A large file over sftp is not instant, and a button that looks idle
+    // invites a second click that uploads everything twice.
+    if (button) { button.disabled = true; button.textContent = '⏳'; }
+
+    try {
+        const result = await ipcRenderer.invoke('attach-files', host, project, paths);
+        if (!result.ok) { showError(result.error || 'Could not attach the files.'); return; }
+
+        // Named, not counted: the agent needs the paths, and so does the person
+        // deciding what to say about them.
+        const list = result.attached.join(', ');
+        showSuccess(`Attached ${list}`);
+
+        if (box) {
+            const lead = box.value.trim() ? box.value.replace(/\s*$/, '\n') : '';
+            box.value = `${lead}I've attached ${list} — `;
+            box.focus();
+            // Caret at the end, ready for the sentence saying what to do with it
+            // — the only part the person still has to write.
+            box.setSelectionRange(box.value.length, box.value.length);
+        }
+    } finally {
+        if (button) { button.disabled = false; button.textContent = '📎'; }
+    }
+}
+
 function sendCompose(project: string): void {
     const wrapper = document.querySelector(`[data-testid="tile-terminal-${CSS.escape(project)}"]`);
     const input = wrapper?.querySelector('.tile-compose-input') as HTMLTextAreaElement | null;
@@ -5602,6 +5653,7 @@ async function submitEditProject(): Promise<void> {
 (window as any).onRuntimeChange = onRuntimeChange;
 (window as any).sendCompose = sendCompose;
 (window as any).toggleDictation = toggleDictation;
+(window as any).attachFiles = attachFiles;
 (window as any).__resampleTo16k = resampleTo16k;
 (window as any).setDictationEnabled = setDictationEnabled;
 (window as any).setGithubHost = setGithubHost;
