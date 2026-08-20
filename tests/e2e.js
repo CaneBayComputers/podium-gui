@@ -536,6 +536,57 @@ async function run() {
     check('audio already at 16k is passed through untouched',
       resample.passthrough === 48000, `${resample.passthrough}`);
 
+    // --- The post-/etc/hosts JSON shape -----------------------------------
+    //
+    // Podium stopped writing /etc/hosts, so three things changed: host_entry is
+    // gone, project_ip is new, and local_url is an address rather than a
+    // hostname. The CLI flagged the first two as the ones that break silently,
+    // and they do — nothing throws, the UI just quietly means something else.
+    const newShape = await win.evaluate(() => {
+      const parsed = window.__parseStatus(JSON.stringify({
+        shared_services: {},
+        projects: [{
+          name: 'shape-test', docker_running: true, http_status: 'ok',
+          // No host_entry at all, as the CLI now emits.
+          project_ip: '10.247.177.42',
+          local_url: 'http://10.247.177.42',
+          lan_url: 'http://192.168.1.6:142',
+          external_port: '142', port_mapped: true
+        }]
+      }))[0];
+      return {
+        status: parsed.status,
+        localUrl: parsed.localUrl,
+        projectIp: parsed.projectIp,
+        hasHostEntry: 'hostEntry' in parsed
+      };
+    });
+    check('a project with no host_entry still reads as running',
+      newShape.status === 'running', JSON.stringify(newShape));
+    check('the container address is carried through as project_ip',
+      newShape.projectIp === '10.247.177.42', JSON.stringify(newShape));
+    check('the removed host_entry field is gone, not defaulted to false',
+      !newShape.hasHostEntry, JSON.stringify(newShape));
+
+    // __parseStatus REBUILDS the project list, so the fixture above replaced
+    // every real project with one synthetic entry. Put the real ones back
+    // before anything downstream reads them.
+    await win.evaluate(() => window.loadProjects());
+    await win.waitForTimeout(2500);
+
+    // The install check probed http://<project-name>/, which only ever worked
+    // because /etc/hosts existed. On current Podium that name resolves nowhere,
+    // so a working install would have been reported as still initialising.
+    const rendererShape = require('fs').readFileSync(
+      require('path').join(require('./helpers').ROOT, 'src/renderer.ts'), 'utf8');
+    check('install verification asks the CLI for the URL rather than using the name',
+      /projectLocalUrl\(target\)/.test(rendererShape)
+      && !/check-project-url', target\)/.test(rendererShape));
+
+    // LOCAL and LAN are different routes; unlabelled they look interchangeable.
+    check('local and LAN URLs are labelled as different routes',
+      /url-scope">LOCAL/.test(rendererShape) && /url-scope">LAN/.test(rendererShape));
+
     // --- Model listing ----------------------------------------------------
     //
     // Deliberately no assertion that a real endpoint returns models: that would
