@@ -4,6 +4,7 @@ import { spawn, ChildProcess, execSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as http from 'http';
+import * as https from 'https';
 
 // Debug log file path
 const debugLogPath: string = path.join(os.tmpdir(), 'podium-gui-debug.log');
@@ -1524,29 +1525,84 @@ ipcMain.handle('check-project-url', async (
 // Ollama exposes what the user has actually pulled. Turning the hardest step of
 // a local setup — "type the exact model tag" — into a picker is most of the value
 // of the local presets. Fails quietly to free text when Ollama is not running.
-ipcMain.handle('list-ollama-models', async (event: IpcMainInvokeEvent, baseUrl: string): Promise<string[]> => {
-  // The agent endpoint is .../v1; the tags API sits at the host root.
-  const root = (baseUrl || 'http://localhost:11434').replace(/\/v1\/?$/, '');
-
+// What models an endpoint offers.
+//
+// Generalised from an Ollama-only lookup, which could not reach anything else:
+// it spoke only /api/tags and used the http module, so every https endpoint
+// failed silently and the field fell back to free text.
+//
+// Two shapes cover nearly everything:
+//   /api/tags    Ollama's own, no key
+//   /v1/models   the OpenAI-compatible shape, which OpenRouter, LM Studio,
+//                vLLM, llama.cpp, Groq, Together and OpenAI itself all serve
+//
+// Measured: OpenRouter answers /v1/models with 414 models and NO key, so a
+// custom-endpoint setup gets a real list without anyone pasting a secret.
+// api.anthropic.com returns 401 without one, which is why the key is sent when
+// there is one to send.
+function fetchJson(url: string, headers: Record<string, string>, timeoutMs = 4000): Promise<any> {
   return new Promise((resolve) => {
-    const request = http.get(`${root}/api/tags`, { timeout: 1500 }, (res) => {
+    let mod: typeof http | typeof https;
+    try {
+      mod = new URL(url).protocol === 'https:' ? https : http;
+    } catch {
+      return resolve(null);      // not a URL at all
+    }
+
+    const request = mod.get(url, { timeout: timeoutMs, headers }, (res: any) => {
       let body = '';
-      res.on('data', (chunk) => { body += chunk; });
+      res.on('data', (chunk: Buffer) => { body += chunk.toString(); });
       res.on('end', () => {
-        try {
-          const models = (JSON.parse(body).models || [])
-            .map((m: any) => m.name)
-            .filter((n: string) => typeof n === 'string' && n !== '');
-          resolve(models);
-        } catch (error) {
-          resolve([]);
-        }
+        try { resolve(JSON.parse(body)); } catch { resolve(null); }
       });
     });
-
-    request.on('error', () => resolve([]));
-    request.on('timeout', () => { request.destroy(); resolve([]); });
+    request.on('error', () => resolve(null));
+    request.on('timeout', () => { request.destroy(); resolve(null); });
   });
+}
+
+ipcMain.handle('list-models', async (
+  _event: IpcMainInvokeEvent,
+  baseUrl: string,
+  apiKey: string = ''
+): Promise<{ models: string[]; source: string }> => {
+  const base = (baseUrl || 'http://localhost:11434').replace(/\/+$/, '');
+  // The agent endpoint is .../v1; Ollama's tags API sits at the host root.
+  const root = base.replace(/\/v1$/, '');
+
+  // Ollama first: it is the only one that needs no key and no guessing.
+  const tags = await fetchJson(`${root}/api/tags`, {}, 1500);
+  if (tags && Array.isArray(tags.models)) {
+    const models = tags.models
+      .map((m: any) => m.name)
+      .filter((n: any) => typeof n === 'string' && n !== '');
+    if (models.length > 0) return { models, source: 'ollama' };
+  }
+
+  // Anthropic authenticates with x-api-key and a version header rather than a
+  // bearer token, so sending Authorization would just 401.
+  const isAnthropic = /anthropic\.com/.test(base);
+  const headers: Record<string, string> = {};
+  if (apiKey) {
+    if (isAnthropic) {
+      headers['x-api-key'] = apiKey;
+      headers['anthropic-version'] = '2023-06-01';
+    } else {
+      headers['Authorization'] = `Bearer ${apiKey}`;
+    }
+  }
+
+  const v1 = base.endsWith('/v1') ? `${base}/models` : `${root}/v1/models`;
+  const listed = await fetchJson(v1, headers);
+  if (listed && Array.isArray(listed.data)) {
+    const models = listed.data
+      .map((m: any) => m.id)
+      .filter((n: any) => typeof n === 'string' && n !== '')
+      .sort();
+    if (models.length > 0) return { models, source: 'openai-compatible' };
+  }
+
+  return { models: [], source: 'none' };
 });
 
 // Qwen Code wants Node 22+. It installs on 20 with an EBADENGINE warning, which
