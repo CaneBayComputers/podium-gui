@@ -942,6 +942,7 @@ function renderProjects(): void {
     // The grid is rebuilt wholesale on every poll. Any terminal living in a
     // tile has to be lifted out first or innerHTML destroys a running xterm
     // and its pty along with the markup around it.
+    captureTileFocus();
     detachTileTerminals();
 
     if (projects.length === 0) {
@@ -3589,6 +3590,27 @@ function detachTileTerminals(): void {
     }
 }
 
+// Where the caret was when the grid was last rebuilt.
+//
+// Replacing #projects-grid.innerHTML blurs whatever was focused inside it, and
+// that happens on every ten-second poll — so typing into a compose box lost
+// focus and the caret mid-sentence, roughly twice a minute. This has to be
+// captured BEFORE the rebuild; by the time the panes are reattached,
+// document.activeElement is already <body> and there is nothing left to read.
+let pendingFocus: { el: HTMLTextAreaElement | HTMLInputElement; start: number; end: number } | null = null;
+
+function captureTileFocus(): void {
+    const active = document.activeElement as HTMLTextAreaElement | HTMLInputElement | null;
+    if (!active || !active.closest('.tile-terminal') || !('selectionStart' in active)) {
+        // Deliberately NOT cleared here. renderProjects runs several times in a
+        // single refresh, and the first call is the only one that still sees the
+        // focused element — the rest run after the rebuild has already blurred
+        // it. Clearing on those wiped the one good capture every time.
+        return;
+    }
+    pendingFocus = { el: active, start: active.selectionStart ?? 0, end: active.selectionEnd ?? 0 };
+}
+
 function reattachTileTerminals(): void {
     for (const session of terminalSessions.values()) {
         if (session.host !== 'tile' || !session.wrapper || !session.project) continue;
@@ -3598,8 +3620,21 @@ function reattachTileTerminals(): void {
         // the pane parked rather than dropping it — the pty is still alive.
         if (!host) continue;
 
+        // Already in the right place: moving it again would blur for nothing.
+        if (session.wrapper.parentElement === host) continue;
+
         host.appendChild(session.wrapper);
     }
+
+    if (pendingFocus && document.contains(pendingFocus.el)) {
+        pendingFocus.el.focus({ preventScroll: true });
+        // Restoring focus alone drops the caret to the end, which is just as
+        // disruptive halfway through a sentence.
+        try { pendingFocus.el.setSelectionRange(pendingFocus.start, pendingFocus.end); }
+        catch { /* not a text field after all */ }
+    }
+    pendingFocus = null;
+
     refitTileTerminals();
 }
 
@@ -3722,17 +3757,17 @@ function buildTileWrapper(session: TerminalSession, project: string): HTMLElemen
     viewport.className = 'tile-terminal-viewport';
     viewport.appendChild(session.pane);
 
-    // A compose box rather than typing into the terminal.
+    // A compose box ALONGSIDE the terminal, not instead of it.
     //
     // An agent CLI is a poor text editor: no cursor movement worth the name, no
     // selection, and a stray Ctrl-C ends the session. Most people asking an agent
-    // to change something are writing a sentence or two, and want to fix a typo
-    // halfway through it. The terminal stays as the transcript — it is genuinely
-    // good at showing what happened — and input moves somewhere built for input.
+    // to change something are writing a sentence or two and want to fix a typo
+    // halfway through. But the terminal remains fully typable, because a
+    // one-keystroke answer to "proceed? (y/n)" is faster where it is asked.
     const compose = document.createElement('div');
     compose.className = 'tile-compose';
     compose.innerHTML = `
-        <textarea class="tile-compose-input" rows="2"
+        <textarea class="tile-compose-input" rows="5"
                   data-testid="compose-input-${escapeHtml(project)}"
                   placeholder="Tell the agent what to change…"></textarea>
         <div class="tile-compose-actions">
@@ -4329,9 +4364,11 @@ async function openAgentTerminal(options: AgentTerminalOptions): Promise<void> {
     const term = new Terminal({
         fontSize: 13,
         fontFamily: "'JetBrains Mono', ui-monospace, monospace",
-        // No cursor: it is a transcript, and a blinking cursor invites typing
-        // into something that will not accept it.
-        cursorBlink: false,
+        // The terminal stays fully typable — keystrokes go straight to the pty,
+        // so the cursor is shown. The compose box is an easier way to write a
+        // paragraph, not a replacement for the terminal: an agent that asks a
+        // yes/no question is faster to answer in place.
+        cursorBlink: true,
         theme: terminalThemeFor(currentTheme)
     });
     const fit = new FitAddon();
@@ -4349,10 +4386,11 @@ async function openAgentTerminal(options: AgentTerminalOptions): Promise<void> {
             const copyOrInterrupt = (e.ctrlKey || e.metaKey)
                 && ['c', 'C', 'v', 'V', 'a', 'A'].includes(e.key);
             if (copyOrInterrupt) return true;
-            // Anything else: send the person to the box built for typing.
-            const box = session?.wrapper?.querySelector('.tile-compose-input') as HTMLTextAreaElement | null;
-            if (box && e.key.length === 1) box.focus();
-            return false;
+            // Everything else goes to the pty. The compose box is the easier
+            // way to write a paragraph, but redirecting keystrokes out of the
+            // terminal made it feel broken — and a one-key answer to
+            // "proceed? (y/n)" belongs where the question was asked.
+            return true;
         });
     }
 

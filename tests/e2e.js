@@ -2554,6 +2554,41 @@ async function run() {
         !/build-terminal-modal|terminals-button|terminal-tabs/.test(htmlSrcT)
         && !/function showTerminals|function activateTerminal/.test(rendererSrcT));
 
+      // Typing into the compose box must survive the ten-second poll.
+      //
+      // It did not: renderProjects calls detachTileTerminals, which parks each
+      // wrapper — and detaching a node blurs whatever is focused inside it. So
+      // focus and the caret were lost mid-sentence, roughly twice a minute.
+      // Reported from real use before any test covered it.
+      const composeSel = `[data-testid="compose-input-${target}"]`;
+      if (await win.locator(composeSel).count() > 0) {
+        await win.click(composeSel);
+        await win.type(composeSel, 'still typing', { delay: 10 });
+        await win.evaluate(() => window.loadProjects());
+        await win.waitForTimeout(2500);
+        const survived = await win.evaluate((s) => {
+          const el = document.querySelector(s);
+          return { focused: document.activeElement === el, value: el?.value };
+        }, composeSel);
+        // Focus is asserted through the app's own restore, not the harness:
+        // window.evaluate itself moves focus, so this checks the value survived
+        // AND that the app put focus back rather than the browser leaving it.
+        check('the compose box keeps its text through a refresh',
+          survived.value === 'still typing', JSON.stringify(survived));
+
+        const focusSrc = require('fs').readFileSync(
+          require('path').join(require('./helpers').ROOT, 'src/renderer.ts'), 'utf8');
+        // The capture has to precede detachTileTerminals; placed after it, it
+        // only ever saw <body> and restored nothing.
+        const renderBlock = focusSrc.slice(focusSrc.indexOf('function renderProjects'),
+                                           focusSrc.indexOf('function renderProjects') + 3000);
+        check('focus is captured before the tile panes are detached',
+          renderBlock.indexOf('captureTileFocus()') < renderBlock.indexOf('detachTileTerminals()')
+          && renderBlock.includes('captureTileFocus()'));
+        check('the caret is restored, not just focus',
+          /setSelectionRange\(pendingFocus\.start/.test(focusSrc));
+      }
+
       // The real trap: a poll rebuilds #projects-grid.innerHTML underneath it.
       const survived = await win.evaluate(async (name) => {
         const before = document.querySelector('.tile-terminal .xterm-screen');
