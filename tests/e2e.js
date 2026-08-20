@@ -536,6 +536,26 @@ async function run() {
     check('audio already at 16k is passed through untouched',
       resample.passthrough === 48000, `${resample.passthrough}`);
 
+    // One unreachable host must not blank the dashboard.
+    //
+    // Every host was awaited before anything rendered, so a powered-off laptop
+    // held the whole grid — local projects included — for its full ten-second
+    // handshake timeout. An empty grid with nothing to click reads as the app
+    // being broken rather than one host being down.
+    const loaderSrc = require('fs').readFileSync(
+      require('path').join(require('./helpers').ROOT, 'src/renderer.ts'), 'utf8');
+    const loader = loaderSrc.slice(loaderSrc.indexOf('async function loadProjects'),
+                                   loaderSrc.indexOf('async function loadProjects') + 3000);
+    check('each host renders as it answers rather than after all of them',
+      /applyHost\(h, result\);[\s\S]{0,200}renderProjects\(\)/.test(loader),
+      'expected a render inside the per-host map');
+    // Clearing upfront made every tile blink out and back on each poll.
+    check('the grid is not emptied before the hosts answer',
+      !/^\s*projects = \[\];\s*$/m.test(loader.slice(0, loader.indexOf('applyHost'))));
+    // A host removed from settings must not leave its projects behind.
+    check('projects from a host no longer configured are dropped',
+      /configured\.has\(/.test(loader));
+
     // --- The post-/etc/hosts JSON shape -----------------------------------
     //
     // Podium stopped writing /etc/hosts, so three things changed: host_entry is
@@ -2588,6 +2608,13 @@ async function run() {
         check('the caret is restored, not just focus',
           /setSelectionRange\(pendingFocus\.start/.test(focusSrc));
       }
+
+      // The paperclip has to actually render. It did not: an edit adding it was
+      // discarded when a later replacement in the same script failed, so the
+      // handler existed with nothing to invoke it — invisible in every test that
+      // only checked the function was defined.
+      check('the attach button is rendered, not just defined',
+        await win.locator(`[data-testid="compose-attach-${target}"]`).count() === 1);
 
       // Ctrl+Enter sends; plain Enter is a newline. The inverse is the chat
       // convention, but this box holds a paragraph written over a minute or two,

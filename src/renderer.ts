@@ -351,33 +351,55 @@ async function loadProjects(): Promise<void> {
     try {
         await refreshDashboardHosts();
 
-        // Every host in parallel. Sequential would make the slowest host set the
-        // refresh interval for all of them, and one unreachable machine would
-        // stall the whole dashboard rather than just its own tiles.
+        // Every host in parallel, AND rendered as each one answers.
+        //
+        // Waiting for all of them before rendering anything meant a single
+        // unreachable host blanked the whole dashboard for its full ten-second
+        // handshake timeout — local projects included. With a laptop powered
+        // off, that is an empty grid and nothing to click, which reads as the
+        // app being broken rather than one host being down.
         //
         // `--all` is required: podium status lists only RUNNING projects by
         // default, so without it the grid is empty whenever nothing is up.
-        const results = await Promise.all(dashboardHosts.map(async (h) => ({
-            host: h,
-            result: await ipcRenderer.invoke('execute-podium-on', h.id, 'status', ['--all', '--json-output'])
-        })));
+        // NOT cleared here. Clearing upfront and refilling as hosts answered
+        // made every project blink out and back on each ten-second poll — the
+        // slow host's tiles were missing for as long as it took to answer.
+        // Each host's entries are replaced when that host reports instead, so
+        // what is on screen stays there until something newer arrives.
+        const seenHosts = new Set<string>();
 
-        projects = [];
-        sharedServices = {};
-        hostErrors = {};
+        const applyHost = (host: { id: string; label: string }, result: any): void => {
+            // Drop anything already held for this host before re-adding, so a
+            // second answer replaces rather than duplicates.
+            seenHosts.add(host.id);
+            projects = projects.filter((p) => ((p as any).hostId || 'local') !== host.id);
 
-        let appended = false;
-        for (const { host, result } of results) {
             if (result.code !== 0) {
                 // Recorded rather than thrown away: a host that is down should
                 // say so, not silently contribute nothing and look like a host
                 // with no projects.
                 hostErrors[host.id] = (result.stderr || result.stdout || 'did not respond').split('\n')[0]!;
-                continue;
+                return;
             }
-            parseProjectStatusJSON(result.stdout, host.id, appended);
-            appended = true;
-        }
+            delete hostErrors[host.id];
+            // Append: the parse must not clear what other hosts have added.
+            parseProjectStatusJSON(result.stdout, host.id, true);
+        };
+
+        await Promise.all(dashboardHosts.map(async (h) => {
+            const result = await ipcRenderer.invoke('execute-podium-on', h.id, 'status',
+                ['--all', '--json-output']);
+            applyHost(h, result);
+            // Render on arrival. The fast hosts are visible while the slow ones
+            // are still being waited on.
+            renderProjects();
+            renderFilterBar();
+        }));
+
+        // A host removed from settings, or one that never answered, must not
+        // leave its projects on screen forever.
+        const configured = new Set(dashboardHosts.map((h) => h.id));
+        projects = projects.filter((p) => configured.has((p as any).hostId || 'local'));
 
         renderProjects();
         renderFilterBar();   // counts derive from the project list
@@ -3626,6 +3648,10 @@ function reattachTileTerminals(): void {
         host.appendChild(session.wrapper);
     }
 
+    // Notices are restored the same way the panes are: the grid was just
+    // rebuilt, so anything written directly into a tile is gone.
+    paintTileNotices();
+
     if (pendingFocus && document.contains(pendingFocus.el)) {
         pendingFocus.el.focus({ preventScroll: true });
         // Restoring focus alone drops the caret to the end, which is just as
@@ -3771,6 +3797,10 @@ function buildTileWrapper(session: TerminalSession, project: string): HTMLElemen
                   data-testid="compose-input-${escapeHtml(project)}"
                   placeholder="Tell the agent what to change…  (Ctrl+Enter to send)"></textarea>
         <div class="tile-compose-actions">
+            <button class="btn btn-secondary btn-small"
+                    data-testid="compose-attach-${escapeHtml(project)}"
+                    title="Attach files for the agent to read"
+                    onclick="attachFiles('${escapeHtml(project)}')">📎</button>
             <button class="btn btn-secondary btn-small mic-button"
                     data-testid="compose-mic-${escapeHtml(project)}"
                     title="Dictate" onclick="toggleDictation(this)">🎤</button>
@@ -4310,6 +4340,43 @@ function stopDictation(button: HTMLElement): void {
 // No extraction here either: Claude, Codex and Gemini read PDFs, images and
 // documents themselves, and better than a bundled parser would. Handing over a
 // path is what makes the file usable, not describing it first.
+// Messages pinned inside a project's tile, where its terminal would have gone.
+//
+// Held in state rather than written once into the DOM: the grid is rebuilt on
+// every ten-second poll, so a notice written directly survived less than ten
+// seconds — barely better than the toast it was meant to replace. Re-applied
+// after each render, next to the terminals, which are restored the same way.
+const tileNotices = new Map<string, string>();
+
+function showTileNotice(project: string, message: string): void {
+    tileNotices.set(project, message);
+    paintTileNotices();
+}
+
+function dismissTileNotice(project: string): void {
+    tileNotices.delete(project);
+    document.querySelector(`[data-testid="tile-notice-${CSS.escape(project)}"]`)?.remove();
+}
+
+function paintTileNotices(): void {
+    for (const [project, message] of tileNotices) {
+        const host = document.querySelector(`[data-terminal-host="${CSS.escape(project)}"]`);
+        if (!host) continue;
+        // A terminal that has since opened is the better answer to the same
+        // question, so the notice steps aside rather than sitting above it.
+        if (host.querySelector('.tile-terminal')) { tileNotices.delete(project); continue; }
+        if (host.querySelector('.tile-notice')) continue;
+
+        const notice = document.createElement('div');
+        notice.className = 'tile-notice';
+        notice.setAttribute('data-testid', `tile-notice-${project}`);
+        notice.innerHTML = `<span>${escapeHtml(message)}</span>
+            <button class="btn btn-secondary btn-small"
+                    onclick="dismissTileNotice('${escapeHtml(project)}')">Dismiss</button>`;
+        host.appendChild(notice);
+    }
+}
+
 async function attachFiles(project: string): Promise<void> {
     const paths: string[] = await ipcRenderer.invoke('choose-files');
     if (!paths || paths.length === 0) return;
@@ -4514,10 +4581,16 @@ async function modifyWithAI(projectName: string): Promise<void> {
 
     const { agent } = await ipcRenderer.invoke('get-ai-agent', host);
     if (!agent) {
-        showError(host === 'local'
+        const message = host === 'local'
             ? 'No AI agent is configured. Run `podium ai-set` in a terminal first.'
             : `No AI agent is configured on ${hostLabel}. The agent runs there, `
-              + `so run \`podium ai-set\` on that machine.`);
+              + `so run \`podium ai-set\` on that machine.`;
+        // On the tile as well as in a toast. Someone pressed a button on this
+        // card and expects something to happen on this card — a notification
+        // that fades after a few seconds reads as the button doing nothing,
+        // which is exactly how this was reported.
+        showTileNotice(projectName, message);
+        showError(message);
         return;
     }
 
@@ -5654,6 +5727,7 @@ async function submitEditProject(): Promise<void> {
 (window as any).sendCompose = sendCompose;
 (window as any).toggleDictation = toggleDictation;
 (window as any).attachFiles = attachFiles;
+(window as any).dismissTileNotice = dismissTileNotice;
 (window as any).__resampleTo16k = resampleTo16k;
 (window as any).setDictationEnabled = setDictationEnabled;
 (window as any).setGithubHost = setGithubHost;

@@ -1092,7 +1092,11 @@ ipcMain.handle('github-logout', async (
 // Works for remote projects over sftp, because the file has to be next to the
 // code the agent is editing, and that code is on the host.
 
-const UPLOAD_DIR = 'uploads';
+// Dot-prefixed and Podium-named on purpose. A bare `uploads/` collides with
+// directories projects already have — WordPress has wp-content/uploads, Laravel
+// has storage/app/public/uploads — and a name that might be the project's own is
+// a name someone will eventually commit, deploy or delete by mistake.
+const UPLOAD_DIR = '.podium-uploads';
 
 // Keep the name, drop the path and anything that could climb out of the folder.
 function safeUploadName(original: string): string {
