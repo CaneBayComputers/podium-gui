@@ -536,6 +536,43 @@ async function run() {
     check('audio already at 16k is passed through untouched',
       resample.passthrough === 48000, `${resample.passthrough}`);
 
+    // --- Model listing ----------------------------------------------------
+    //
+    // Deliberately no assertion that a real endpoint returns models: that would
+    // make the suite fail when the network is down, which says nothing about
+    // this code. The reachable cases are verified by hand (OpenRouter answers
+    // with 414 models and no key); what is pinned here is that failure is quiet
+    // and the mechanism is right.
+    const badEndpoints = await app.evaluate(async ({ ipcMain }) => {
+      const out = {};
+      for (const [k, url] of [['garbage', 'not-a-url'],
+                              ['unreachable', 'http://127.0.0.1:1/v1'],
+                              ['empty', '']]) {
+        out[k] = await ipcMain._invokeHandlers.get('list-models')({}, url, '');
+      }
+      return out;
+    });
+    check('an unusable model endpoint returns nothing rather than throwing',
+      Object.values(badEndpoints).every((r) => Array.isArray(r.models) && r.models.length === 0),
+      JSON.stringify(badEndpoints));
+
+    const modelSrc = require('fs').readFileSync(
+      require('path').join(require('./helpers').ROOT, 'src/main.ts'), 'utf8');
+    const modelBlock = modelSrc.slice(modelSrc.indexOf("ipcMain.handle('list-models'"),
+                                      modelSrc.indexOf("// Qwen Code wants Node 22+"));
+    // The previous version used the http module only, so every https endpoint
+    // failed silently and the field fell back to free text with no explanation.
+    check('model listing can reach https endpoints, not just http',
+      /https :/.test(modelSrc.slice(modelSrc.indexOf('function fetchJson'), modelSrc.indexOf('function fetchJson') + 600))
+      || /\? https :/.test(modelSrc.slice(modelSrc.indexOf('function fetchJson'), modelSrc.indexOf('function fetchJson') + 600)));
+    // Two shapes, because Ollama does not serve /v1/models and most others do
+    // not serve /api/tags.
+    check('both the Ollama and OpenAI-compatible shapes are tried',
+      /api\/tags/.test(modelBlock) && /v1\/models/.test(modelBlock));
+    // Anthropic authenticates with x-api-key, so a bearer token just 401s.
+    check('Anthropic gets its own auth header rather than a bearer token',
+      /x-api-key/.test(modelBlock) && /anthropic-version/.test(modelBlock));
+
     // --- Updates ----------------------------------------------------------
     await win.evaluate(() => window.closeModal());
     await win.waitForTimeout(200);

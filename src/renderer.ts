@@ -3042,29 +3042,51 @@ async function onAiAgentChange(): Promise<void> {
     const localWarning = document.getElementById('ai-local-warning');
     if (localWarning) localWarning.style.display = isLocalEndpoint(apiBase) ? 'block' : 'none';
 
-    await refreshOllamaModels(apiBase);
+    await refreshModelOptions(apiBase);
 }
 
-// Offer the models the user has actually pulled. Turns the hardest step of a
-// local setup into a click; falls back silently to free text when Ollama is
-// not reachable.
-async function refreshOllamaModels(apiBase: string): Promise<void> {
+// Offer whatever models the configured endpoint actually reports.
+//
+// This used to ask Ollama only, and only for local endpoints — so anyone using
+// a hosted endpoint got an empty field and had to know a model name from
+// memory. The lookup now speaks the OpenAI-compatible /v1/models shape as well,
+// which OpenRouter, LM Studio, vLLM, Groq and OpenAI all serve. OpenRouter
+// answers it with no key at all.
+//
+// Always falls back to free text: a list that cannot be fetched should not stop
+// someone typing a name they already know.
+async function refreshModelOptions(apiBase: string): Promise<void> {
     const list = document.getElementById('ai-model-options');
     const hint = document.getElementById('ai-model-hint');
     if (!list) return;
 
     list.innerHTML = '';
-    if (hint) hint.textContent = '';
-    if (!isLocalEndpoint(apiBase)) return;
+    if (hint) hint.textContent = 'Looking for available models…';
 
-    const models: string[] = await ipcRenderer.invoke('list-ollama-models', apiBase);
+    // A key is sent only if one is set here; most endpoints that need one will
+    // simply return nothing without it, which is the same as not knowing.
+    const apiKey = (document.getElementById('ai-api-key') as HTMLInputElement)?.value || '';
+    const result = await ipcRenderer.invoke('list-models', apiBase, apiKey);
+    const models: string[] = result?.models || [];
+
     if (models.length === 0) {
-        if (hint) hint.textContent = 'Ollama is not reachable — type the model name.';
+        if (hint) {
+            hint.textContent = isLocalEndpoint(apiBase)
+                ? 'No local server reachable — type the model name.'
+                : 'Could not list models for this endpoint — type the model name.';
+        }
         return;
     }
 
-    list.innerHTML = models.map((m) => `<option value="${escapeHtml(m)}"></option>`).join('');
-    if (hint) hint.textContent = `${models.length} model(s) available locally — start typing to pick one.`;
+    // Capped: OpenRouter alone returns several hundred, and a datalist that long
+    // is slower to scroll than the name is to type. Typing filters it anyway.
+    const shown = models.slice(0, 200);
+    list.innerHTML = shown.map((m) => `<option value="${escapeHtml(m)}"></option>`).join('');
+    if (hint) {
+        hint.textContent = models.length > shown.length
+            ? `${models.length} models available — start typing to filter (showing ${shown.length}).`
+            : `${models.length} model(s) available — start typing to pick one.`;
+    }
 }
 
 let aiSettingsStreaming = false;
