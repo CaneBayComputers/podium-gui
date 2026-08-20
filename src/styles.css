@@ -1945,6 +1945,18 @@ span.status-indicator {
 }
 @keyframes mic-pulse { 50% { opacity: 0.55; } }
 
+/* LOCAL / LAN scope markers beside a project's URLs. Deliberately quiet — they
+   disambiguate two links rather than competing with them. */
+.url-scope {
+    margin-right: 0.35rem;
+    font-size: 0.62rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    vertical-align: middle;
+}
+.url-scope + .url-link { margin-right: 0.7rem; }
+
 .update-banner {
     display: flex;
     align-items: center;

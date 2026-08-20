@@ -8,7 +8,6 @@ interface Project {
   emoji?: string;
   type: 'php' | 'laravel' | 'wordpress';
   folderExists: boolean;
-  hostEntry: boolean;
   dockerRunning: boolean;
   portMapped: boolean;
   localUrl: string;
@@ -457,7 +456,6 @@ function parseProjectStatusJSON(statusOutput: string, hostId: string = 'local',
                     emoji: meta.emoji || '🚀',
                     type: 'php', // Default type
                     folderExists: projectData.folder_exists === true,
-                    hostEntry: projectData.host_entry === true,
                     dockerRunning: projectData.docker_running === true,
                     portMapped: projectData.port_mapped === true,
                     localUrl: projectData.local_url || '',
@@ -474,6 +472,9 @@ function parseProjectStatusJSON(statusOutput: string, hostId: string = 'local',
                 // Which machine this project lives on. Everything downstream —
                 // the tile's actions, its terminal, its key — needs it.
                 (project as any).hostId = hostId;
+                // The container address. Podium no longer writes /etc/hosts, so
+                // this is the route from the machine itself.
+                (project as any).projectIp = projectData.project_ip || '';
                 
                 // Determine overall status.
                 //
@@ -869,9 +870,15 @@ function projectUrls(project: Project): string {
             >${escapeHtml(url)}</a>`;
 
     if (hostId === 'local') {
+        // Labelled, because the two are not interchangeable: LOCAL is the
+        // container address and only works from this machine, LAN is the route
+        // from another. Unlabelled, they look like two equivalent links, and
+        // sending a colleague the LOCAL one is how you send a link only you can
+        // open.
         return [
-            project.localUrl ? link(project.localUrl) : '',
-            project.portMapped && project.lanUrl ? link(project.lanUrl) : ''
+            project.localUrl ? `<span class="url-scope">LOCAL</span>${link(project.localUrl)}` : '',
+            project.portMapped && project.lanUrl
+                ? `<span class="url-scope">LAN</span>${link(project.lanUrl)}` : ''
         ].join('');
     }
 
@@ -887,6 +894,23 @@ function projectUrls(project: Project): string {
 // requests per host per tick for something that rarely changes, and a result
 // from the last tick can be stale by the time anyone clicks it. Asked at the
 // moment it matters, the answer is always current.
+// Where a project can be reached from this machine, straight from the CLI.
+//
+// Never derived from the project name: that only worked while Podium wrote
+// /etc/hosts, and it no longer does.
+async function projectLocalUrl(projectName: string): Promise<string> {
+    try {
+        const result = await ipcRenderer.invoke('execute-podium', 'status',
+            [projectName, '--json-output']);
+        if (result.code !== 0) return '';
+        const found = (JSON.parse(result.stdout).projects || [])
+            .find((p: any) => p.name === projectName);
+        return found?.local_url || '';
+    } catch {
+        return '';
+    }
+}
+
 async function openProjectUrl(url: string, hostId: string): Promise<void> {
     const address = url.replace(/^https?:\/\//, '').replace(/\/$/, '');
 
@@ -4693,11 +4717,17 @@ async function handleInstallApp(): Promise<void> {
             // may still be initializing". Reporting that as success gave a green
             // toast and a URL for a crash-looping app. Ask the app instead —
             // this runs after the CLI gave up, so it can only be more current.
-            const probe = await ipcRenderer.invoke('check-project-url', target);
+            // Ask the CLI where the project actually is rather than assuming
+            // its name resolves. Podium stopped writing /etc/hosts, so
+            // http://<name>/ resolves nowhere — this probe would have failed on
+            // a perfectly working install and reported it as still initialising.
+            const installedUrl = await projectLocalUrl(target);
+            const probe = await ipcRenderer.invoke('check-project-url',
+                installedUrl.replace(/^https?:\/\//, '').replace(/\/$/, ''));
             const serving = probe.code >= 200 && probe.code < 400;
 
             if (serving) {
-                showSuccess(`${app.display} installed at http://${target}/`);
+                showSuccess(`${app.display} installed at ${installedUrl}`);
                 if (title) title.textContent = `${app.display} is installed — http://${target}/`;
             } else {
                 showNotification(
