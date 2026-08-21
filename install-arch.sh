@@ -35,8 +35,8 @@ NC='\033[0m'
 
 INSTALL_DIR="/usr/local/share/zeltro-gui"
 BIN_DIR="/usr/local/bin"
-GUI_REPO_URL="https://github.com/CaneBayComputers/podium-gui.git"
-CLI_INSTALLER_URL="https://raw.githubusercontent.com/CaneBayComputers/podium-cli/master/install-arch.sh"
+GUI_REPO_URL="https://github.com/CaneBayComputers/zeltro-gui.git"
+CLI_INSTALLER_URL="https://raw.githubusercontent.com/CaneBayComputers/zeltro-cli/master/install-arch.sh"
 
 # Electron bundles its own Node to RUN the app, but the build tooling does not.
 # Playwright (the e2e harness) requires 20+, and node-gyp needs a modern
@@ -153,7 +153,7 @@ else
     if ! command -v zeltro >/dev/null 2>&1; then
         echo -e "${RED}Error: the Zeltro CLI still isn't available after installing it.${NC}"
         echo "Install it manually, then re-run this script:"
-        echo "  https://github.com/CaneBayComputers/podium-cli"
+        echo "  https://github.com/CaneBayComputers/zeltro-cli"
         exit 1
     fi
     echo -e "${GREEN}✓ Zeltro CLI installed${NC}"

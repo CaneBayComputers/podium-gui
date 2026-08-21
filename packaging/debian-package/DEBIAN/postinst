@@ -9,7 +9,7 @@ echo "Installing Zeltro GUI..."
 if ! command -v zeltro &> /dev/null; then
     echo "Installing Zeltro CLI dependency..."
     echo "This will install Docker, Node.js, and other required packages..."
-    curl -fsSL https://raw.githubusercontent.com/CaneBayComputers/podium-cli/master/install.sh | bash
+    curl -fsSL https://raw.githubusercontent.com/CaneBayComputers/zeltro-cli/master/install.sh | bash
 else
     echo "Zeltro CLI is already installed"
 fi

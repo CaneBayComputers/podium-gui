@@ -1,7 +1,7 @@
 class ZeltroCli < Formula
   desc "Professional PHP development platform with Docker - One command creates Laravel/WordPress projects"
-  homepage "https://github.com/CaneBayComputers/podium-cli"
-  url "https://github.com/CaneBayComputers/podium-cli/archive/refs/tags/v1.1.0.tar.gz"
+  homepage "https://github.com/CaneBayComputers/zeltro-cli"
+  url "https://github.com/CaneBayComputers/zeltro-cli/archive/refs/tags/v1.1.0.tar.gz"
   sha256 "f8721c2a289e1005e30328dc083f9fd22f1dd7c5f9fbfc5ebcbf8d9c559389b9"
   license "MIT"
   version "1.1.0"
@@ -37,7 +37,7 @@ class ZeltroCli < Formula
     ohai "Zeltro CLI installed successfully!"
     puts ""
     puts "🎭 Get started with: zeltro new"
-    puts "📖 Documentation: https://github.com/CaneBayComputers/podium-cli"
+    puts "📖 Documentation: https://github.com/CaneBayComputers/zeltro-cli"
     puts ""
   end
 

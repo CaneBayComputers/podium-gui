@@ -349,7 +349,7 @@ changed and why it is safe — the commit list is already on the PR page.
   never reaches the server hook, so it will happily report a direct push to
   `master` as succeeding. Check what is actually enforced with:
   ```bash
-  gh api repos/CaneBayComputers/podium-gui/rules/branches/master
+  gh api repos/CaneBayComputers/zeltro-gui/rules/branches/master
   ```
 - **`gh api .../branches/master/protection` returns 404 here.** That endpoint is
   for *classic* protection; this repo uses a **ruleset**. A 404 there does not

@@ -643,7 +643,10 @@ async function run() {
         // mid-rename has the old binary, config dir or install dir, and a GUI
         // that only knows the new names calls a working install absent. Each is
         // marked LEGACY_ or _CANDIDATES, or is a comment explaining one.
-        if (/LEGACY_|_CANDIDATES|^\s*\/\/|^\s*'\/(usr|opt|etc)\//.test(line.trim())) continue;
+        if (/LEGACY_|_CANDIDATES|_PREFIXES|^\s*\/\/|^\s*'\/(usr|opt|etc)\//.test(line.trim())) continue;
+        // Service hostnames match both prefixes on purpose: an upgraded machine
+        // keeps podium-* containers so its projects are not orphaned.
+        if (/\^\(zeltro\|podium\)-/.test(line)) continue;
         // The remote probe checks both config directories for the same reason.
         if (/grep -qs "\^PROJECTS_DIR="/.test(line)) continue;
         if (/replace\(\/\^zeltro\/, 'podium'\)/.test(line)) continue;
@@ -1044,7 +1047,11 @@ async function run() {
       for (const proj of fsD.readdirSync(projectsDir)) {
         try {
           const env = fsD.readFileSync(pathD.join(projectsDir, proj, '.env'), 'utf8');
-          if (/^DB_HOST=zeltro-mariadb/m.test(env)) dbUsersOnDisk++;
+          // Both prefixes: an upgraded machine keeps podium-* container names
+          // so its projects are not orphaned, and every project .env here still
+          // says podium-mariadb. Looking only for the new name made this report
+          // "nothing to find" — the vacuous state this check exists to refuse.
+          if (/^DB_HOST=(zeltro|podium)-mariadb/m.test(env)) dbUsersOnDisk++;
         } catch { /* no .env */ }
       }
     }

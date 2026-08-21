@@ -15,7 +15,7 @@ The `.deb` package is stored in `releases/linux/zeltro-cli_latest.deb` in this r
 ### Step 3: Verify Download URL
 After creating the release, the download URL will be:
 ```
-https://github.com/CaneBayComputers/podium-cli/releases/latest/download/zeltro-cli_latest.deb
+https://github.com/CaneBayComputers/zeltro-cli/releases/latest/download/zeltro-cli_latest.deb
 ```
 
 ## Important Notes

@@ -13,7 +13,7 @@ REM Works standalone - if the .ps1 is not next to it, it is fetched from
 REM GitHub, so this one file is all you need on a fresh machine.
 
 setlocal
-set "RAW=https://raw.githubusercontent.com/CaneBayComputers/podium-gui/dev/scripts/install-windows.ps1"
+set "RAW=https://raw.githubusercontent.com/CaneBayComputers/zeltro-gui/dev/scripts/install-windows.ps1"
 
 REM --- elevate if needed ---------------------------------------------------
 net session >nul 2>&1

@@ -4,7 +4,7 @@
 
 **Describe what you want to build, pick from what it suggests, and watch it go — plus a live view of every project and service on the machine.**
 
-A desktop front end for [Zeltro CLI](https://github.com/CaneBayComputers/podium-cli). The CLI does the work; the GUI makes it visible and clickable. Same projects, same shared services, same URLs — you can switch between the two freely.
+A desktop front end for [Zeltro CLI](https://github.com/CaneBayComputers/zeltro-cli). The CLI does the work; the GUI makes it visible and clickable. Same projects, same shared services, same URLs — you can switch between the two freely.
 
 ![Zeltro GUI in the Zeltro theme](docs/screenshot-zeltro-theme.png)
 
@@ -34,7 +34,7 @@ Projects get PHP 8.3, Python 3 or Node 22 containers with nginx, supervisor and 
 **Linux**
 
 ```bash
-git clone https://github.com/CaneBayComputers/podium-gui.git
+git clone https://github.com/CaneBayComputers/zeltro-gui.git
 cd zeltro-gui
 ./install-ubuntu.sh          # or install-fedora.sh / install-arch.sh
 ```
@@ -42,7 +42,7 @@ cd zeltro-gui
 **macOS**
 
 ```bash
-git clone https://github.com/CaneBayComputers/podium-gui.git
+git clone https://github.com/CaneBayComputers/zeltro-gui.git
 cd zeltro-gui
 ./install-mac.sh
 ```
@@ -52,7 +52,7 @@ cd zeltro-gui
 Open PowerShell **as Administrator** and paste:
 
 ```powershell
-irm https://raw.githubusercontent.com/CaneBayComputers/podium-gui/master/scripts/install-windows.ps1 | iex
+irm https://raw.githubusercontent.com/CaneBayComputers/zeltro-gui/master/scripts/install-windows.ps1 | iex
 ```
 
 Every installer sets up from source, so the checkout you install from is the one that runs. Updating is a `git pull`, and re-running an installer is safe.
@@ -73,12 +73,12 @@ Remote hosts work from Linux and macOS too — a Windows machine simply has no l
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Same as [Zeltro CLI](https://github.com/CaneBayComputers/podium-cli). Free to use, modify and distribute.
+MIT — see [LICENSE](LICENSE). Same as [Zeltro CLI](https://github.com/CaneBayComputers/zeltro-cli). Free to use, modify and distribute.
 
 ## Support
 
 - 📧 canebaycomputers@gmail.com
-- 🐛 [Issues](https://github.com/CaneBayComputers/podium-gui/issues)
+- 🐛 [Issues](https://github.com/CaneBayComputers/zeltro-gui/issues)
 - 📖 [Zeltro documentation](https://podiumcli.com/guide/)
 
 ---

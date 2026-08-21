@@ -75,7 +75,7 @@ case "$1" in
                     echo "💀 Complete removal finished!"
                     echo ""
                     echo "🔄 To reinstall everything:"
-                    echo "   curl -fsSL https://raw.githubusercontent.com/CaneBayComputers/podium-cli/master/install-ubuntu.sh | bash"
+                    echo "   curl -fsSL https://raw.githubusercontent.com/CaneBayComputers/zeltro-cli/master/install-ubuntu.sh | bash"
                     ;;
                 *)
                     echo "✅ Zeltro CLI preserved (only GUI removed)"

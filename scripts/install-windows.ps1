@@ -44,7 +44,7 @@ trap {
     exit 1
 }
 
-$REPO_URL  = 'https://github.com/CaneBayComputers/podium-gui.git'
+$REPO_URL  = 'https://github.com/CaneBayComputers/zeltro-gui.git'
 $BRANCH    = 'dev'
 $REPO_DIR  = 'C:\zeltro-gui'
 $NODE_VER  = '20.19.3'

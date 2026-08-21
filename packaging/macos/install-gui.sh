@@ -14,7 +14,7 @@ fi
 if ! command -v zeltro &> /dev/null; then
     echo "📦 Installing Zeltro CLI dependency..."
     echo "This will install Docker, Node.js, and other required packages via Homebrew..."
-    curl -fsSL https://raw.githubusercontent.com/CaneBayComputers/podium-cli/master/install-mac.sh | bash
+    curl -fsSL https://raw.githubusercontent.com/CaneBayComputers/zeltro-cli/master/install-mac.sh | bash
 else
     echo "✅ Zeltro CLI is already installed"
 fi
@@ -107,5 +107,5 @@ echo "🚀 Next steps:"
 echo "   1. Launch from Applications folder or run: zeltro-gui"
 echo "   2. Or use the CLI command: zeltro gui"
 echo ""
-echo "📖 Documentation: https://github.com/CaneBayComputers/podium-cli"
+echo "📖 Documentation: https://github.com/CaneBayComputers/zeltro-cli"
 echo ""

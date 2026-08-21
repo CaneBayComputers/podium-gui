@@ -193,6 +193,11 @@ function createWindow(): void {
         {
           label: 'Donate',
           click: () => {
+            // Still podiumcli.com on purpose. The EC2 host holds Let's Encrypt
+            // certs for donate. and packages. at these exact hostnames; the
+            // zeltro.build equivalents resolve but serve nothing, so rewriting
+            // them would silently kill the donate button. Change when the certs
+            // and server_name aliases exist, not before.
             shell.openExternal('https://donate.podiumcli.com');
           }
         }
@@ -1850,6 +1855,25 @@ function mentionedOutsideAComment(body: string, host: string): boolean {
 // The service hostnames a project's compose file would name if it used them.
 // Shared by the local scan and the remote grep so the two cannot disagree about
 // what "in use" means.
+// Both prefixes, deliberately.
+//
+// The rename moved these to zeltro-*, and that silently broke the guard: the
+// containers on an upgraded machine are still podium-* (the CLI pins
+// COMPOSE_PROJECT_NAME so the shared network keeps its name and existing
+// projects are not orphaned), and every project .env still says
+// DB_HOST=podium-mariadb. Twelve projects here reference the old hostname, so
+// the guard matched none of them and would have let someone disable a database
+// all twelve depend on — which is exactly the bug this guard exists to prevent,
+// reintroduced by a find-and-replace.
+const SERVICE_HOSTNAME_PREFIXES = ['zeltro', 'podium'];
+
+function serviceHostnames(service: string): string[] {
+  const suffix = SERVICE_HOSTNAMES[service];
+  if (!suffix) return [];
+  const bare = suffix.replace(/^(zeltro|podium)-/, '');
+  return SERVICE_HOSTNAME_PREFIXES.map((prefix) => `${prefix}-${bare}`);
+}
+
 const SERVICE_HOSTNAMES: Record<string, string> = {
   mysql: 'zeltro-mariadb',
   postgres: 'zeltro-postgres',
@@ -1875,8 +1899,9 @@ async function servicesInUseRemote(hostId: string): Promise<Record<string, strin
     // not count. Found for real: a compose file whose comment reads "still
     // resolved zeltro-mariadb ... by name" was reported as a project depending
     // on MariaDB, which would have blocked disabling a service nothing used.
+    const alternation = serviceHostnames(service).join('|');
     const r = await exec.execRaw(
-      `grep -rlE '^[^#]*${hostname}' '${dir}'/*/.env '${dir}'/*/docker-compose.y*ml 2>/dev/null | head -50`);
+      `grep -rlE '^[^#]*(${alternation})' '${dir}'/*/.env '${dir}'/*/docker-compose.y*ml 2>/dev/null | head -50`);
     if (r.code !== 0 || !r.stdout.trim()) continue;
     const names: string[] = r.stdout.trim().split('\n')
       .map((line: string) => line.split('/').slice(-2)[0] || '')
@@ -1927,8 +1952,10 @@ ipcMain.handle('get-services-in-use', async (
       }
       if (!body) continue;
 
-      for (const [service, host] of Object.entries(hosts)) {
-        if (mentionedOutsideAComment(body, host)) (inUse[service] ||= []).push(project);
+      for (const service of Object.keys(hosts)) {
+        if (serviceHostnames(service).some((h) => mentionedOutsideAComment(body, h))) {
+          (inUse[service] ||= []).push(project);
+        }
       }
     }
   } catch (error) {

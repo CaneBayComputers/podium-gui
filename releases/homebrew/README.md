@@ -6,7 +6,7 @@ This is a **simple Homebrew formula** that users can install directly without ne
 
 ```bash
 # Download and install the formula
-curl -O https://raw.githubusercontent.com/CaneBayComputers/podium-cli/main/releases/homebrew/zeltro-cli.rb
+curl -O https://raw.githubusercontent.com/CaneBayComputers/zeltro-cli/main/releases/homebrew/zeltro-cli.rb
 brew install --formula ./zeltro-cli.rb
 ```
 
@@ -30,7 +30,7 @@ When releasing a new version:
 2. **Update the `version`** number
 3. **Calculate SHA256** of the new tarball:
    ```bash
-   curl -sL https://github.com/CaneBayComputers/podium-cli/archive/refs/tags/v1.0.0.tar.gz | shasum -a 256
+   curl -sL https://github.com/CaneBayComputers/zeltro-cli/archive/refs/tags/v1.0.0.tar.gz | shasum -a 256
    ```
 4. **Update the `sha256`** in the formula
 5. **Test locally**:

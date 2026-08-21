@@ -7,7 +7,7 @@
 # fails on its first action.
 set -e
 
-CLI_INSTALLERS="https://raw.githubusercontent.com/CaneBayComputers/podium-cli/master"
+CLI_INSTALLERS="https://raw.githubusercontent.com/CaneBayComputers/zeltro-cli/master"
 
 # Do NOT rely on `command -v` alone. Debian policy runs maintainer scripts with
 # a PATH that excludes /usr/local/bin — which is exactly where the CLI installs —
@@ -29,7 +29,7 @@ elif command -v dnf     >/dev/null 2>&1; then SCRIPT=install-fedora.sh
 elif command -v pacman  >/dev/null 2>&1; then SCRIPT=install-arch.sh
 else
     echo "Could not identify the package manager. Install Zeltro CLI manually:"
-    echo "  https://github.com/CaneBayComputers/podium-cli"
+    echo "  https://github.com/CaneBayComputers/zeltro-cli"
     exit 0   # Do not fail the package install over this; the GUI will say so too.
 fi
 
