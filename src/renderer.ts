@@ -2311,7 +2311,7 @@ const THEMES: { id: ThemeName; label: string; hint: string }[] = [
     { id: 'dark',   label: 'Dark',   hint: 'Neutral slate, no neon' },
     { id: 'light',  label: 'Light',  hint: 'For bright rooms' },
     { id: 'matrix', label: 'Matrix', hint: 'Green on black' },
-    { id: 'zeltro', label: 'Zeltro', hint: 'Matches podiumcli.com' }
+    { id: 'zeltro', label: 'Zeltro', hint: 'Matches the Zeltro site' }
 ];
 
 type XtermTheme = Record<string, string>;

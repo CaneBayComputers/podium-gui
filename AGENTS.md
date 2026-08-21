@@ -20,6 +20,8 @@ In this order:
    thing that has actually moved.
 
 Full published docs: <https://podiumcli.com/guide/>
+(Flips to zeltro.build once that site is serving — unlike the donate/packages
+subdomains, this one has no certificate blocker and should move with the rest.)
 
 ### The zeltro-cli directory is READ-ONLY to you
 

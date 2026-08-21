@@ -79,7 +79,7 @@ MIT — see [LICENSE](LICENSE). Same as [Zeltro CLI](https://github.com/CaneBayC
 
 - 📧 canebaycomputers@gmail.com
 - 🐛 [Issues](https://github.com/CaneBayComputers/zeltro-gui/issues)
-- 📖 [Zeltro documentation](https://podiumcli.com/guide/)
+- 📖 [Zeltro documentation](https://podiumcli.com/guide/) <!-- flips to zeltro.build once the site is serving -->
 
 ---
 
