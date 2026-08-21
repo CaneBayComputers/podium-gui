@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Launch the Podium GUI from this source checkout.
+# Launch the Zeltro GUI from this source checkout.
 #
 # The canonical launcher, kept in the repo so every machine runs the same one.
-# `~/scripts/podium-gui-dev.sh` on the workstation is a symlink to this file,
-# and podium-sync.sh symlinks /usr/local/bin/podium-gui to it on the other
+# `~/scripts/zeltro-gui-dev.sh` on the workstation is a symlink to this file,
+# and zeltro-sync.sh symlinks /usr/local/bin/zeltro-gui to it on the other
 # machines — a second copy anywhere would drift.
 #
 # Finds its own checkout rather than hardcoding a path, so it works wherever
@@ -21,21 +21,21 @@ _resolve() {
     fi
 }
 
-REPO="${PODIUM_GUI_REPO:-$(cd "$(dirname "$(_resolve "${BASH_SOURCE[0]}")")/.." && pwd)}"
-LOG=/tmp/podium-gui-dev.log
+REPO="${ZELTRO_GUI_REPO:-$(cd "$(dirname "$(_resolve "${BASH_SOURCE[0]}")")/.." && pwd)}"
+LOG=/tmp/zeltro-gui-dev.log
 IS_MAC=0
 [ "$(uname -s)" = Darwin ] && IS_MAC=1
 
 # Launched from the menu there is no terminal to print to, so failures have to
 # reach the desktop or they look like "clicking the icon does nothing".
 fail() {
-    echo "podium-gui: $1" >&2
+    echo "zeltro-gui: $1" >&2
     if [ "$IS_MAC" = 1 ]; then
         # macOS has no notify-send; osascript is always present.
-        osascript -e "display notification \"$1\" with title \"Podium GUI\"" 2>/dev/null
+        osascript -e "display notification \"$1\" with title \"Zeltro GUI\"" 2>/dev/null
     else
         command -v notify-send >/dev/null 2>&1 &&
-            notify-send -u critical -i dialog-error "Podium GUI" "$1"
+            notify-send -u critical -i dialog-error "Zeltro GUI" "$1"
     fi
     exit 1
 }
@@ -69,18 +69,18 @@ if pgrep -f "electron .*dist/main\.js" >/dev/null 2>&1; then
     if [ "$IS_MAC" = 1 ]; then
         osascript -e 'tell application "Electron" to activate' 2>/dev/null
     else
-        command -v wmctrl >/dev/null 2>&1 && wmctrl -a "Podium - PHP Development Platform" 2>/dev/null
+        command -v wmctrl >/dev/null 2>&1 && wmctrl -a "Zeltro - PHP Development Platform" 2>/dev/null
     fi
-    echo "podium-gui: already running (raised existing window)"
+    echo "zeltro-gui: already running (raised existing window)"
     exit 0
 fi
 
-echo "podium-gui: building TypeScript..."
+echo "zeltro-gui: building TypeScript..."
 if ! npm run build-ts > "$LOG" 2>&1; then
     fail "TypeScript build failed — see $LOG"
 fi
 
-echo "podium-gui: starting..."
+echo "zeltro-gui: starting..."
 # setsid is a util-linux tool and does not exist on macOS; nohup plus a
 # background job with disown achieves the same detachment there.
 if [ "$IS_MAC" = 1 ]; then
@@ -94,6 +94,6 @@ disown 2>/dev/null || true
 # died immediately (a missing dependency, a broken display).
 for _ in $(seq 1 20); do
     sleep 1
-    pgrep -f "electron .*dist/main\.js" >/dev/null 2>&1 && { echo "podium-gui: running (log: $LOG)"; exit 0; }
+    pgrep -f "electron .*dist/main\.js" >/dev/null 2>&1 && { echo "zeltro-gui: running (log: $LOG)"; exit 0; }
 done
 fail "Did not start within 20s — see $LOG"

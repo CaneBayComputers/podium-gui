@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Podium - PHP Development Platform</title>
+    <title>Zeltro - PHP Development Platform</title>
     <link rel="stylesheet" href="styles.css">
     <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css">
     <script>
@@ -12,8 +12,8 @@
         // default theme and then snapping to the chosen one.
         (function () {
             try {
-                var t = localStorage.getItem('podium-gui-theme');
-                if (t && ['retro', 'dark', 'light', 'matrix', 'podium'].indexOf(t) !== -1) {
+                var t = localStorage.getItem('zeltro-gui-theme');
+                if (t && ['retro', 'dark', 'light', 'matrix', 'zeltro'].indexOf(t) !== -1) {
                     document.documentElement.setAttribute('data-theme', t);
                 }
             } catch (e) { /* storage unavailable; default theme is fine */ }
@@ -26,7 +26,7 @@
         <header class="header">
             <div class="header-content">
                 <div class="logo">
-                    <h1>Podium CLI</h1>
+                    <h1>Zeltro CLI</h1>
                     <span id="debug-indicator" class="debug-indicator" style="display: none;">DEBUG MODE - F5 to refresh</span>
                 </div>
                 <!-- Actions only. Help/Patreon/Donate live in the footer so the
@@ -41,7 +41,7 @@
                          reopened after the window is hidden. -->
                     
                     <button class="btn btn-secondary" onclick="showSettings('appearance')" data-testid="settings-open" title="Theme and AI agent settings">⚙️ Settings</button>
-                    <button class="btn btn-secondary" onclick="showDonateModal()" data-testid="donate" title="Support Podium">💳 Donate</button>
+                    <button class="btn btn-secondary" onclick="showDonateModal()" data-testid="donate" title="Support Zeltro">💳 Donate</button>
                 </div>
             </div>
         </header>
@@ -96,7 +96,7 @@
             <!-- Secondary links, moved out of the header -->
             <footer class="app-footer">
                 <div class="footer-links">
-                    <button class="btn btn-secondary btn-small" onclick="openUrl('https://github.com/CaneBayComputers/podium-gui')" data-testid="github-gui" title="Podium GUI on GitHub"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="currentColor" style="vertical-align:-2px"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg> GitHub</button>
+                    <button class="btn btn-secondary btn-small" onclick="openUrl('https://github.com/CaneBayComputers/podium-gui')" data-testid="github-gui" title="Zeltro GUI on GitHub"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="currentColor" style="vertical-align:-2px"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg> GitHub</button>
                     <button class="btn btn-secondary btn-small" onclick="showUpdates()"
                             data-testid="updates-open" title="Check for updates"><svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" fill="currentColor" style="vertical-align:-2px"><path d="M8 1.5 3.5 6h2.6v4.2h3.8V6h2.6L8 1.5Z"/><path d="M3 12.5h10v1.6H3v-1.6Z"/></svg> Updates<span
                             id="update-badge" class="update-badge" data-testid="update-badge"
@@ -370,7 +370,7 @@
             answers — which a non-interactive run cannot provide.
         -->
         <!--
-            AI agent settings — `podium ai-set`.
+            AI agent settings — `zeltro ai-set`.
             The CLI installs the chosen agent if it is missing
             (ensure_ai_agent_installed: npm -g for codex/gemini, curl installers
             for claude/aider), so saving here can take a while and streams.
@@ -378,11 +378,11 @@
         <div id="donate-modal" class="modal">
             <div class="modal-content" style="max-width: 460px;">
                 <div class="modal-header">
-                    <h3>💳 Support Podium</h3>
+                    <h3>💳 Support Zeltro</h3>
                     <button class="modal-close" onclick="closeModal()">&times;</button>
                 </div>
                 <div class="modal-body">
-                    <p class="stage-intro">Podium is MIT licensed and free. If it saves you time, any of these help.</p>
+                    <p class="stage-intro">Zeltro is MIT licensed and free. If it saves you time, any of these help.</p>
                     <div class="donate-links">
                         <button class="btn btn-secondary" data-testid="donate-patreon"
                                 onclick="openUrl('https://patreon.com/canebaycomputers')">❤️ Patreon</button>
@@ -442,7 +442,7 @@
                         <label for="layout-terminal-host">Where the CLI opens</label>
                         <select id="layout-terminal-host" data-testid="layout-terminal-host"
                                 onchange="setTerminalHost(this.value)">
-                            <option value="tile">Inside Podium — a terminal in the project's tile</option>
+                            <option value="tile">Inside Zeltro — a terminal in the project's tile</option>
                             <option value="system">Your system terminal</option>
                         </select>
                         <span class="form-help" id="layout-terminal-host-help"></span>
@@ -454,7 +454,7 @@
                         <label class="checkbox-row">
                             <input type="checkbox" id="auto-update-check" data-testid="auto-update-check"
                                    onchange="setAutoUpdateCheck(this.checked)" checked>
-                            Check for updates when Podium starts
+                            Check for updates when Zeltro starts
                         </label>
                     </div>
 
@@ -525,7 +525,7 @@
 
                 <div class="modal-body" data-settings-panel="ai" style="display: none;">
                     <p class="stage-intro">
-                        Used by Create with AI and Modify with AI. Podium installs the agent for you
+                        Used by Create with AI and Modify with AI. Zeltro installs the agent for you
                         if it is not already on this machine.
                     </p>
 
@@ -636,15 +636,15 @@
 
         <!--
             Create with AI — the flagship path. The user describes what they
-            want; Podium works out the stack. This drives `podium create`'s
+            want; Zeltro works out the stack. This drives `zeltro create`'s
             three phases natively rather than shelling out to it in one call:
             the CLI presents interactive terminal menus between classify and
             create, which a GUI cannot answer, and its non-interactive mode
             silently takes the top recommendation — discarding the choice that
             is the entire point.
 
-            Phase 1 is `podium create --classify-only --json-output`.
-            Phase 2 is `podium install` / `podium new`, same as the other flows.
+            Phase 1 is `zeltro create --classify-only --json-output`.
+            Phase 2 is `zeltro install` / `zeltro new`, same as the other flows.
             Phase 3 hands off to the AI agent in an embedded terminal.
         -->
         <div id="create-ai-modal" class="modal create-modal">
@@ -663,11 +663,11 @@
                             <button class="btn btn-secondary btn-small mic-button" type="button"
                                     data-testid="create-idea-mic" title="Dictate"
                                     style="display: none;" onclick="toggleDictation(this)">🎤 Dictate</button>
-                            <span class="form-help">Plain English. Podium works out the stack and builds it.</span>
+                            <span class="form-help">Plain English. Zeltro works out the stack and builds it.</span>
                             <div class="field-error" id="create-idea-error"></div>
                         </div>
                         <div id="create-no-agent" class="agent-warning" style="display: none;">
-                            No AI agent is configured. Run <code>podium ai-set</code> in a terminal first.
+                            No AI agent is configured. Run <code>zeltro ai-set</code> in a terminal first.
                         </div>
                     </div>
 
@@ -720,8 +720,8 @@
         </div>
 
         <!--
-            Install an app (`podium install <app> [name]`) is deliberately a
-            SEPARATE flow from New Project (`podium new <framework> <name>`).
+            Install an app (`zeltro install <app> [name]`) is deliberately a
+            SEPARATE flow from New Project (`zeltro new <framework> <name>`).
             New Project scaffolds something you write; Install deploys finished
             software someone else wrote, with its database fixed by the
             installer — so this modal never asks the user to choose one.
@@ -791,7 +791,7 @@
                                 <option value="fork">Fork &mdash; fork to your GitHub account and work from the fork</option>
                                 <option value="new-repo">New repo &mdash; create a fresh GitHub repo for this project</option>
                             </select>
-                            <span class="form-help">Required by <code>podium clone</code>. Fork and new-repo need the GitHub CLI to be authenticated.</span>
+                            <span class="form-help">Required by <code>zeltro clone</code>. Fork and new-repo need the GitHub CLI to be authenticated.</span>
                             <div class="field-error" id="clone-mode-error"></div>
                         </div>
                         <div class="form-group">
@@ -829,7 +829,7 @@
         <div id="initial-loading" class="initial-loading">
             <div class="initial-loading-content">
                 <div class="loading-spinner large"></div>
-                <h2>Loading Podium CLI</h2>
+                <h2>Loading Zeltro CLI</h2>
                 <p>Initializing your development environment...</p>
             </div>
         </div>

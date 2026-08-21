@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 //
-// End-to-end checks for the Podium GUI.
+// End-to-end checks for the Zeltro GUI.
 //
 // Deliberately READ-ONLY: nothing here creates, installs, clones or removes a
 // project, and nothing stops the shared services. Every assertion is either a
 // pure UI check or an inspection of state the app already read. A real
-// `podium install` run is tested separately on a throwaway box, not here.
+// `zeltro install` run is tested separately on a throwaway box, not here.
 //
 // Run with:  npm run test:e2e
 
@@ -71,7 +71,7 @@ function check(name, condition, detail = '') {
 }
 
 async function run() {
-  console.log('\nPodium GUI — end-to-end\n');
+  console.log('\nZeltro GUI — end-to-end\n');
 
   const { app, win } = await launchApp();
 
@@ -83,7 +83,7 @@ async function run() {
       'main window loads index.html, not the installer',
       page === 'index',
       page === 'installer'
-        ? 'loaded installer.html — Podium reports not-installed/not-configured'
+        ? 'loaded installer.html — Zeltro reports not-installed/not-configured'
         : ''
     );
 
@@ -92,11 +92,11 @@ async function run() {
     // electron module is injected and ipcMain exposes its invoke handlers — so
     // the real handler runs, not a reimplementation of it.
     const statusCall = await app.evaluate(async ({ ipcMain }) => {
-      const handler = ipcMain._invokeHandlers.get('execute-podium');
-      if (!handler) return { error: 'execute-podium not registered' };
+      const handler = ipcMain._invokeHandlers.get('execute-zeltro');
+      if (!handler) return { error: 'execute-zeltro not registered' };
       return handler({}, 'status', ['--all', '--json-output']);
     });
-    check('execute-podium IPC runs the CLI successfully', statusCall.code === 0,
+    check('execute-zeltro IPC runs the CLI successfully', statusCall.code === 0,
       statusCall.error || `exit ${statusCall.code}: ${(statusCall.stderr || '').slice(0, 120)}`);
 
     let statusJson = null;
@@ -105,14 +105,14 @@ async function run() {
     } catch (error) {
       // leave null — asserted below
     }
-    check('podium status returns parseable JSON with shared_services',
+    check('zeltro status returns parseable JSON with shared_services',
       statusJson !== null && typeof statusJson.shared_services === 'object',
       statusJson === null ? 'stdout did not parse as JSON' : '');
 
     // --- Dashboard ------------------------------------------------------
     console.log('\ndashboard');
 
-    // Wait out the "Loading Podium" splash before asserting or screenshotting,
+    // Wait out the "Loading Zeltro" splash before asserting or screenshotting,
     // otherwise every check races the initial render.
     //
     // Do NOT test offsetParent here: .initial-loading is position:fixed, and
@@ -178,12 +178,12 @@ async function run() {
     check('header no longer carries the secondary links',
       await win.locator(`.header-actions ${t('help-modal-open')}`).count() === 0);
     check('title names the CLI',
-      (await win.textContent('.logo h1'))?.trim() === 'Podium CLI',
+      (await win.textContent('.logo h1'))?.trim() === 'Zeltro CLI',
       await win.textContent('.logo h1'));
     check('projects grid rendered', await win.locator(t('projects-grid')).count() === 1);
     check('services grid rendered', await win.locator(t('services-grid')).count() === 1);
 
-    // `podium status --all` drives this. Without --all it only returns RUNNING
+    // `zeltro status --all` drives this. Without --all it only returns RUNNING
     // projects, so a stopped-everything machine rendered an empty dashboard —
     // that regression is exactly what this guards.
     const realCards = await win.locator('#projects-grid .project-card:not(.placeholder)').count();
@@ -206,7 +206,7 @@ async function run() {
         let total = 0;
         const detail = {};
         for (const h of hosts) {
-          const r = await ipcMain._invokeHandlers.get('execute-podium-on')({}, h, 'status',
+          const r = await ipcMain._invokeHandlers.get('execute-zeltro-on')({}, h, 'status',
             ['--all', '--json-output']);
           if (r.code !== 0) { detail[h] = 'unreachable'; continue; }
           try {
@@ -225,7 +225,7 @@ async function run() {
     }
 
     // Display metadata is GUI-owned (read from each project's compose file),
-    // since podium status does not return name/description/emoji.
+    // since zeltro status does not return name/description/emoji.
     //
     // This asserts the metadata actually REACHES the DOM. An earlier version
     // only counted .project-icon elements, which every card has regardless —
@@ -235,7 +235,7 @@ async function run() {
     // looking for their metadata there would assert against a view that is
     // correctly hiding them.
     const metaCheck = await app.evaluate(async ({ ipcMain }) => {
-      const status = await ipcMain._invokeHandlers.get('execute-podium')(
+      const status = await ipcMain._invokeHandlers.get('execute-zeltro')(
         {}, 'status', ['--all', '--json-output']
       );
       for (const p of JSON.parse(status.stdout || '{}').projects || []) {
@@ -259,7 +259,7 @@ async function run() {
 
     // Any project the CLI reports as docker_running must render as running —
     // with a Stop button and its URL. An earlier version also required
-    // port_mapped, which marked healthy `podium install` projects (nginx front,
+    // port_mapped, which marked healthy `zeltro install` projects (nginx front,
     // no published host port — reachable only by hostname) as stopped.
     const running = (statusJson?.projects || []).filter((p) => p.docker_running);
     if (running.length > 0) {
@@ -435,7 +435,7 @@ async function run() {
 
     // --- GitHub -----------------------------------------------------------
     //
-    // `podium new --github` creates the repository from the machine running the
+    // `zeltro new --github` creates the repository from the machine running the
     // project, so gh has to be authenticated THERE, not here.
     const ghLocal = await app.evaluate(async ({ ipcMain }) =>
       ipcMain._invokeHandlers.get('get-github-status')({}, 'local'));
@@ -558,7 +558,7 @@ async function run() {
 
     // --- The post-/etc/hosts JSON shape -----------------------------------
     //
-    // Podium stopped writing /etc/hosts, so three things changed: host_entry is
+    // Zeltro stopped writing /etc/hosts, so three things changed: host_entry is
     // gone, project_ip is new, and local_url is an address rather than a
     // hostname. The CLI flagged the first two as the ones that break silently,
     // and they do — nothing throws, the UI just quietly means something else.
@@ -595,7 +595,7 @@ async function run() {
     await win.waitForTimeout(2500);
 
     // The install check probed http://<project-name>/, which only ever worked
-    // because /etc/hosts existed. On current Podium that name resolves nowhere,
+    // because /etc/hosts existed. On current Zeltro that name resolves nowhere,
     // so a working install would have been reported as still initialising.
     const rendererShape = require('fs').readFileSync(
       require('path').join(require('./helpers').ROOT, 'src/renderer.ts'), 'utf8');
@@ -606,6 +606,58 @@ async function run() {
     // LOCAL and LAN are different routes; unlabelled they look interchangeable.
     check('local and LAN URLs are labelled as different routes',
       /url-scope">LOCAL/.test(rendererShape) && /url-scope">LAN/.test(rendererShape));
+
+    // --- Branding -----------------------------------------------------------
+    //
+    // The rename from Podium to Zeltro touched a thousand strings. These are the
+    // ones where being wrong is silent rather than obvious.
+    const brandFs = require('fs'), brandPath = require('path');
+    const ROOT_B = require('./helpers').ROOT;
+    const readSrc = (f) => brandFs.readFileSync(brandPath.join(ROOT_B, f), 'utf8');
+
+    const branding = readSrc('src/branding.ts');
+    const binName = (branding.match(/CLI_BIN = '([^']+)'/) || [])[1];
+    check('the branding module names the CLI binary', Boolean(binName), String(binName));
+
+    // renderer and installer cannot import branding.ts — they are script-tag
+    // loaded and share one global scope — so they keep a literal. Nothing at
+    // compile time keeps the three in step, which is exactly why this exists.
+    // Only the OLD name matters here. These files also invoke git, sudo and
+    // echo, which are not the CLI and never were — an earlier version of this
+    // check flagged those and was measuring the wrong thing.
+    for (const f of ['src/renderer.ts', 'src/installer.ts']) {
+      const stale = [...readSrc(f).matchAll(/invoke\('execute-command(?:-stream)?', '(podium)'/g)];
+      check(`${f} does not invoke the CLI by its old name`,
+        stale.length === 0, `${stale.length} call(s) still spawn podium`);
+    }
+
+    // The old name must not survive anywhere except the places it deliberately
+    // does: the projects directory Shawn kept, and URLs to repos and a domain
+    // that have not been renamed. Anything else is a miss.
+    const strays = [];
+    for (const f of ['src/main.ts', 'src/renderer.ts', 'src/installer.ts', 'src/index.html']) {
+      for (const line of readSrc(f).split('\n')) {
+        if (!/podium/i.test(line)) continue;
+        if (/podium-projects|CaneBayComputers\/podium-|podiumcli\.com/.test(line)) continue;
+        // The transitional fallbacks name the old paths deliberately: a machine
+        // mid-rename has the old binary, config dir or install dir, and a GUI
+        // that only knows the new names calls a working install absent. Each is
+        // marked LEGACY_ or _CANDIDATES, or is a comment explaining one.
+        if (/LEGACY_|_CANDIDATES|^\s*\/\/|^\s*'\/(usr|opt|etc)\//.test(line.trim())) continue;
+        // The remote probe checks both config directories for the same reason.
+        if (/grep -qs "\^PROJECTS_DIR="/.test(line)) continue;
+        if (/replace\(\/\^zeltro\/, 'podium'\)/.test(line)) continue;
+        strays.push(`${f}: ${line.trim().slice(0, 70)}`);
+      }
+    }
+    check('no stray references to the old product name', strays.length === 0,
+      strays.slice(0, 4).join(' | '));
+
+    // Renaming the storage keys outright would have reset every existing user's
+    // theme, layout, filters and microphone choice, with nothing explaining why.
+    check('settings stored under the old name are carried forward',
+      /function storedSetting/.test(readSrc('src/renderer.ts'))
+      && !/localStorage\.getItem\((LAYOUT|FILTER|THEME)_STORAGE_KEY\)/.test(readSrc('src/renderer.ts')));
 
     // --- Model listing ----------------------------------------------------
     //
@@ -654,7 +706,7 @@ async function run() {
     check('the About window is removed, not merely hidden',
       !/about-modal|about-open/.test(htmlNoAbout));
 
-    // Both Podium repos are source checkouts, so an update is a git pull. The
+    // Both Zeltro repos are source checkouts, so an update is a git pull. The
     // check must be read-only — it fetches remote refs and never touches a
     // working tree, because running it should not be able to change anything.
     const updates = await app.evaluate(async ({ ipcMain }) =>
@@ -978,7 +1030,7 @@ async function run() {
     // The guard must not pass vacuously. It did: in-use was computed by scanning
     // docker-compose.yaml for service hostnames, but a project names its
     // database in .env — 12 of the 15 projects on this machine declare
-    // DB_HOST=podium-mariadb there and every one was missed. With in-use always
+    // DB_HOST=zeltro-mariadb there and every one was missed. With in-use always
     // empty, `shouldLock` was empty and `.every()` on an empty array is true.
     //
     // So establish independently, from disk, what the answer should be.
@@ -992,7 +1044,7 @@ async function run() {
       for (const proj of fsD.readdirSync(projectsDir)) {
         try {
           const env = fsD.readFileSync(pathD.join(projectsDir, proj, '.env'), 'utf8');
-          if (/^DB_HOST=podium-mariadb/m.test(env)) dbUsersOnDisk++;
+          if (/^DB_HOST=zeltro-mariadb/m.test(env)) dbUsersOnDisk++;
         } catch { /* no .env */ }
       }
     }
@@ -1012,7 +1064,7 @@ async function run() {
       `in use+enabled=${shouldLock.join(',')} locked=${guard.locked.join(',')}`);
 
     // A hostname inside a comment must not count. Found on a real remote box: a
-    // compose comment reading "still resolved podium-mariadb ... by name" made
+    // compose comment reading "still resolved zeltro-mariadb ... by name" made
     // the guard claim two projects depended on MariaDB, which would have blocked
     // disabling a service nothing used.
     const guardSrc = require('fs').readFileSync(
@@ -1051,7 +1103,7 @@ async function run() {
     await win.waitForTimeout(300);
 
     // Web UI links belong on the service's own card, not in a detached row of
-    // header buttons. The card buttons compared `podium-phpmyadmin` against
+    // header buttons. The card buttons compared `zeltro-phpmyadmin` against
     // `phpmyadmin` and so had never rendered at all.
     check('the header no longer carries a separate row of web UI links',
       await win.locator('#service-links').count() === 0);
@@ -1153,12 +1205,12 @@ async function run() {
       ]) {
         let i = 0;
         window.confirm = () => answers[i++];
-        // Removal routes through execute-podium-on now, so it lands on the
+        // Removal routes through execute-zeltro-on now, so it lands on the
         // project's own machine rather than always locally. The flags being
         // checked are unchanged; only which channel carries them moved.
-        //   execute-podium-on(hostId, subcommand, args)
+        //   execute-zeltro-on(hostId, subcommand, args)
         require('electron').ipcRenderer.invoke = async (channel, a, b, c) => {
-          if (channel === 'execute-podium-on' && b === 'remove') {
+          if (channel === 'execute-zeltro-on' && b === 'remove') {
             runs[label] = { host: a, args: (c || []).slice() };
             return { code: 1, stdout: '', stderr: 'intercepted by test' };
           }
@@ -1282,7 +1334,7 @@ async function run() {
     // --- Create with AI (phase 1 choices, rendered natively) ------------
     //
     // Driven from a FIXTURE, not a live classification: a real
-    // `podium create --classify-only` is an AI round-trip — slow, costs tokens,
+    // `zeltro create --classify-only` is an AI round-trip — slow, costs tokens,
     // and returns different candidates run to run. The contract itself was
     // verified against the real CLI by hand; what matters here is that the GUI
     // renders that contract correctly and never offers a database for an app.
@@ -1299,10 +1351,10 @@ async function run() {
       ((await win.textContent('#create-idea-error')) || '').length > 0,
       await win.textContent('#create-idea-error'));
 
-    // A leading dash is parsed as a command-line flag. `podium create` honours
+    // A leading dash is parsed as a command-line flag. `zeltro create` honours
     // `--`, so classification alone could be made to work — but the same text is
-    // later handed to `podium ai`, where the AGENT's own CLI parses the dash and
-    // `--` only stops Podium rejecting it. Half-working is worse than declining.
+    // later handed to `zeltro ai`, where the AGENT's own CLI parses the dash and
+    // `--` only stops Zeltro rejecting it. Half-working is worse than declining.
     await win.fill(t('create-idea'), '-a tracker for guitar pedals');
     await win.click(t('create-classify'));
     await win.waitForTimeout(500);
@@ -1489,12 +1541,12 @@ async function run() {
     check('the framework catalogue is cached per host, not globally',
       /frameworkCatalogHost === hostId/.test(catalogSrc));
 
-    // Windows has no local Podium, so 'local' must not be offered there. Cannot
+    // Windows has no local Zeltro, so 'local' must not be offered there. Cannot
     // be run here, so assert the decision.
     const hostStepSrc = catalogSrc.slice(catalogSrc.indexOf('async function showProjectHostStep'),
                                          catalogSrc.indexOf('function chooseProjectHost'));
-    check('local is offered only when this machine can run Podium',
-      /if \(caps\.localPodium\)/.test(hostStepSrc));
+    check('local is offered only when this machine can run Zeltro',
+      /if \(caps\.localZeltro\)/.test(hostStepSrc));
     check('a machine with no hosts at all points at the settings that fix it',
       /no-hosts-settings/.test(hostStepSrc) && /remoteOnly/.test(hostStepSrc));
 
@@ -1631,13 +1683,13 @@ async function run() {
     // --- Main-process IPC, exercised directly ---------------------------
     console.log('\nipc');
 
-    // Every packaged install failed with "spawn podium ENOENT" from the panel
+    // Every packaged install failed with "spawn zeltro ENOENT" from the panel
     // launcher while working from a terminal, because a .desktop launch has no
     // /usr/local/bin on PATH. Testing it from this shell proves nothing — the
     // PATH has to actually be taken away.
-    const podiumCmd = await app.evaluate(async ({ ipcMain }) => {
-      const handler = ipcMain._invokeHandlers.get('get-podium-command');
-      if (!handler) return { error: 'get-podium-command not registered' };
+    const zeltroCmd = await app.evaluate(async ({ ipcMain }) => {
+      const handler = ipcMain._invokeHandlers.get('get-zeltro-command');
+      if (!handler) return { error: 'get-zeltro-command not registered' };
       const before = process.env.PATH;
       process.env.PATH = '/nonexistent';
       const stripped = await handler({});
@@ -1645,11 +1697,11 @@ async function run() {
       const normal = await handler({});
       return { stripped, normal };
     });
-    check('podium resolves from PATH when it is there',
-      !podiumCmd.error && podiumCmd.normal?.command?.endsWith('podium'),
-      podiumCmd.error || JSON.stringify(podiumCmd.normal));
+    check('zeltro resolves from PATH when it is there',
+      !zeltroCmd.error && zeltroCmd.normal?.command?.endsWith('zeltro'),
+      zeltroCmd.error || JSON.stringify(zeltroCmd.normal));
     // The install check is a SEPARATE path from the resolver, and it was the one
-    // still running a bare `podium`. It is the first decision the app makes: get
+    // still running a bare `zeltro`. It is the first decision the app makes: get
     // it wrong and the whole UI is replaced by the installer.
     //
     // The realistic failure is a .desktop launch, or a macOS app opened from
@@ -1657,8 +1709,8 @@ async function run() {
     // a valid test: the CLI is a bash script that needs git, sed and awk, so it
     // fails for reasons that have nothing to do with how it was invoked.
     const statusMinimal = await app.evaluate(async ({ ipcMain }) => {
-      const handler = ipcMain._invokeHandlers.get('get-podium-status');
-      if (!handler) return { error: 'get-podium-status not registered' };
+      const handler = ipcMain._invokeHandlers.get('get-zeltro-status');
+      if (!handler) return { error: 'get-zeltro-status not registered' };
       const before = process.env.PATH;
       const normal = await handler({});
       process.env.PATH = '/usr/bin:/bin';   // what a .desktop launch gets
@@ -1670,20 +1722,20 @@ async function run() {
       !statusMinimal.error && statusMinimal.minimal === statusMinimal.normal,
       JSON.stringify(statusMinimal));
 
-    // On this machine /usr/bin/podium happens to exist, so the check above
+    // On this machine /usr/bin/zeltro happens to exist, so the check above
     // cannot tell a resolved call from a bare one. Assert the mechanism too, so
     // it holds on a machine where only /usr/local/bin has it.
     const statusSrc = require('fs').readFileSync(
       require('path').join(require('./helpers').ROOT, 'src/main.ts'), 'utf8');
-    const checkBody = statusSrc.slice(statusSrc.indexOf('function checkPodiumStatus'));
-    check('the install check invokes podium by resolved path, not by name',
-      /resolvePodium\(\)/.test(checkBody.slice(0, 900))
-      && !/execSync\('podium /.test(checkBody.slice(0, 900)));
+    const checkBody = statusSrc.slice(statusSrc.indexOf('function checkZeltroStatus'));
+    check('the install check invokes zeltro by resolved path, not by name',
+      /resolveZeltro\(\)/.test(checkBody.slice(0, 900))
+      && !/execSync\('zeltro /.test(checkBody.slice(0, 900)));
 
-    check('podium still resolves with PATH stripped, as a menu launch has it',
-      !podiumCmd.error &&
-      (podiumCmd.stripped?.command?.startsWith('/') || podiumCmd.stripped?.command === 'bash'),
-      JSON.stringify(podiumCmd.stripped));
+    check('zeltro still resolves with PATH stripped, as a menu launch has it',
+      !zeltroCmd.error &&
+      (zeltroCmd.stripped?.command?.startsWith('/') || zeltroCmd.stripped?.command === 'bash'),
+      JSON.stringify(zeltroCmd.stripped));
 
     const catalog = await app.evaluate(async ({ ipcMain }) => {
       const handler = ipcMain._invokeHandlers.get('get-app-catalog');
@@ -1801,7 +1853,7 @@ async function run() {
       await win.inputValue('#layout-per-row') === '2' &&
       (await win.locator('#layout-per-row option').evaluateAll((o) => o.map((x) => x.value)))
         .join(',') === '1,2,3,4');
-    check('the CLI opens inside Podium by default',
+    check('the CLI opens inside Zeltro by default',
       await win.inputValue('#layout-terminal-host') === 'tile');
 
     // The setting has to reach the grid as a data attribute, not an inline
@@ -1984,55 +2036,55 @@ async function run() {
     // referencing them here is a temporal-dead-zone error.
     const mainSrc = require('fs').readFileSync(
       require('path').join(require('./helpers').ROOT, 'src/main.ts'), 'utf8');
-    const sshBlock = mainSrc.slice(mainSrc.indexOf('REMOTE_PODIUM_CANDIDATES'),
-                                   mainSrc.indexOf("ipcMain.handle('get-podium-command'"));
+    const sshBlock = mainSrc.slice(mainSrc.indexOf('REMOTE_ZELTRO_CANDIDATES'),
+                                   mainSrc.indexOf("ipcMain.handle('get-zeltro-command'"));
 
-    // podium is at /usr/local/bin from the script installers and /usr/bin from
+    // zeltro is at /usr/local/bin from the script installers and /usr/bin from
     // the .deb, deliberately so they can coexist. Hardcoding either makes the
     // other report "command not found", which is indistinguishable from "not
     // installed" over a non-interactive ssh.
-    check('the remote podium path is probed, not hardcoded',
-      /\/usr\/local\/bin\/podium/.test(sshBlock) && /\/usr\/bin\/podium/.test(sshBlock)
+    check('the remote zeltro path is probed, not hardcoded',
+      /\/usr\/local\/bin\/zeltro/.test(sshBlock) && /\/usr\/bin\/zeltro/.test(sshBlock)
       && /test -x/.test(sshBlock),
       'expected both candidate paths and an executable probe');
 
-    // Resolving podium is necessary but not sufficient: podium itself shells
+    // Resolving zeltro is necessary but not sufficient: zeltro itself shells
     // out to docker, and on the Mac that failed with "docker: command not
     // found" while /usr/local/bin/docker existed the whole time.
     check('remote commands set a PATH the CLI\'s own children can use',
       /PATH=\/usr\/local\/bin:\/opt\/homebrew\/bin:\$PATH/.test(sshBlock),
       'expected an explicit PATH prefix on remote exec');
 
-    // `command -v podium` would need a login shell, and a login shell sources
+    // `command -v zeltro` would need a login shell, and a login shell sources
     // rc files whose output lands in a stream being parsed as JSON.
     check('the probe avoids a login shell',
-      !/command -v podium/.test(withoutComments(sshBlock)));
+      !/command -v zeltro/.test(withoutComments(sshBlock)));
 
     // A remote host has the same three states the local one does, and the GUI
     // shows the installer for the middle one locally. Remotely it has to at
     // least SAY which state it is in: "0 projects" or an unparseable-output
-    // error for an unconfigured host tells nobody to run `podium configure`.
+    // error for an unconfigured host tells nobody to run `zeltro configure`.
     const sshSrc = require('fs').readFileSync(
       require('path').join(require('./helpers').ROOT, 'src/main.ts'), 'utf8');
     const testBlock = sshSrc.slice(sshSrc.indexOf("ipcMain.handle('test-ssh-profile'"),
                                    sshSrc.indexOf('// Exposed so the resolution can be exercised'));
     check('the connection test distinguishes not-installed from not-configured',
-      /stage: 'podium'|'podium',/.test(testBlock) && /'configure',/.test(testBlock)
+      /stage: 'zeltro'|'zeltro',/.test(testBlock) && /'configure',/.test(testBlock)
       && /PROJECTS_DIR=/.test(testBlock),
-      'expected separate podium-missing and not-configured outcomes');
+      'expected separate zeltro-missing and not-configured outcomes');
     check('the unconfigured message names the command that fixes it',
-      /podium configure/.test(testBlock));
+      /zeltro configure/.test(testBlock));
 
     // --- Windows is remote-only -------------------------------------------
     //
     // Cannot be verified by running it here, so assert the decision rather than
-    // the outcome. Podium is Docker plus bash scripts and the deliberate call is
+    // the outcome. Zeltro is Docker plus bash scripts and the deliberate call is
     // remote hosts rather than WSL, so on Windows there is no local install to
     // make and the installer — which installs and configures a LOCAL CLI —
     // would offer something that cannot succeed.
     const winSrc = require('fs').readFileSync(
       require('path').join(require('./helpers').ROOT, 'src/main.ts'), 'utf8');
-    const chooser = winSrc.slice(winSrc.indexOf('const podiumStatus: string = checkPodiumStatus()'),
+    const chooser = winSrc.slice(winSrc.indexOf('const zeltroStatus: string = checkZeltroStatus()'),
                                  winSrc.indexOf('// Open DevTools in development'));
     check('Windows skips the installer and loads the dashboard',
       /win32/.test(chooser) && chooser.indexOf('win32') < chooser.indexOf('installer.html'),
@@ -2040,8 +2092,8 @@ async function run() {
 
     const platformCaps = await app.evaluate(async ({ ipcMain }) =>
       ipcMain._invokeHandlers.get('get-platform-capabilities')({}));
-    check('the app reports whether it can run Podium locally',
-      typeof platformCaps.localPodium === 'boolean' && typeof platformCaps.remoteOnly === 'boolean'
+    check('the app reports whether it can run Zeltro locally',
+      typeof platformCaps.localZeltro === 'boolean' && typeof platformCaps.remoteOnly === 'boolean'
       && platformCaps.remoteOnly === (platformCaps.platform === 'win32'),
       JSON.stringify(platformCaps));
 
@@ -2085,7 +2137,7 @@ async function run() {
       `${probeTiming.ms}ms, ${JSON.stringify(probeTiming.r)}`);
 
     // A remote project's agent runs on that host — Shawn's decision, and the
-    // only coherent one: `podium resume` cds into the project directory and
+    // only coherent one: `zeltro resume` cds into the project directory and
     // starts the agent there, so files, container and agent share a machine.
     // It follows that the agent's install and API key live there too.
     const aiSrc = require('fs').readFileSync(
@@ -2114,7 +2166,7 @@ async function run() {
     // is the part that must hold with no network at all: a command must never
     // run against the wrong machine.
     const localExec = await app.evaluate(async ({ ipcMain }) =>
-      ipcMain._invokeHandlers.get('execute-podium-on')({}, 'local', 'status', ['--all', '--json-output']));
+      ipcMain._invokeHandlers.get('execute-zeltro-on')({}, 'local', 'status', ['--all', '--json-output']));
     check('the executor runs commands on the local host',
       localExec.code === 0 && localExec.stdout.startsWith('{'),
       `code ${localExec.code}: ${(localExec.stderr || '').slice(0, 80)}`);
@@ -2123,7 +2175,7 @@ async function run() {
     // removed. Falling back to local would run the command against a different
     // machine and report success — worse than any error.
     const ghost = await app.evaluate(async ({ ipcMain }) =>
-      ipcMain._invokeHandlers.get('execute-podium-on')({}, 'no-such-host-id', 'status', ['--json-output']));
+      ipcMain._invokeHandlers.get('execute-zeltro-on')({}, 'no-such-host-id', 'status', ['--json-output']));
     check('an unknown host fails rather than silently running locally',
       ghost.code !== 0 && /no ssh host/i.test(ghost.stderr) && ghost.stdout === '',
       JSON.stringify(ghost).slice(0, 120));
@@ -2185,7 +2237,7 @@ async function run() {
 
 
     // qwen is the fifth agent, but only offered when the INSTALLED CLI has it.
-    // The cheap-models support is on podium-cli `dev`, not its `master`, so a
+    // The cheap-models support is on zeltro-cli `dev`, not its `master`, so a
     // current install has no qwen — offering it would produce "Unsupported AI
     // agent" at the point of use. The GUI adapts rather than assuming.
     const caps = await app.evaluate(async ({ ipcMain }) =>
@@ -2342,8 +2394,8 @@ async function run() {
         for (const on of [true, false]) {
           document.getElementById('ai-unattended').checked = on;
           ipc.invoke = async (channel, cmd, args) => {
-            // saveAiSettings streams `podium ai-set ...`; args is the argv.
-            if (channel === 'execute-command-stream' && cmd === 'podium') {
+            // saveAiSettings streams `zeltro ai-set ...`; args is the argv.
+            if (channel === 'execute-command-stream' && cmd === 'zeltro') {
               runs[on ? 'on' : 'off'] = (args || []).slice();
               return { code: 1, stdout: '', stderr: 'intercepted by test' };
             }
@@ -2381,7 +2433,7 @@ async function run() {
     const swatches = await win.locator('[data-theme-option]').evaluateAll((els) =>
       els.map((e) => e.dataset.themeOption));
     check('offers all five themes',
-      ['retro', 'dark', 'light', 'matrix', 'podium'].every((x) => swatches.includes(x)),
+      ['retro', 'dark', 'light', 'matrix', 'zeltro'].every((x) => swatches.includes(x)),
       swatches.join(','));
 
     // Relative luminance per WCAG, so the ratio below is the real thing rather
@@ -2399,7 +2451,7 @@ async function run() {
       return (a + 0.05) / (b + 0.05);
     };
 
-    for (const theme of ['retro', 'dark', 'light', 'matrix', 'podium']) {
+    for (const theme of ['retro', 'dark', 'light', 'matrix', 'zeltro']) {
       await win.click(t(`theme-${theme}`));
       await win.waitForTimeout(200);
 
@@ -2499,7 +2551,7 @@ async function run() {
     const failState = await win.evaluate(async () => {
       window.showLoadingOverlay('Creating', 'working', true);
       window.__feedOverlay('some/output\nComposer could not find a composer.json file\n');
-      window.failLoadingOverlay('Could not create the project', 'podium new exited with code 1.');
+      window.failLoadingOverlay('Could not create the project', 'zeltro new exited with code 1.');
       await new Promise((r) => setTimeout(r, 200));
       const spinner = document.querySelector('#loading-overlay .loading-spinner');
       return {
@@ -2815,11 +2867,11 @@ async function run() {
       // A bare `exit` returns the status of `kill`, reporting failure after a
       // fully successful install.
       ['trap preserves the exit status', /trap 'rc=\$\?;/],
-      // Otherwise ./podium-gui/install-*.sh from the parent silently re-clones
+      // Otherwise ./zeltro-gui/install-*.sh from the parent silently re-clones
       // instead of installing the checkout you are standing in.
       ['detects a local checkout', /BASH_SOURCE\[0\]/],
       // The GUI is useless without the CLI, so it is never installable alone.
-      ['installs the CLI first', /command -v podium/],
+      ['installs the CLI first', /command -v zeltro/],
       // Ubuntu 24.04 still ships Node 18; presence is not enough.
       ['checks the Node VERSION, not just presence', /NODE_MIN_MAJOR/],
       // node-pty must match Electron's ABI or the embedded terminal fails.
@@ -2844,7 +2896,7 @@ async function run() {
       check(`${file} keeps every hard-won guard`, missing.length === 0, missing.join('; '));
     }
 
-    // Metadata writes go through `podium set-metadata` now. The guarantee is
+    // Metadata writes go through `zeltro set-metadata` now. The guarantee is
     // unchanged — only emoji/name/description are touched, and the CLI's own
     // last_on and status survive — but it is the CLI's guarantee to keep, so
     // this asserts the GUI delegates rather than editing the file itself.
@@ -2852,7 +2904,7 @@ async function run() {
     const writer = mainBody.slice(
       mainBody.indexOf("ipcMain.handle('update-project-metadata'"),
       mainBody.indexOf("ipcMain.handle('update-project-metadata'") + 1200);
-    check('metadata writes delegate to podium set-metadata',
+    check('metadata writes delegate to zeltro set-metadata',
       /'set-metadata'/.test(writer)
       && ['--emoji', '--name', '--description'].every((f) => writer.includes(f))
       && !/writeFileSync/.test(writer),
@@ -2860,7 +2912,7 @@ async function run() {
 
     // The source launcher travels with the repo, so the other machines get it
     // by pulling rather than by having a copy installed alongside them.
-    const launcher = pathMod.join(ROOT, 'scripts/podium-gui-dev.sh');
+    const launcher = pathMod.join(ROOT, 'scripts/zeltro-gui-dev.sh');
     check('source launcher exists and is executable',
       fsMod.existsSync(launcher) && (fsMod.statSync(launcher).mode & 0o111) !== 0);
     let launcherOk = true;
@@ -2885,7 +2937,7 @@ async function run() {
 
     // The sync script also ships in the repo, which is what puts it on the
     // workstation — where running it would hard-reset the source of truth.
-    const sync = pathMod.join(ROOT, 'scripts/podium-sync.sh');
+    const sync = pathMod.join(ROOT, 'scripts/zeltro-sync.sh');
     check('sync script exists and is executable',
       fsMod.existsSync(sync) && (fsMod.statSync(sync).mode & 0o111) !== 0);
     let syncOk = true;
@@ -2912,7 +2964,7 @@ async function run() {
     // --- Optional services -----------------------------------------------
     //
     // The GUI no longer keeps its own catalogue: the CLI publishes one via
-    // `podium enable-service --json-output`. This asserts the window renders
+    // `zeltro enable-service --json-output`. This asserts the window renders
     // exactly what the CLI declares — the earlier version of this test compared
     // the GUI's hardcoded copy against the CLI's shell source, and existed only
     // because that copy did.
@@ -2952,7 +3004,7 @@ async function run() {
     // Mac resolves to that unless Homebrew's bash is installed, and on the test
     // rig it is not. `bash -n` alone does NOT catch this: `mapfile` parses fine
     // and fails at runtime with "command not found", which is exactly how the
-    // CLI's `podium configure` broke on the Mac.
+    // CLI's `zeltro configure` broke on the Mac.
     const BASH4 = [
       ['mapfile', /\bmapfile\b/],
       ['readarray', /\breadarray\b/],
@@ -2963,7 +3015,7 @@ async function run() {
       ['coproc', /\bcoproc\b/],
       ['|& pipe', /\|&/]
     ];
-    for (const file of ['scripts/podium-sync.sh', 'scripts/podium-gui-dev.sh',
+    for (const file of ['scripts/zeltro-sync.sh', 'scripts/zeltro-gui-dev.sh',
                         'install-mac.sh', 'packaging/after-install.sh']) {
       const full = pathMod.join(ROOT, file);
       if (!fsMod.existsSync(full)) { check(`${file} exists`, false); continue; }
@@ -2989,12 +3041,12 @@ async function run() {
     check('arch warns when the running kernel was replaced',
       /usr\/lib\/modules\/\$\(uname -r\)/.test(archBody));
 
-    // The menu entry must invoke the launcher. `podium gui` is not a CLI
+    // The menu entry must invoke the launcher. `zeltro gui` is not a CLI
     // subcommand — it printed "Unknown command: gui" and did nothing.
     const desktop = fsMod.readFileSync(
-      pathMod.join(ROOT, 'packaging/debian-package/usr/share/applications/podium-gui.desktop'), 'utf8');
+      pathMod.join(ROOT, 'packaging/debian-package/usr/share/applications/zeltro-gui.desktop'), 'utf8');
     check('desktop entry execs the launcher, not a nonexistent subcommand',
-      /^Exec=podium-gui$/m.test(desktop), desktop.match(/^Exec=.*$/m)?.[0] || '');
+      /^Exec=zeltro-gui$/m.test(desktop), desktop.match(/^Exec=.*$/m)?.[0] || '');
   } finally {
     await app.close();
   }

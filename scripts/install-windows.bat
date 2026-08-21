@@ -1,5 +1,5 @@
 @echo off
-REM Podium GUI - Windows installer.
+REM Zeltro GUI - Windows installer.
 REM
 REM Just double-click it. It asks for administrator rights itself (needed to
 REM install the OpenSSH server and a Windows optional feature).

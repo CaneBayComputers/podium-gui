@@ -1,5 +1,6 @@
 const { ipcRenderer, shell } = require('electron');
 
+
 // Global state interfaces
 interface Project {
   name: string;
@@ -280,7 +281,7 @@ function onFrameworkChange(): void {
     // per-framework rule rather than the GUI second-guessing it.
     const select = document.getElementById('project-database') as HTMLSelectElement;
     if (select) {
-        const options = ['<option value="">Auto — chosen by Podium</option>'];
+        const options = ['<option value="">Auto — chosen by Zeltro</option>'];
         for (const db of framework.databases) {
             options.push(`<option value="${escapeHtml(db)}">${escapeHtml(db)}</option>`);
         }
@@ -325,12 +326,12 @@ function toggleVersionGroups(): void {
     }
 }
 
-// Which hosts the dashboard shows. Local (when this machine has Podium) plus
+// Which hosts the dashboard shows. Local (when this machine has Zeltro) plus
 // every configured SSH profile.
 let dashboardHosts: Array<{ id: string; label: string }> = [];
 // Read once and kept, because rendering needs it synchronously — an empty state
 // that says the wrong thing for a second is worse than one that waits.
-let platformCaps: { platform: string; localPodium: boolean; remoteOnly: boolean } | null = null;
+let platformCaps: { platform: string; localZeltro: boolean; remoteOnly: boolean } | null = null;
 // Hosts that failed their last poll, so a tile-less host is distinguishable
 // from a host that is simply empty.
 let hostErrors: Record<string, string> = {};
@@ -341,7 +342,7 @@ async function refreshDashboardHosts(): Promise<void> {
     await loadSshProfiles();
 
     dashboardHosts = [];
-    if (caps.localPodium) dashboardHosts.push({ id: 'local', label: 'This computer' });
+    if (caps.localZeltro) dashboardHosts.push({ id: 'local', label: 'This computer' });
     for (const p of sshProfiles) {
         if (p.host) dashboardHosts.push({ id: p.id, label: p.label || p.host });
     }
@@ -359,7 +360,7 @@ async function loadProjects(): Promise<void> {
         // off, that is an empty grid and nothing to click, which reads as the
         // app being broken rather than one host being down.
         //
-        // `--all` is required: podium status lists only RUNNING projects by
+        // `--all` is required: zeltro status lists only RUNNING projects by
         // default, so without it the grid is empty whenever nothing is up.
         // NOT cleared here. Clearing upfront and refilling as hosts answered
         // made every project blink out and back on each ten-second poll — the
@@ -387,7 +388,7 @@ async function loadProjects(): Promise<void> {
         };
 
         await Promise.all(dashboardHosts.map(async (h) => {
-            const result = await ipcRenderer.invoke('execute-podium-on', h.id, 'status',
+            const result = await ipcRenderer.invoke('execute-zeltro-on', h.id, 'status',
                 ['--all', '--json-output']);
             applyHost(h, result);
             // Render on arrival. The fast hosts are visible while the slow ones
@@ -494,15 +495,15 @@ function parseProjectStatusJSON(statusOutput: string, hostId: string = 'local',
                 // Which machine this project lives on. Everything downstream —
                 // the tile's actions, its terminal, its key — needs it.
                 (project as any).hostId = hostId;
-                // The container address. Podium no longer writes /etc/hosts, so
+                // The container address. Zeltro no longer writes /etc/hosts, so
                 // this is the route from the machine itself.
                 (project as any).projectIp = projectData.project_ip || '';
                 
                 // Determine overall status.
                 //
-                // `port_mapped` is NOT a liveness signal. Podium routes to a
+                // `port_mapped` is NOT a liveness signal. Zeltro routes to a
                 // project by hostname via its VPC IP (http://<project>/), so an
-                // adapted multi-service compose — anything `podium install`
+                // adapted multi-service compose — anything `zeltro install`
                 // produces with an nginx front — runs perfectly with no host
                 // port published at all. Requiring port_mapped here marked a
                 // verified-healthy install (HTTP 200) as stopped, offered a
@@ -557,7 +558,7 @@ function parseProjectStatusJSON(statusOutput: string, hostId: string = 'local',
     }
 }
 
-// Display metadata now arrives inside `podium status --json-output` (CLI
+// Display metadata now arrives inside `zeltro status --json-output` (CLI
 // 36109a7), merged onto each project at parse time. What used to be here — a
 // per-project docker-compose.yaml read, a cache keyed by project name, and a
 // merge applied at render time — is gone, along with the two bugs that only
@@ -588,14 +589,32 @@ function parseProjectStatus(statusOutput: string): void {
 // ---------------------------------------------------------------------------
 type TerminalHost = 'tile' | 'system';
 
-const LAYOUT_STORAGE_KEY = 'podium-gui-layout';
+// Stored settings survive the rename.
+//
+// Every key was `podium-*` before, and renaming them straight to `zeltro-*`
+// would have silently reset each existing user's theme, tile layout, filters,
+// dictation model and microphone choice — with nothing on screen explaining
+// why. The old key is read once when the new one is absent, then written
+// forward, so the migration happens on first launch and needs no thought later.
+function storedSetting(key: string): string | null {
+    const current = localStorage.getItem(key);
+    if (current !== null) return current;
+
+    const legacy = localStorage.getItem(key.replace(/^zeltro/, 'podium'));
+    if (legacy === null) return null;
+
+    localStorage.setItem(key, legacy);
+    return legacy;
+}
+
+const LAYOUT_STORAGE_KEY = 'zeltro-gui-layout';
 
 let projectsPerRow = 2;
 let terminalHost: TerminalHost = 'tile';
 
 function loadLayoutState(): void {
     try {
-        const saved = JSON.parse(localStorage.getItem(LAYOUT_STORAGE_KEY) || '{}');
+        const saved = JSON.parse(storedSetting(LAYOUT_STORAGE_KEY) || '{}');
         const perRow = Number(saved.perRow);
         // Clamp rather than trust: a hand-edited 12 would render unreadable
         // slivers with no way back except editing storage again.
@@ -633,7 +652,7 @@ function applyLayout(): void {
     const help = document.getElementById('layout-terminal-host-help');
     if (help) {
         help.textContent = terminalHost === 'system'
-            ? 'Podium opens your terminal emulator and hands the session to it.'
+            ? 'Zeltro opens your terminal emulator and hands the session to it.'
             : 'The session appears in the project\'s own tile, and can be collapsed to a sliver.';
     }
 }
@@ -666,7 +685,7 @@ function setTerminalHost(value: string): void {
 type RunFilter = 'all' | 'running' | 'stopped' | 'disabled';
 type SortKey = 'name' | 'newest' | 'last-on';
 
-const FILTER_STORAGE_KEY = 'podium-gui-filters';
+const FILTER_STORAGE_KEY = 'zeltro-gui-filters';
 
 let runFilter: RunFilter = 'all';
 let sortKey: SortKey = 'name';
@@ -678,7 +697,7 @@ let hostFilter = '';
 
 function loadFilterState(): void {
     try {
-        const raw = localStorage.getItem(FILTER_STORAGE_KEY);
+        const raw = storedSetting(FILTER_STORAGE_KEY);
         if (!raw) return;
         const v = JSON.parse(raw);
         if (['all', 'running', 'stopped', 'disabled'].includes(v.runFilter)) runFilter = v.runFilter;
@@ -918,11 +937,11 @@ function projectUrls(project: Project): string {
 // moment it matters, the answer is always current.
 // Where a project can be reached from this machine, straight from the CLI.
 //
-// Never derived from the project name: that only worked while Podium wrote
+// Never derived from the project name: that only worked while Zeltro wrote
 // /etc/hosts, and it no longer does.
 async function projectLocalUrl(projectName: string): Promise<string> {
     try {
-        const result = await ipcRenderer.invoke('execute-podium', 'status',
+        const result = await ipcRenderer.invoke('execute-zeltro', 'status',
             [projectName, '--json-output']);
         if (result.code !== 0) return '';
         const found = (JSON.parse(result.stdout).projects || [])
@@ -968,16 +987,16 @@ function renderProjects(): void {
     detachTileTerminals();
 
     if (projects.length === 0) {
-        // On a machine that cannot run Podium locally and has no hosts yet,
+        // On a machine that cannot run Zeltro locally and has no hosts yet,
         // "create your first project" points at something that cannot happen —
         // seen for real on the Windows box, where the button leads to a picker
         // with nothing in it. Say what is actually missing.
-        const noWhereToRun = platformCaps && !platformCaps.localPodium && dashboardHosts.length === 0;
+        const noWhereToRun = platformCaps && !platformCaps.localZeltro && dashboardHosts.length === 0;
         grid.innerHTML = noWhereToRun
             ? `
             <div class="project-card placeholder" data-testid="no-hosts-placeholder">
                 <div class="project-icon">🖧</div>
-                <h3>No Podium hosts yet</h3>
+                <h3>No Zeltro hosts yet</h3>
                 <p>This machine runs projects on other computers. Add one to get started.</p>
                 <button class="btn btn-primary" onclick="showSettings('hosts')">Add a host</button>
             </div>`
@@ -1110,7 +1129,7 @@ function renderProjects(): void {
 
 async function loadServices(): Promise<void> {
     try {
-        const result = await ipcRenderer.invoke('execute-podium-on', servicesHost,
+        const result = await ipcRenderer.invoke('execute-zeltro-on', servicesHost,
             'status', ['--all', '--json-output']);
 
         if (result.code !== 0) {
@@ -1141,9 +1160,9 @@ async function loadServices(): Promise<void> {
     }
 }
 
-// Optional shared services, per the CLI's `podium enable-service`. Kept as a
+// Optional shared services, per the CLI's `zeltro enable-service`. Kept as a
 // list rather than inferred, so a core service is never hidden by accident.
-// The service catalogue comes from the CLI now — `podium enable-service
+// The service catalogue comes from the CLI now — `zeltro enable-service
 // --json-output` returns slug, group, description, address and state, all
 // generated from the same catalogue the CLI validates against.
 //
@@ -1181,7 +1200,7 @@ let servicesInUse: Record<string, string[]> = {};
 // window, and the in-use guard. Before this the panel DISPLAYED whichever host
 // answered the status poll while its BUTTONS always acted locally, which on
 // Windows meant looking at a remote machine's services and operating on a local
-// Podium that does not exist.
+// Zeltro that does not exist.
 let servicesHost = 'local';
 
 function renderServicesHostPicker(): void {
@@ -1257,7 +1276,7 @@ function renderServiceManager(): void {
 
     if (serviceCatalogError) {
         host.innerHTML = `<p class="app-list-empty">${escapeHtml(serviceCatalogError)}<br>
-            <small>Run <code>podium update</code>, then reopen this window.</small></p>`;
+            <small>Run <code>zeltro update</code>, then reopen this window.</small></p>`;
         return;
     }
 
@@ -1323,7 +1342,7 @@ async function toggleOptionalService(name: string): Promise<void> {
     // looks like it did nothing, so people click again.
     setServiceRowBusy(name, on ? 'Stopping…' : 'Starting…');
 
-    const result = await ipcRenderer.invoke('execute-podium-on', servicesHost, command, [name, '--json-output']);
+    const result = await ipcRenderer.invoke('execute-zeltro-on', servicesHost, command, [name, '--json-output']);
     if (result.code !== 0) {
         showError(`Could not ${on ? 'disable' : 'enable'} ${name}: ${result.stderr || result.stdout}`);
     } else {
@@ -1358,20 +1377,20 @@ function renderServices(): void {
             <div class="service-card">
                 <div class="service-status">⚪</div>
                 <h4>No Services</h4>
-                <p>${platformCaps && !platformCaps.localPodium
+                <p>${platformCaps && !platformCaps.localZeltro
                     ? 'Services belong to a host. Add one under Settings.'
-                    : 'Start Podium to see shared services'}</p>
+                    : 'Start Zeltro to see shared services'}</p>
             </div>
         `;
         return;
     }
 
-    // Hide optional services this machine has not enabled. podium status reports
+    // Hide optional services this machine has not enabled. zeltro status reports
     // minio/meilisearch as "stopped" whether or not they were ever turned on,
     // and a red "Stopped" card reads as a broken service rather than an unused
-    // feature. Anything enabled via `podium enable-service` shows normally.
+    // feature. Anything enabled via `zeltro enable-service` shows normally.
     const visibleServices = Object.entries(sharedServices).filter(([serviceName]) => {
-        const key = serviceName.replace(/^podium-/, '').toLowerCase();
+        const key = serviceName.replace(/^zeltro-/, '').toLowerCase();
         return !optionalServiceNames().includes(key) || enabledOptionalServices.includes(key);
     });
 
@@ -1380,7 +1399,7 @@ function renderServices(): void {
             <div class="service-card">
                 <div class="service-status">⚪</div>
                 <h4>No Services</h4>
-                <p>Start Podium to see shared services</p>
+                <p>Start Zeltro to see shared services</p>
             </div>
         `;
         return;
@@ -1389,10 +1408,10 @@ function renderServices(): void {
     servicesGrid.innerHTML = visibleServices.map(([serviceName, service]: [string, SharedService]) => {
         const statusText = service.status === 'running' ? 'Running' : 'Stopped';
 
-        // podium status keys these as `podium-<name>`. The action buttons below
+        // zeltro status keys these as `zeltro-<name>`. The action buttons below
         // compared the raw key against bare names, so NONE of them has ever
         // rendered — every service card has been actionless.
-        const slug = serviceName.replace(/^podium-/, '').toLowerCase();
+        const slug = serviceName.replace(/^zeltro-/, '').toLowerCase();
         // The listing calls MariaDB "mysql"; status calls the container mariadb.
         const listed = optionalServices.find(
             svc => svc.slug === slug || (svc.slug === 'mysql' && slug === 'mariadb'));
@@ -1470,15 +1489,15 @@ function hostOf(projectName: string): string {
     return (p as any)?.hostId || 'local';
 }
 
-// Same shape as `execute-podium` but aimed at the project's own machine.
-function podiumFor(projectName: string, subcommand: string, args: string[] = []): Promise<any> {
-    return ipcRenderer.invoke('execute-podium-on', hostOf(projectName), subcommand, args);
+// Same shape as `execute-zeltro` but aimed at the project's own machine.
+function zeltroFor(projectName: string, subcommand: string, args: string[] = []): Promise<any> {
+    return ipcRenderer.invoke('execute-zeltro-on', hostOf(projectName), subcommand, args);
 }
 
 async function startProject(projectName: string): Promise<void> {
     try {
         showLoadingOverlay('Starting Project', `Starting ${projectName}...`);
-        const result = await podiumFor(projectName, 'up', [projectName, '--json-output']);
+        const result = await zeltroFor(projectName, 'up', [projectName, '--json-output']);
         
         hideLoadingOverlay();
         
@@ -1508,7 +1527,7 @@ async function startProject(projectName: string): Promise<void> {
 async function stopProject(projectName: string): Promise<void> {
     try {
         showLoadingOverlay('Stopping Project', `Stopping ${projectName}...`);
-        const result = await podiumFor(projectName, 'down', [projectName, '--json-output']);
+        const result = await zeltroFor(projectName, 'down', [projectName, '--json-output']);
         
         hideLoadingOverlay();
         
@@ -1556,14 +1575,14 @@ async function removeProject(projectName: string): Promise<void> {
     try {
         showLoadingOverlay('Removing Project', `Removing project ${projectName}...`);
         
-        // podium remove PRESERVES the database by default; --force-db-delete is
+        // zeltro remove PRESERVES the database by default; --force-db-delete is
         // what drops it. (The legacy --force flag is an alias for
         // --force-db-delete, not "skip prompts" — passing it here used to delete
         // databases the user asked to keep.)
         const args = [projectName, '--json-output'];
         args.push(preserveDatabase ? '--preserve-database' : '--force-db-delete');
 
-        const result = await podiumFor(projectName, 'remove', args);
+        const result = await zeltroFor(projectName, 'remove', args);
         
         hideLoadingOverlay();
         
@@ -1598,7 +1617,7 @@ async function disableProject(projectName: string): Promise<void> {
         + `Files, database and volumes are all kept — nothing is deleted.\n\n`
         + `Find it again with the "Disabled" filter.`)) return;
 
-    const result = await podiumFor(projectName, 'disable', [projectName, '--json-output']);
+    const result = await zeltroFor(projectName, 'disable', [projectName, '--json-output']);
     if (result.code === 0) {
         // Say where it went. A project vanishing from the grid with only a
         // "done" toast is indistinguishable from having deleted it.
@@ -1611,7 +1630,7 @@ async function disableProject(projectName: string): Promise<void> {
 }
 
 async function enableProject(projectName: string): Promise<void> {
-    const result = await podiumFor(projectName, 'enable', [projectName, '--json-output']);
+    const result = await zeltroFor(projectName, 'enable', [projectName, '--json-output']);
     if (result.code === 0) {
         // enable deliberately does not start it, so do not imply that it did.
         showSuccess(`${projectName} enabled. Start it when you are ready.`);
@@ -1670,12 +1689,12 @@ async function showProjectHostStep(): Promise<void> {
     const caps = await ipcRenderer.invoke('get-platform-capabilities');
     await loadSshProfiles();
 
-    // Windows has no local Podium and never will, so "local" is not offered
+    // Windows has no local Zeltro and never will, so "local" is not offered
     // there at all rather than offered and failing.
     const options: Array<{ id: string; label: string; note: string }> = [];
-    if (caps.localPodium) {
+    if (caps.localZeltro) {
         options.push({ id: 'local', label: 'This computer',
-                       note: 'The Podium install on this machine.' });
+                       note: 'The Zeltro install on this machine.' });
     }
     for (const p of sshProfiles) {
         if (!p.host) continue;   // half-entered host
@@ -1696,10 +1715,10 @@ async function showProjectHostStep(): Promise<void> {
         if (choice) choice.style.display = 'none';
         hostEl.innerHTML = `
             <p class="app-list-empty" data-testid="no-hosts">
-                No Podium hosts available.<br>
+                No Zeltro hosts available.<br>
                 ${caps.remoteOnly
                     ? 'Windows runs projects on a remote host. Add one under Settings → SSH Hosts.'
-                    : 'Add an SSH host under Settings, or install Podium on this machine.'}
+                    : 'Add an SSH host under Settings, or install Zeltro on this machine.'}
             </p>
             <button class="btn btn-primary" data-testid="no-hosts-settings"
                     onclick="closeModal(); showSettings('hosts')">Open SSH Hosts settings</button>`;
@@ -2007,7 +2026,7 @@ if (ipcRenderer) {
 async function testStartProject(projectName: string): Promise<void> {
     console.log('🧪 Testing startProject with:', projectName);
     try {
-        const result = await podiumFor(projectName, 'up', [projectName]);
+        const result = await zeltroFor(projectName, 'up', [projectName]);
         console.log('✅ Command result:', result);
     } catch (error) {
         console.error('❌ Command failed:', error);
@@ -2018,10 +2037,10 @@ async function testStartProject(projectName: string): Promise<void> {
 async function startServices(): Promise<void> {
     try {
         showLoadingOverlay('Starting Services', 'Starting all shared services...');
-        // No flags: the podium dispatcher invokes start_services.sh/stop_services.sh
+        // No flags: the zeltro dispatcher invokes start_services.sh/stop_services.sh
         // without forwarding arguments, so --json-output never reaches them.
         // Success is judged by the exit code.
-        const result = await ipcRenderer.invoke('execute-podium-on', servicesHost, 'start-services', []);
+        const result = await ipcRenderer.invoke('execute-zeltro-on', servicesHost, 'start-services', []);
         
         hideLoadingOverlay();
         
@@ -2045,7 +2064,7 @@ async function startServices(): Promise<void> {
 async function stopServices(): Promise<void> {
     try {
         showLoadingOverlay('Stopping Services', 'Stopping all shared services...');
-        const result = await ipcRenderer.invoke('execute-podium-on', servicesHost, 'stop-services', []);
+        const result = await ipcRenderer.invoke('execute-zeltro-on', servicesHost, 'stop-services', []);
         
         hideLoadingOverlay();
         
@@ -2098,7 +2117,7 @@ async function startAllProjects(): Promise<void> {
             );
             
             try {
-                const result = await podiumFor(project.name, 'up', [project.name, '--json-output']);
+                const result = await zeltroFor(project.name, 'up', [project.name, '--json-output']);
                 if (result.code === 0) {
                     successCount++;
                 } else {
@@ -2165,7 +2184,7 @@ async function stopAllProjects(): Promise<void> {
             );
             
             try {
-                const result = await podiumFor(project.name, 'down', [project.name, '--json-output']);
+                const result = await zeltroFor(project.name, 'down', [project.name, '--json-output']);
                 if (result.code === 0) {
                     successCount++;
                 } else {
@@ -2263,7 +2282,7 @@ async function showAboutVersions(): Promise<void> {
 // it is the first thing worth knowing in a bug report.
 
 // ---------------------------------------------------------------------------
-// AI agent settings (`podium ai-set`)
+// AI agent settings (`zeltro ai-set`)
 //
 // Saving can INSTALL the agent — ai_set.sh's ensure_ai_agent_installed runs
 // `npm install -g` for codex/gemini and curl installers for claude/aider — so
@@ -2285,14 +2304,14 @@ async function showAboutVersions(): Promise<void> {
 // white background. Everything a build prints (npm warnings in yellow, docker
 // progress in cyan, test failures in bright red) goes through these.
 // ---------------------------------------------------------------------------
-type ThemeName = 'retro' | 'dark' | 'light' | 'matrix' | 'podium';
+type ThemeName = 'retro' | 'dark' | 'light' | 'matrix' | 'zeltro';
 
 const THEMES: { id: ThemeName; label: string; hint: string }[] = [
     { id: 'retro',  label: 'Retro',  hint: 'The original synthwave look' },
     { id: 'dark',   label: 'Dark',   hint: 'Neutral slate, no neon' },
     { id: 'light',  label: 'Light',  hint: 'For bright rooms' },
     { id: 'matrix', label: 'Matrix', hint: 'Green on black' },
-    { id: 'podium', label: 'Podium', hint: 'Matches podiumcli.com' }
+    { id: 'zeltro', label: 'Zeltro', hint: 'Matches podiumcli.com' }
 ];
 
 type XtermTheme = Record<string, string>;
@@ -2342,7 +2361,7 @@ const TERMINAL_THEMES: Record<ThemeName, XtermTheme> = {
         brightYellow: '#c8ffc8', brightBlue: '#5cffc0', brightMagenta: '#5cffa8',
         brightCyan: '#8affd6', brightWhite: '#e8ffe8'
     },
-    podium: {
+    zeltro: {
         background: '#04081d', foreground: '#e6edff',
         cursor: '#38bdf8', selectionBackground: '#38bdf844',
         black: '#0f1a45', red: '#f87171', green: '#34d399', yellow: '#fbbf24',
@@ -2358,7 +2377,7 @@ const TERMINAL_THEMES: Record<ThemeName, XtermTheme> = {
 // keeping its own copy, which would pass while the app shipped bad colours.
 (window as any).__terminalThemes = TERMINAL_THEMES;
 
-const THEME_STORAGE_KEY = 'podium-gui-theme';
+const THEME_STORAGE_KEY = 'zeltro-gui-theme';
 let currentTheme: ThemeName = 'retro';
 
 function terminalThemeFor(name: ThemeName): XtermTheme {
@@ -2390,7 +2409,7 @@ function applyTheme(name: ThemeName, persist = true): void {
 
 function loadTheme(): void {
     let saved: string | null = null;
-    try { saved = localStorage.getItem(THEME_STORAGE_KEY); } catch { /* ignore */ }
+    try { saved = storedSetting(THEME_STORAGE_KEY); } catch { /* ignore */ }
     applyTheme(isThemeName(saved) ? saved : 'retro', false);
 }
 
@@ -2414,8 +2433,8 @@ function selectTheme(name: string): void {
     if (isThemeName(name)) applyTheme(name);
 }
 
-// Which fields each agent actually uses, from `podium ai-set --help` and the
-// CLI's endpoint table. `--api-base` is no longer aider-only: Podium passes it
+// Which fields each agent actually uses, from `zeltro ai-set --help` and the
+// CLI's endpoint table. `--api-base` is no longer aider-only: Zeltro passes it
 // to whichever env var each agent CLI reads. gemini has no endpoint at all
 // (Google account auth), and claude needs an ANTHROPIC-compatible proxy rather
 // than a raw Ollama URL — worth saying, or people point it at :11434 and it fails.
@@ -2533,7 +2552,7 @@ interface SshProfile {
     keyPath?: string;
     // Filled in by the connection test, editable. Not fixed: script installers
     // use /usr/local/bin, the .deb uses /usr/bin.
-    podiumPath?: string;
+    zeltroPath?: string;
 }
 
 let sshProfiles: SshProfile[] = [];
@@ -2774,9 +2793,9 @@ function renderSshProfiles(): void {
                 </select>
                 </div>
             <div class="form-group">
-                <label>Podium path <span class="form-help">found automatically; override only if needed</span></label>
-                <input type="text" value="${escapeHtml(p.podiumPath || '')}" data-testid="ssh-podium-${i}"
-                       oninput="updateSshProfile(${i}, 'podiumPath', this.value)"
+                <label>Zeltro path <span class="form-help">found automatically; override only if needed</span></label>
+                <input type="text" value="${escapeHtml(p.zeltroPath || '')}" data-testid="ssh-zeltro-${i}"
+                       oninput="updateSshProfile(${i}, 'zeltroPath', this.value)"
                        placeholder="detected when you test the connection">
             </div>
             <div class="ssh-actions">
@@ -2810,7 +2829,7 @@ function updateSshProfile(index: number, field: string, value: string): void {
     if (!p) return;
     (p as any)[field] = field === 'port' ? (parseInt(value, 10) || 22) : value;
     // A stale "reachable" beside edited connection details is a claim about a
-    // host that is no longer described here. Editing the podium path clears it
+    // host that is no longer described here. Editing the zeltro path clears it
     // too — it is part of what "reachable" asserted.
     delete sshTestResults[p.id];
     persistSshProfiles();
@@ -2820,14 +2839,14 @@ async function removeSshProfile(index: number): Promise<void> {
     const p = sshProfiles[index];
     if (!p) return;
     if (!confirm(`Remove the host "${p.label || p.host || 'unnamed'}"?\n\n`
-        + `Projects on it are not touched — this only removes it from Podium's list.`)) return;
+        + `Projects on it are not touched — this only removes it from Zeltro's list.`)) return;
     delete sshTestResults[p.id];
     sshProfiles.splice(index, 1);
     renderSshProfiles();
     await persistSshProfiles();
 }
 
-// Offered only when the connection test found Podium installed but not
+// Offered only when the connection test found Zeltro installed but not
 // configured. Not offered speculatively: on a host that needs a sudo password
 // it cannot work, and a button that usually fails is worse than none.
 async function configureSshHost(index: number): Promise<void> {
@@ -2861,10 +2880,10 @@ async function testSshProfile(index: number): Promise<void> {
     const result = await ipcRenderer.invoke('test-ssh-profile', p);
     sshTestResults[p.id] = result;
 
-    // Remember where podium was found, so later calls skip the probe and the
+    // Remember where zeltro was found, so later calls skip the probe and the
     // user can see and override what was chosen.
-    if (result.ok && result.podiumPath && result.podiumPath !== p.podiumPath) {
-        p.podiumPath = result.podiumPath;
+    if (result.ok && result.zeltroPath && result.zeltroPath !== p.zeltroPath) {
+        p.zeltroPath = result.zeltroPath;
         await persistSshProfiles();
     }
     renderSshProfiles();
@@ -2921,7 +2940,7 @@ async function loadAiSettingsForm(): Promise<void> {
     clearFieldErrors();
 
     // Hide agents this CLI cannot actually run. The cheap-models support is on
-    // podium-cli `dev` and not its `master`, so a current install has no qwen —
+    // zeltro-cli `dev` and not its `master`, so a current install has no qwen —
     // offering it would produce "Unsupported AI agent" at the point of use.
     cliCaps = await ipcRenderer.invoke('get-cli-capabilities');
     const qwenOption = document.querySelector('#ai-agent option[value="qwen"]') as HTMLOptionElement;
@@ -2952,8 +2971,8 @@ async function loadAiSettingsForm(): Promise<void> {
     if (unattendedGroup) unattendedGroup.style.display = cliCaps.unattended ? 'block' : 'none';
     if (unattendedHelp) {
         unattendedHelp.textContent = current.unattended === 'unknown'
-            ? 'Podium could not read this from the agent\'s config; shown as off.'
-            : 'Stored in the agent\'s own config file, so it can be undone outside Podium.';
+            ? 'Zeltro could not read this from the agent\'s config; shown as off.'
+            : 'Stored in the agent\'s own config file, so it can be undone outside Zeltro.';
     }
     // Deliberately NOT through onUnattendedChange(): that asks for confirmation,
     // and merely opening Settings must never put a dialog in front of someone
@@ -2998,7 +3017,7 @@ function onUnattendedChange(): void {
             + 'It will edit files, run commands and install packages in your projects '
             + 'without stopping for approval each time.\n\n'
             + 'This is stored in the agent\'s own config and applies wherever you run it, '
-            + 'not just inside Podium.');
+            + 'not just inside Zeltro.');
         if (!ok) box.checked = false;
     }
 
@@ -3034,7 +3053,7 @@ async function onAiAgentChange(): Promise<void> {
     const status = document.getElementById('ai-agent-status');
     if (status) {
         status.textContent = agent
-            ? 'Podium installs this agent if it is not already present.'
+            ? 'Zeltro installs this agent if it is not already present.'
             : 'Create with AI and Modify with AI stay disabled without an agent.';
     }
 
@@ -3203,7 +3222,7 @@ async function saveAiSettings(): Promise<void> {
     try {
         // Not --json-output: that suppresses the installer's progress, which is
         // the whole reason this streams.
-        const result = await ipcRenderer.invoke('execute-command-stream', 'podium', args);
+        const result = await ipcRenderer.invoke('execute-command-stream', 'zeltro', args);
         aiSettingsStreaming = false;
 
         if (result.code === 0) {
@@ -3225,10 +3244,10 @@ async function saveAiSettings(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Create with AI (`podium create`, driven phase by phase)
+// Create with AI (`zeltro create`, driven phase by phase)
 //
 // Phase 1 classify -> render choices natively -> phase 2 create -> phase 3 build.
-// Shelling out to `podium create` in one call is not an option: it presents
+// Shelling out to `zeltro create` in one call is not an option: it presents
 // interactive terminal menus a GUI cannot answer, and --json-output silently
 // auto-picks the top recommendation instead.
 // ---------------------------------------------------------------------------
@@ -3309,10 +3328,10 @@ async function handleClassifyIdea(): Promise<void> {
         return;
     }
 
-    // A leading dash is read as a command-line flag. `podium create` honours
+    // A leading dash is read as a command-line flag. `zeltro create` honours
     // `--` so classification could be made to work, but the same text is later
-    // handed to `podium ai`, where the AGENT's own CLI parses the dash — `--`
-    // only stops Podium rejecting it, it does not make the agent accept it.
+    // handed to `zeltro ai`, where the AGENT's own CLI parses the dash — `--`
+    // only stops Zeltro rejecting it, it does not make the agent accept it.
     // Half-working is worse than declining, so decline with a reason.
     if (idea.startsWith('-')) {
         showFieldError('create-idea',
@@ -3489,7 +3508,7 @@ async function handleCreateFromChoice(): Promise<void> {
            '--one-off'];
 
     try {
-        const result = await ipcRenderer.invoke('execute-command-stream', 'podium', args);
+        const result = await ipcRenderer.invoke('execute-command-stream', 'zeltro', args);
         installInProgress = false;
 
         if (result.code !== 0) {
@@ -3834,7 +3853,7 @@ function buildTileWrapper(session: TerminalSession, project: string): HTMLElemen
 
 // --- GitHub ----------------------------------------------------------------
 //
-// `podium new --github` creates the repository from the machine running the
+// `zeltro new --github` creates the repository from the machine running the
 // project, so gh has to be authenticated THERE. Per host, like services.
 
 let githubHost = 'local';
@@ -3896,10 +3915,10 @@ function renderGithubStatus(): void {
             <button class="btn btn-primary btn-small" data-testid="github-signin"
                     onclick="githubSignIn()">Sign in</button>
             <button class="btn btn-secondary btn-small"
-                    onclick="openUrl('https://github.com/settings/tokens/new?scopes=repo&description=Podium')">
+                    onclick="openUrl('https://github.com/settings/tokens/new?scopes=repo&description=Zeltro')">
                 Create a token</button>
             <p class="settings-note">The token is handed to <code>gh</code> on that host and stored by it.
-               Podium does not keep a copy.</p>`;
+               Zeltro does not keep a copy.</p>`;
         return;
     }
 
@@ -3953,11 +3972,11 @@ async function githubSignOut(): Promise<void> {
 // A feature that quietly downloads that on first click is a feature that
 // surprises people on a metered connection.
 function dictationEnabled(): boolean {
-    return localStorage.getItem('podium-dictation') === 'on';
+    return storedSetting('zeltro-dictation') === 'on';
 }
 
 async function setDictationEnabled(on: boolean): Promise<void> {
-    localStorage.setItem('podium-dictation', on ? 'on' : 'off');
+    localStorage.setItem('zeltro-dictation', on ? 'on' : 'off');
 
     if (!on) {
         // Free the weights. A loaded Whisper sits on a few hundred MB of tensors,
@@ -4043,16 +4062,16 @@ async function restoreDictation(): Promise<void> {
 
 // --- Microphone selection and level ----------------------------------------
 
-function dictationDeviceId(): string { return localStorage.getItem('podium-mic-device') || ''; }
-function dictationGain(): number { return parseFloat(localStorage.getItem('podium-mic-gain') || '1') || 1; }
+function dictationDeviceId(): string { return storedSetting('zeltro-mic-device') || ''; }
+function dictationGain(): number { return parseFloat(storedSetting('zeltro-mic-gain') || '1') || 1; }
 
 function setDictationDevice(id: string): void {
-    localStorage.setItem('podium-mic-device', id);
+    localStorage.setItem('zeltro-mic-device', id);
     startLevelMeter();
 }
 
 function setDictationGain(value: string): void {
-    localStorage.setItem('podium-mic-gain', value);
+    localStorage.setItem('zeltro-mic-gain', value);
     const label = document.getElementById('dictation-gain-value');
     if (label) label.textContent = `${parseFloat(value).toFixed(1)}×`;
 }
@@ -4569,7 +4588,7 @@ async function openAgentTerminal(options: AgentTerminalOptions): Promise<void> {
 
 // Continue the AI session on an existing project.
 //
-// `podium resume <project>` starts the project, prints its status and URL, then
+// `zeltro resume <project>` starts the project, prints its status and URL, then
 // reopens the agent with its previous conversation (claude --continue,
 // codex resume --last, gemini --resume latest, aider --restore-chat-history).
 async function modifyWithAI(projectName: string): Promise<void> {
@@ -4582,9 +4601,9 @@ async function modifyWithAI(projectName: string): Promise<void> {
     const { agent } = await ipcRenderer.invoke('get-ai-agent', host);
     if (!agent) {
         const message = host === 'local'
-            ? 'No AI agent is configured. Run `podium ai-set` in a terminal first.'
+            ? 'No AI agent is configured. Run `zeltro ai-set` in a terminal first.'
             : `No AI agent is configured on ${hostLabel}. The agent runs there, `
-              + `so run \`podium ai-set\` on that machine.`;
+              + `so run \`zeltro ai-set\` on that machine.`;
         // On the tile as well as in a toast. Someone pressed a button on this
         // card and expects something to happen on this card — a notification
         // that fades after a few seconds reads as the button doing nothing,
@@ -4600,10 +4619,10 @@ async function modifyWithAI(projectName: string): Promise<void> {
 
     if (terminalHost === 'system') {
         const opened = await ipcRenderer.invoke('open-system-terminal',
-            projectsDir, 'podium', ['resume', projectName]);
+            projectsDir, 'zeltro', ['resume', projectName]);
         if (!opened.ok) {
             showError(`Could not open a terminal (${opened.error}). `
-                + `Run this yourself: cd ${projectsDir} && podium resume ${projectName}`);
+                + `Run this yourself: cd ${projectsDir} && zeltro resume ${projectName}`);
         }
         return;
     }
@@ -4612,12 +4631,12 @@ async function modifyWithAI(projectName: string): Promise<void> {
         title: `✨ ${projectName}`,
         status: 'Resuming the AI session in this project.',
         cwd: projectsDir,
-        command: 'podium',
+        command: 'zeltro',
         args: ['resume', projectName],
         // Host-scoped: two hosts can each have a project of this name, and a
         // shared key would focus the wrong machine's session.
         sessionKey: `resume-${host}-${projectName}`,
-        fallbackHint: `cd ${projectsDir} && podium resume ${projectName}`,
+        fallbackHint: `cd ${projectsDir} && zeltro resume ${projectName}`,
         tileProject: projectName,
         hostId: host
     });
@@ -4636,10 +4655,10 @@ async function openBuildTerminal(projectName: string, idea: string): Promise<voi
         title: `🛠️ ${projectName}`,
         status: 'Session running — type to answer the agent.',
         cwd: `${projectsDir}/${projectName}`,
-        command: 'podium',
+        command: 'zeltro',
         args: ['ai', idea],
         sessionKey: `build-${host}-${projectName}`,
-        fallbackHint: `cd ${projectsDir}/${projectName} && podium ai`,
+        fallbackHint: `cd ${projectsDir}/${projectName} && zeltro ai`,
         tileProject: projectName,
         hostId: host
     });
@@ -4681,7 +4700,7 @@ ipcRenderer.on('pty-exit', (_event: any, payload: { sessionId: string; exitCode:
 });
 
 // ---------------------------------------------------------------------------
-// Install an app (`podium install <app> [name]`)
+// Install an app (`zeltro install <app> [name]`)
 //
 // Distinct from New Project on purpose: `new` scaffolds a framework you write,
 // `install` deploys finished software. The database is fixed by each installer,
@@ -4864,7 +4883,7 @@ async function handleInstallApp(): Promise<void> {
     args.push('--one-off');
 
     try {
-        const result = await ipcRenderer.invoke('execute-command-stream', 'podium', args);
+        const result = await ipcRenderer.invoke('execute-command-stream', 'zeltro', args);
 
         installInProgress = false;
         stopInstallClock();
@@ -4874,13 +4893,13 @@ async function handleInstallApp(): Promise<void> {
         reconcileInstallOutput(result);
 
         if (result.code === 0) {
-            // Exit 0 is not "it works". `podium install` exits 0 after its
+            // Exit 0 is not "it works". `zeltro install` exits 0 after its
             // readiness retries are exhausted, printing "returned HTTP 000 — it
             // may still be initializing". Reporting that as success gave a green
             // toast and a URL for a crash-looping app. Ask the app instead —
             // this runs after the CLI gave up, so it can only be more current.
             // Ask the CLI where the project actually is rather than assuming
-            // its name resolves. Podium stopped writing /etc/hosts, so
+            // its name resolves. Zeltro stopped writing /etc/hosts, so
             // http://<name>/ resolves nowhere — this probe would have failed on
             // a perfectly working install and reported it as still initialising.
             const installedUrl = await projectLocalUrl(target);
@@ -4898,7 +4917,7 @@ async function handleInstallApp(): Promise<void> {
                 if (title) {
                     title.textContent = `${app.display} is installed but not responding yet `
                         + `(HTTP ${probe.code || 'no response'}) — it may still be starting. `
-                        + `Check: podium logs ${target}`;
+                        + `Check: zeltro logs ${target}`;
                 }
             }
         } else {
@@ -5020,7 +5039,7 @@ async function submitCloneProject(): Promise<void> {
         closeModal();
         showLoadingOverlay('Cloning Project', `Cloning ${repoUrl}...`);
         
-        // Signature is `podium clone <mode> <repo> [name]` — the mode positional
+        // Signature is `zeltro clone <mode> <repo> [name]` — the mode positional
         // is required and the command hard-errors without it.
         const cloneMode = (document.getElementById('clone-mode') as HTMLSelectElement)?.value || 'work-directly';
 
@@ -5030,7 +5049,7 @@ async function submitCloneProject(): Promise<void> {
         }
         args.push('--json-output');
 
-        const result = await ipcRenderer.invoke('execute-podium', 'clone', args);
+        const result = await ipcRenderer.invoke('execute-zeltro', 'clone', args);
         
         hideLoadingOverlay();
         
@@ -5247,7 +5266,7 @@ async function submitNewProject(): Promise<void> {
         closeModal();
         showLoadingOverlay('Creating Project', `Creating ${projectType} project: ${projectName}...`, true);
         
-        // Signature is `podium new <framework> <name>` — framework is the FIRST
+        // Signature is `zeltro new <framework> <name>` — framework is the FIRST
         // positional, not a flag. There is no --framework option, and the
         // display-name/description/emoji flags no longer exist; the GUI stores
         // that metadata itself after creation (see updateMetadataAfterCreate).
@@ -5293,15 +5312,15 @@ async function submitNewProject(): Promise<void> {
         // machine is doing the work.
         const cleanArgs = args.filter((a) => a !== '--json-output');
         const result = newProjectHost === 'local'
-            ? await ipcRenderer.invoke('execute-command-stream', 'podium', ['new', ...cleanArgs])
-            : await ipcRenderer.invoke('execute-podium-stream-on', newProjectHost, 'new', cleanArgs);
+            ? await ipcRenderer.invoke('execute-command-stream', 'zeltro', ['new', ...cleanArgs])
+            : await ipcRenderer.invoke('execute-zeltro-stream-on', newProjectHost, 'new', cleanArgs);
 
         if (result.code !== 0) {
             // Leave the overlay up: the output pane above already holds the real
             // reason, and it is far more use than a toast full of progress bars.
             failLoadingOverlay(
                 'Could not create the project',
-                `podium new exited with code ${result.code}. The output above shows why.`
+                `zeltro new exited with code ${result.code}. The output above shows why.`
             );
             return;
         }
@@ -5495,7 +5514,7 @@ async function confirmRemoveProject(): Promise<void> {
             args.push('--preserve-database');
         }
         
-        const result = await podiumFor(currentProjectName, 'remove', args);
+        const result = await zeltroFor(currentProjectName, 'remove', args);
 
         hideLoadingOverlay();
         
@@ -5775,11 +5794,11 @@ let updateStatus: any[] = [];
 // Checked at startup by default. Off is a deliberate choice someone makes, so
 // the absence of the setting means on rather than off.
 function autoUpdateCheckEnabled(): boolean {
-    return localStorage.getItem('podium-auto-update-check') !== 'off';
+    return storedSetting('zeltro-auto-update-check') !== 'off';
 }
 
 function setAutoUpdateCheck(on: boolean): void {
-    localStorage.setItem('podium-auto-update-check', on ? 'on' : 'off');
+    localStorage.setItem('zeltro-auto-update-check', on ? 'on' : 'off');
     if (!on) dismissUpdateBanner();
 }
 
@@ -5832,7 +5851,7 @@ function renderUpdates(): void {
     if (!host) return;
 
     if (updateStatus.length === 0) {
-        host.innerHTML = `<p class="app-list-empty">No Podium checkouts found to update.</p>`;
+        host.innerHTML = `<p class="app-list-empty">No Zeltro checkouts found to update.</p>`;
         return;
     }
 

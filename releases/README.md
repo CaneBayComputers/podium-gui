@@ -1,4 +1,4 @@
-# Podium CLI Releases
+# Zeltro CLI Releases
 
 This directory contains release assets and distribution files for different platforms.
 
@@ -15,12 +15,12 @@ releases/
 
 ### Linux (Ubuntu/Debian)
 - **Primary**: `.deb` package in `linux/`
-- **Installation**: `sudo dpkg -i podium-cli_latest.deb`
-- **Static filename**: Always `podium-cli_latest.deb` for consistent install instructions
+- **Installation**: `sudo dpkg -i zeltro-cli_latest.deb`
+- **Static filename**: Always `zeltro-cli_latest.deb` for consistent install instructions
 
 ### macOS
 - **Primary**: Homebrew formula
-- **Installation**: Download formula and `brew install --formula ./podium-cli.rb`
+- **Installation**: Download formula and `brew install --formula ./zeltro-cli.rb`
 - **Dependencies**: Managed by Homebrew automatically
 
 ### Windows
@@ -37,7 +37,7 @@ releases/
 
 ## Files
 
-- `homebrew/podium-cli.rb` - Homebrew formula for macOS
+- `homebrew/zeltro-cli.rb` - Homebrew formula for macOS
 - `linux/` - Will contain `.deb` packages
 - `macos/` - Reserved for future native macOS packages
 - `windows/` - Reserved for future Windows installers

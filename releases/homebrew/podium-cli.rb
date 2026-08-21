@@ -1,4 +1,4 @@
-class PodiumCli < Formula
+class ZeltroCli < Formula
   desc "Professional PHP development platform with Docker - One command creates Laravel/WordPress projects"
   homepage "https://github.com/CaneBayComputers/podium-cli"
   url "https://github.com/CaneBayComputers/podium-cli/archive/refs/tags/v1.1.0.tar.gz"
@@ -22,56 +22,56 @@ class PodiumCli < Formula
     # Install all source files to the prefix
     prefix.install Dir["*"]
     
-    # Create symlink for the main podium command
-    bin.install_symlink prefix/"src/podium"
+    # Create symlink for the main zeltro command
+    bin.install_symlink prefix/"src/zeltro"
     
     # Make scripts executable
     chmod 0755, prefix/"src/scripts/configure.sh"
-    chmod 0755, prefix/"src/podium"
+    chmod 0755, prefix/"src/zeltro"
   end
 
   def post_install
     # Run the configuration script with JSON output (non-interactive)
     system "#{prefix}/src/scripts/configure.sh", "--json-output", "--skip-aws", "--skip-packages"
     
-    ohai "Podium CLI installed successfully!"
+    ohai "Zeltro CLI installed successfully!"
     puts ""
-    puts "🎭 Get started with: podium new"
+    puts "🎭 Get started with: zeltro new"
     puts "📖 Documentation: https://github.com/CaneBayComputers/podium-cli"
     puts ""
   end
 
   def preuninstall
-    # Run podium uninstall to clean up Docker resources before removing CLI
-    if File.exist?("#{bin}/podium")
-      ohai "Cleaning up Podium Docker resources..."
+    # Run zeltro uninstall to clean up Docker resources before removing CLI
+    if File.exist?("#{bin}/zeltro")
+      ohai "Cleaning up Zeltro Docker resources..."
       
       # Run uninstall with --json-output for clean automated removal
-      system "#{bin}/podium", "uninstall", "--json-output", "--delete-images"
+      system "#{bin}/zeltro", "uninstall", "--json-output", "--delete-images"
       
       puts ""
-      puts "✅ Podium Docker cleanup completed"
+      puts "✅ Zeltro Docker cleanup completed"
       puts "🗑️  Removed: containers, images, volumes, networks, hosts entries"
       puts ""
     end
   end
 
   test do
-    # Test that the podium command exists and shows help
-    assert_match "Professional PHP Development Platform", shell_output("#{bin}/podium help")
+    # Test that the zeltro command exists and shows help
+    assert_match "Professional PHP Development Platform", shell_output("#{bin}/zeltro help")
   end
 
   def caveats
     <<~EOS
-      🐳 Docker is required for Podium to work.
+      🐳 Docker is required for Zeltro to work.
       
       If you don't have Docker installed:
         brew install --cask docker
       
-      Make sure Docker is running before using Podium.
+      Make sure Docker is running before using Zeltro.
       
       🚀 Create your first project:
-        podium new my-awesome-project
+        zeltro new my-awesome-project
       
       📱 Access projects from any device on your network!
     EOS

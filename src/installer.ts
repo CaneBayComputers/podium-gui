@@ -1,4 +1,5 @@
 // Using lazy-loaded requires to avoid module initialization issues
+
 const Convert = require('ansi-to-html');
 
 // Docker progress parsing function
@@ -171,7 +172,7 @@ const convert = new Convert({
     }
 });
 
-type PodiumStatus = 'configured' | 'not-configured' | 'not-installed';
+type ZeltroStatus = 'configured' | 'not-configured' | 'not-installed';
 
 // Initialize installer
 document.addEventListener('DOMContentLoaded', async (): Promise<void> => {
@@ -189,18 +190,18 @@ document.addEventListener('DOMContentLoaded', async (): Promise<void> => {
         console.error('IPC test failed:', error);
     }
     
-    // Check if Podium CLI is already installed
-    const podiumStatus: PodiumStatus = await checkPodiumInstallation();
+    // Check if Zeltro CLI is already installed
+    const zeltroStatus: ZeltroStatus = await checkZeltroInstallation();
     
-    if (podiumStatus === 'not-configured') {
+    if (zeltroStatus === 'not-configured') {
         // Skip to configuration step if CLI is installed but not configured
         const titleElement = document.querySelector('#step-welcome .step-content h2') as HTMLElement;
         const descriptionElement = document.querySelector('#step-welcome .step-description') as HTMLElement;
         const buttonElement = document.querySelector('#step-welcome .btn') as HTMLElement;
         
-        if (titleElement) titleElement.textContent = 'Configure Podium';
+        if (titleElement) titleElement.textContent = 'Configure Zeltro';
         if (descriptionElement) {
-            descriptionElement.textContent = 'Podium CLI is installed but needs configuration. Let\'s set up your development environment.';
+            descriptionElement.textContent = 'Zeltro CLI is installed but needs configuration. Let\'s set up your development environment.';
         }
         if (buttonElement) buttonElement.textContent = 'Configure Now';
         
@@ -210,17 +211,17 @@ document.addEventListener('DOMContentLoaded', async (): Promise<void> => {
     await showStep(0);
 });
 
-async function checkPodiumInstallation(): Promise<PodiumStatus> {
+async function checkZeltroInstallation(): Promise<ZeltroStatus> {
     try {
 
         const { ipcRenderer } = require('electron');
-        const result: CommandResult = await ipcRenderer.invoke('execute-command', 'podium', ['help', '--no-colors']);
+        const result: CommandResult = await ipcRenderer.invoke('execute-command', 'zeltro', ['help', '--no-colors']);
         if (result.code === 0) {
-            // Configured state lives in /etc/podium-cli/.env — the old
+            // Configured state lives in /etc/zeltro-cli/.env — the old
             // docker-stack/.env path no longer exists, so this check used to
             // report "not configured" on every machine.
             const configCheck: CommandResult = await ipcRenderer.invoke('execute-command', 'test', [
-                '-f', '/etc/podium-cli/.env'
+                '-f', '/etc/zeltro-cli/.env'
             ]);
 
             return configCheck.code === 0 ? 'configured' : 'not-configured';
@@ -318,10 +319,10 @@ async function startInstallation(): Promise<void> {
             backBtn.style.display = 'none';
         }
         
-        // The deb/mac installer should have already installed Podium CLI globally
+        // The deb/mac installer should have already installed Zeltro CLI globally
         // Run configuration (now includes service startup)
-        updateProgress(10, 'Configuring Podium environment...');
-        await runPodiumConfig();
+        updateProgress(10, 'Configuring Zeltro environment...');
+        await runZeltroConfig();
         
         // Installation complete
         updateProgress(100, 'Installation complete!');
@@ -357,7 +358,7 @@ function updateProgress(percentage: number, message: string): void {
 
 async function startServicesAfterConfig(): Promise<void> {
     return new Promise((resolve, reject) => {
-        console.log('Starting Podium services after configuration...');
+        console.log('Starting Zeltro services after configuration...');
         
 
         
@@ -380,8 +381,8 @@ async function startServicesAfterConfig(): Promise<void> {
             try {
                 // Read the Docker progress log file directly
                 const fs = require('fs');
-                if (fs.existsSync('/tmp/podium-docker-progress.log')) {
-                    const logContent = fs.readFileSync('/tmp/podium-docker-progress.log', 'utf8');
+                if (fs.existsSync('/tmp/zeltro-docker-progress.log')) {
+                    const logContent = fs.readFileSync('/tmp/zeltro-docker-progress.log', 'utf8');
                     const progressData = parseDockerProgress(logContent);
                     
                     if (progressData) {
@@ -401,7 +402,7 @@ async function startServicesAfterConfig(): Promise<void> {
         // Start the service command with JSON output (which will create the log file)
         // No flags: the dispatcher runs start_services.sh without forwarding
         // arguments, so --json-output never reaches it. Judge by exit code.
-        ipcRenderer.invoke('execute-command', 'podium', ['start-services']).then((result: any) => {
+        ipcRenderer.invoke('execute-command', 'zeltro', ['start-services']).then((result: any) => {
             console.log('Start services finished with result:', result);
             serviceStarted = true;
             
@@ -450,9 +451,9 @@ async function startServicesAfterConfig(): Promise<void> {
     });
 }
 
-async function runPodiumConfig(): Promise<void> {
+async function runZeltroConfig(): Promise<void> {
     return new Promise(async (resolve, reject) => {
-        console.log('Starting Podium configuration...');
+        console.log('Starting Zeltro configuration...');
         
         try {
             const { ipcRenderer } = require('electron');
@@ -477,7 +478,7 @@ async function runPodiumConfig(): Promise<void> {
             const projectsDir = (document.getElementById('projects-dir') as HTMLInputElement)?.value || '';
 
             // Step 3: Build config arguments.
-            // `podium configure` no longer asks about AWS or GitHub, and its
+            // `zeltro configure` no longer asks about AWS or GitHub, and its
             // parser silently swallows unknown flags — so anything stale here
             // fails invisibly rather than loudly. Only these three are real.
             // --non-interactive guarantees it never blocks on a prompt; the VPC
@@ -487,16 +488,16 @@ async function runPodiumConfig(): Promise<void> {
             if (gitEmail) configArgs.push('--git-email', gitEmail);
             if (projectsDir) configArgs.push('--projects-dir', projectsDir);
 
-            // Step 4: Run podium configure (now includes service startup)
-            updateProgress(20, 'Configuring Podium environment and starting services...');
-            console.log('Running podium configure with args:', configArgs);
+            // Step 4: Run zeltro configure (now includes service startup)
+            updateProgress(20, 'Configuring Zeltro environment and starting services...');
+            console.log('Running zeltro configure with args:', configArgs);
             
             // Start Docker progress monitoring immediately since configure now starts services
             const progressInterval = setInterval(async () => {
                 try {
                     const fs = require('fs');
-                    if (fs.existsSync('/tmp/podium-docker-progress.log')) {
-                        const logContent = fs.readFileSync('/tmp/podium-docker-progress.log', 'utf8');
+                    if (fs.existsSync('/tmp/zeltro-docker-progress.log')) {
+                        const logContent = fs.readFileSync('/tmp/zeltro-docker-progress.log', 'utf8');
                         const progressData = parseDockerProgress(logContent);
                         
                         if (progressData) {
@@ -513,7 +514,7 @@ async function runPodiumConfig(): Promise<void> {
                 }
             }, 2000);
             
-            const result: StreamCommandResult = await ipcRenderer.invoke('execute-command-stream', 'podium', configArgs);
+            const result: StreamCommandResult = await ipcRenderer.invoke('execute-command-stream', 'zeltro', configArgs);
             
             // Clear progress monitoring
             clearInterval(progressInterval);
@@ -604,7 +605,7 @@ async function loadConfiguration(): Promise<void> {
         console.log('Could not pre-fill Git config:', error);
     }
 
-    // AWS pre-fill removed: `podium configure` no longer accepts AWS
+    // AWS pre-fill removed: `zeltro configure` no longer accepts AWS
     // credentials, so there is nothing to pre-fill them into.
 
     // Pre-fill projects directory with default

@@ -52,7 +52,7 @@
     --modal-header-fg: #ffffff;
 }
 
-/* DARK — a plain, run-of-the-mill dark theme. Retro and Podium are the ones
+/* DARK — a plain, run-of-the-mill dark theme. Retro and Zeltro are the ones
    with personality; this is the one for people who want the app to get out of
    the way. Accents are muted rather than removed: still coloured, not luminous,
    and close enough in hue that nothing shouts. */
@@ -158,9 +158,9 @@
     --modal-header-fg: #0b1f0b;
 }
 
-/* PODIUM — podiumcli.com. Values are the site's own custom properties from
+/* ZELTRO — podiumcli.com. Values are the site's own custom properties from
    docs/style.css, not eyeballed from a screenshot. */
-:root[data-theme="podium"] {
+:root[data-theme="zeltro"] {
     --neon-pink: #67e8f9;
     --neon-cyan: #67e8f9;
     --neon-purple: #38bdf8;
@@ -2830,10 +2830,10 @@ label > .form-help {
 .theme-preview-matrix .tsp-bar:nth-child(2) { background: #00ff9c; }
 .theme-preview-matrix .tsp-bar:nth-child(3) { background: #3f9f5a; }
 
-.theme-preview-podium { background: #04081d; border: 1px solid #1b2a5e; }
-.theme-preview-podium .tsp-bar:nth-child(1) { background: linear-gradient(135deg, #67e8f9, #0ea5e9); }
-.theme-preview-podium .tsp-bar:nth-child(2) { background: #9ba6c4; }
-.theme-preview-podium .tsp-bar:nth-child(3) { background: #38bdf8; }
+.theme-preview-zeltro { background: #04081d; border: 1px solid #1b2a5e; }
+.theme-preview-zeltro .tsp-bar:nth-child(1) { background: linear-gradient(135deg, #67e8f9, #0ea5e9); }
+.theme-preview-zeltro .tsp-bar:nth-child(2) { background: #9ba6c4; }
+.theme-preview-zeltro .tsp-bar:nth-child(3) { background: #38bdf8; }
 
 /* The terminal surface follows the theme too. xterm paints its own canvas from
    the palette in renderer.ts; this is the chrome around it. */

@@ -1,6 +1,6 @@
-# Podium CLI Packaging
+# Zeltro CLI Packaging
 
-This directory contains the infrastructure for building Debian packages (.deb) for Podium CLI.
+This directory contains the infrastructure for building Debian packages (.deb) for Zeltro CLI.
 
 ## Building a .deb Package
 
@@ -14,7 +14,7 @@ sudo apt install dpkg-dev
 ./build-deb.sh
 ```
 
-This creates `podium-cli_1.0.0_all.deb` (or current version).
+This creates `zeltro-cli_1.0.0_all.deb` (or current version).
 
 ## Package Structure
 
@@ -27,50 +27,50 @@ debian-package/
 └── usr/
     ├── local/
     │   └── share/
-    │       └── podium-cli/    # Application files
+    │       └── zeltro-cli/    # Application files
     └── bin/
-        └── podium             # Symlink to application
+        └── zeltro             # Symlink to application
 ```
 
 ## Installation
 
 ### From .deb Package
 ```bash
-sudo dpkg -i podium-cli_1.0.0_all.deb
+sudo dpkg -i zeltro-cli_1.0.0_all.deb
 sudo apt-get install -f  # Fix any missing dependencies
 ```
 
 ### Manual Installation
 ```bash
 sudo apt install docker.io git curl
-sudo dpkg -i podium-cli_1.0.0_all.deb
+sudo dpkg -i zeltro-cli_1.0.0_all.deb
 ```
 
 ## Usage After Installation
 
 ```bash
 # Get help
-podium help
+zeltro help
 
 # Create a new project
-podium new
+zeltro new
 
 # Start a project
-podium up myproject
+zeltro up myproject
 
 # Check status
-podium status
+zeltro status
 ```
 
 ## Uninstallation
 
 ```bash
-sudo apt remove podium-cli
+sudo apt remove zeltro-cli
 ```
 
 This will:
-- Stop all running Podium services
-- Remove the podium command
+- Stop all running Zeltro services
+- Remove the zeltro command
 - Clean up installation files
 - Preserve project data (can be removed manually)
 
@@ -107,5 +107,5 @@ jobs:
       - name: Upload to Release
         uses: softprops/action-gh-release@v1
         with:
-          files: podium-cli_*.deb
+          files: zeltro-cli_*.deb
 ```

@@ -1,35 +1,35 @@
 #!/bin/bash
 set -e
 
-# Pre-removal script for Podium CLI
+# Pre-removal script for Zeltro CLI
 
-echo "Preparing to remove Podium GUI..."
+echo "Preparing to remove Zeltro GUI..."
 
-# Run podium uninstall to clean up Docker resources selectively
-if [ -x /usr/local/bin/podium ]; then
-    echo "Running Podium uninstall to clean up Docker resources..."
-    /usr/local/bin/podium uninstall 2>/dev/null || true
+# Run zeltro uninstall to clean up Docker resources selectively
+if [ -x /usr/local/bin/zeltro ]; then
+    echo "Running Zeltro uninstall to clean up Docker resources..."
+    /usr/local/bin/zeltro uninstall 2>/dev/null || true
     
-    echo "Stopping any remaining Podium services..."
+    echo "Stopping any remaining Zeltro services..."
     
     # Try to stop shared services gracefully
-    cd /usr/local/share/podium-cli 2>/dev/null || true
+    cd /usr/local/share/zeltro-cli 2>/dev/null || true
     if [ -f "scripts/shutdown.sh" ]; then
         bash scripts/shutdown.sh 2>/dev/null || true
     fi
 fi
 
 # Remove symlink
-if [ -L /usr/local/bin/podium ]; then
-    echo "Removing podium command..."
-    rm -f /usr/local/bin/podium
+if [ -L /usr/local/bin/zeltro ]; then
+    echo "Removing zeltro command..."
+    rm -f /usr/local/bin/zeltro
 fi
 
-echo "Podium CLI removal preparation complete."
+echo "Zeltro CLI removal preparation complete."
 echo ""
 echo "Note: Your project files and Docker images have been preserved."
-echo "To completely remove all Podium data:"
-echo "  - Remove project files manually from /usr/local/share/podium-cli/projects/"
+echo "To completely remove all Zeltro data:"
+echo "  - Remove project files manually from /usr/local/share/zeltro-cli/projects/"
 echo "  - Remove Docker images: docker image prune"
 echo ""
 

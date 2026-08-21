@@ -125,6 +125,6 @@ jobs:
 # SSH on that box is allowlisted to a few known IPs, and GitHub Actions runners
 # are not among them — allowlisting them would mean opening port 22 to most of
 # Azure, which is not a trade worth making for a package publish. Instead the
-# server polls: podium-repo-sync.timer checks the releases API every 10 minutes
+# server polls: zeltro-repo-sync.timer checks the releases API every 10 minutes
 # and publishes anything new. Nothing inbound is opened and no credential that
 # could reach that box exists in CI.

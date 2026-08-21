@@ -2,7 +2,7 @@
 //
 // MANUAL, MUTATING verification of the install flow.
 //
-// This is NOT part of `npm test`. It performs a real `podium install`, which
+// This is NOT part of `npm test`. It performs a real `zeltro install`, which
 // creates a project directory, writes an /etc/hosts entry and pulls Docker
 // images. Run it only on a machine you are willing to change — a throwaway box
 // or a VM — never as part of an automated suite.
@@ -12,7 +12,7 @@
 // Defaults to the `changedetection` installer, which is self-contained (no
 // database) and small. Clean up afterwards with:
 //
-//   podium remove <project-name> --force-db-delete
+//   zeltro remove <project-name> --force-db-delete
 //
 // It drives the real GUI, so on a machine with a desktop you can watch the
 // modal, the live output pane, and the finished project card appear.
@@ -63,7 +63,7 @@ async function run() {
 
     await screenshot(win, 'manual-01-selected');
 
-    console.log('clicking Install — this shells out to `podium install` for real…');
+    console.log('clicking Install — this shells out to `zeltro install` for real…');
     await win.click(t('install-submit'));
 
     // The modal switches to the streamed-output view; the title settles on a

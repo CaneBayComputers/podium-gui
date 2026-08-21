@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-echo "🍎 Building Podium GUI for macOS..."
+echo "🍎 Building Zeltro GUI for macOS..."
 
 # Get the directory where this script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -34,15 +34,15 @@ cp "$SCRIPT_DIR/macos/install-gui.sh" "$BUILD_DIR/"
 # Create tarball
 echo "📦 Creating installer package..."
 cd "$BUILD_DIR"
-tar -czf "../podium-gui-macos.tar.gz" .
+tar -czf "../zeltro-gui-macos.tar.gz" .
 
 # Clean up build directory
 cd "$SCRIPT_DIR"
 rm -rf "$BUILD_DIR"
 
-echo "✅ Mac installer created: packaging/podium-gui-macos.tar.gz"
+echo "✅ Mac installer created: packaging/zeltro-gui-macos.tar.gz"
 echo ""
 echo "📋 Installation instructions:"
-echo "   1. Extract: tar -xzf podium-gui-macos.tar.gz"
+echo "   1. Extract: tar -xzf zeltro-gui-macos.tar.gz"
 echo "   2. Run: ./install-gui.sh"
 echo ""

@@ -1,11 +1,11 @@
 [Desktop Entry]
 Type=Application
-Name=Podium GUI (source)
+Name=Zeltro GUI (source)
 GenericName=PHP Development Platform
-Comment=Podium, running from the source checkout
-Exec=/usr/local/bin/podium-gui
-Icon=podium-gui
+Comment=Zeltro, running from the source checkout
+Exec=/usr/local/bin/zeltro-gui
+Icon=zeltro-gui
 Terminal=false
 Categories=Development;IDE;
 StartupNotify=true
-StartupWMClass=podium-gui
+StartupWMClass=zeltro-gui

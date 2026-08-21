@@ -1,3 +1,4 @@
+import { CLI_BIN, PRODUCT, CLI_CONFIG_DIR } from './branding';
 import { app, BrowserWindow, ipcMain, dialog, IpcMainInvokeEvent, Menu, shell, safeStorage } from 'electron';
 import * as path from 'path';
 import { spawn, ChildProcess, execSync } from 'child_process';
@@ -7,7 +8,7 @@ import * as http from 'http';
 import * as https from 'https';
 
 // Debug log file path
-const debugLogPath: string = path.join(os.tmpdir(), 'podium-gui-debug.log');
+const debugLogPath: string = path.join(os.tmpdir(), 'zeltro-gui-debug.log');
 
 // Debug logging function
 function debugLog(message: string, data: any = null): void {
@@ -22,7 +23,7 @@ function debugLog(message: string, data: any = null): void {
     try {
       // Overwrite file each time (not append)
       if (!fs.existsSync(debugLogPath)) {
-        fs.writeFileSync(debugLogPath, '=== PODIUM GUI DEBUG LOG ===\n');
+        fs.writeFileSync(debugLogPath, '=== ZELTRO GUI DEBUG LOG ===\n');
       }
       fs.appendFileSync(debugLogPath, logEntry);
     } catch (error) {
@@ -37,7 +38,7 @@ function createWindow(): void {
   // Clear debug log at startup
   if (process.argv.includes('--dev')) {
     try {
-      fs.writeFileSync(debugLogPath, '=== PODIUM GUI DEBUG LOG ===\n');
+      fs.writeFileSync(debugLogPath, '=== ZELTRO GUI DEBUG LOG ===\n');
       debugLog('Debug logging initialized', { logPath: debugLogPath });
     } catch (error) {
       console.error('Failed to initialize debug log:', error);
@@ -61,7 +62,7 @@ function createWindow(): void {
       additionalArguments: process.argv.includes('--dev') ? ['--debug-mode'] : []
     },
     icon: path.join(__dirname, '../assets/icon.png'),
-    title: 'Podium - PHP Development Platform'
+    title: 'Zeltro - PHP Development Platform'
   });
 
   mainWindow.once('ready-to-show', () => {
@@ -89,7 +90,7 @@ function createWindow(): void {
     // that is the taskbar highlight, and a background launch should not be
     // asking for attention at all.
     if (process.platform === 'linux') {
-      const title = 'Podium - PHP Development Platform';
+      const title = 'Zeltro - PHP Development Platform';
       const wm = (state: string) =>
         `xdotool search --name '${title}' set_window --urgency 0 2>/dev/null; ` +
         `wmctrl -r '${title}' -b ${state} 2>/dev/null`;
@@ -229,11 +230,11 @@ function createWindow(): void {
   const menu = Menu.buildFromTemplate(template);
   Menu.setApplicationMenu(menu);
 
-  // Check if Podium CLI is installed and configured
-  const podiumStatus: string = checkPodiumStatus();
-  debugLog('Podium status check result', { status: podiumStatus, platform: process.platform });
+  // Check if Zeltro CLI is installed and configured
+  const zeltroStatus: string = checkZeltroStatus();
+  debugLog('Zeltro status check result', { status: zeltroStatus, platform: process.platform });
 
-  // Windows has no local Podium and never will: Podium is Docker plus bash
+  // Windows has no local Zeltro and never will: Zeltro is Docker plus bash
   // scripts, and the deliberate decision is remote hosts rather than WSL. So
   // the installer — which installs and configures a LOCAL CLI — has nothing to
   // do there, and showing it would offer an install that cannot succeed.
@@ -243,14 +244,14 @@ function createWindow(): void {
   if (process.platform === 'win32') {
     debugLog('Loading index.html - Windows is remote-only, no local install to make');
     mainWindow.loadFile(path.join(__dirname, '..', 'src', 'index.html'));
-  } else if (podiumStatus === 'not-installed') {
-    debugLog('Loading installer.html - Podium not installed');
+  } else if (zeltroStatus === 'not-installed') {
+    debugLog('Loading installer.html - Zeltro not installed');
     mainWindow.loadFile(path.join(__dirname, '..', 'src', 'installer.html'));
-  } else if (podiumStatus === 'not-configured') {
-    debugLog('Loading installer.html - Podium not configured');
+  } else if (zeltroStatus === 'not-configured') {
+    debugLog('Loading installer.html - Zeltro not configured');
     mainWindow.loadFile(path.join(__dirname, '..', 'src', 'installer.html'));
   } else {
-    debugLog('Loading index.html - Podium ready');
+    debugLog('Loading index.html - Zeltro ready');
     mainWindow.loadFile(path.join(__dirname, '..', 'src', 'index.html'));
   }
 
@@ -260,21 +261,45 @@ function createWindow(): void {
   }
 }
 
-type PodiumStatus = 'configured' | 'not-configured' | 'not-installed';
+type ZeltroStatus = 'configured' | 'not-configured' | 'not-installed';
 
-// Podium's machine-wide config. Written by `podium configure`; the CLI reads it
+// Zeltro's machine-wide config. Written by `zeltro configure`; the CLI reads it
 // from this fixed path, so there is nothing to search for.
-const PODIUM_ENV_PATH = '/etc/podium-cli/.env';
+// Same transition as the binary name: the CLI moves its config directory
+// separately, so a machine can be mid-rename with the old one still in place.
+// Whichever exists is the real one; a GUI that only looks at the new path
+// reports "not configured" on a configured install.
+const ZELTRO_ENV_CANDIDATES = ['/etc/zeltro-cli/.env', '/etc/podium-cli/.env'];
 
-// Installed location of the CLI itself. Only used as a fallback when `podium`
+function zeltroEnvPath(): string {
+  return ZELTRO_ENV_CANDIDATES.find((p) => fs.existsSync(p)) || ZELTRO_ENV_CANDIDATES[0]!;
+}
+
+// Installed location of the CLI itself. Only used as a fallback when `zeltro`
 // is not on PATH.
-const PODIUM_CLI_DIR = '/usr/local/share/podium-cli';
+// Same transition as the binary and the config dir. Observed mid-rename on this
+// machine: the CLI's entry script had already become src/zeltro while the
+// install directory was still podium-cli and /usr/local/bin/podium had become a
+// DANGLING symlink — so neither name resolved and a working install looked
+// absent. Whichever directory exists is the real one.
+const ZELTRO_CLI_DIR_CANDIDATES = [
+  '/usr/local/share/zeltro-cli',
+  '/usr/local/share/podium-cli',
+  '/opt/zeltro-cli',
+  '/opt/podium-cli'
+];
 
-// Where `podium` actually is, as an argv pair.
+function zeltroCliDir(): string {
+  return ZELTRO_CLI_DIR_CANDIDATES.find((d) => fs.existsSync(d)) || ZELTRO_CLI_DIR_CANDIDATES[0]!;
+}
+
+const ZELTRO_CLI_DIR = zeltroCliDir();
+
+// Where `zeltro` actually is, as an argv pair.
 //
-// Bare spawn('podium') only works when the launching environment has the CLI on
+// Bare spawn(CLI_BIN) only works when the launching environment has the CLI on
 // PATH. A shell has it; a .desktop launcher started by the panel does not, and
-// a packaged install therefore failed with "spawn podium ENOENT" for every
+// a packaged install therefore failed with "spawn zeltro ENOENT" for every
 // command while working perfectly from a terminal. Resolving it here means each
 // call site gets the same answer instead of one of them having a fallback.
 //
@@ -309,20 +334,36 @@ function resolveBinary(name: string): string | null {
   return null;
 }
 
-function resolvePodium(): { command: string; prefix: string[] } {
-  const found = resolveBinary('podium');
+// The CLI was renamed from podium to zeltro, and the two do not update in
+// lockstep — a GUI update can land before the CLI one, or the other way round.
+// A machine mid-upgrade has the old binary and nothing else, and a GUI that
+// only knows the new name reports "not installed" on a working install.
+//
+// Transitional on purpose: remove the fallback once the rename has been out
+// long enough that nobody is running the old CLI.
+const LEGACY_CLI_BIN = 'podium';
+
+function resolveZeltro(): { command: string; prefix: string[] } {
+  const found = resolveBinary(CLI_BIN) || resolveBinary(LEGACY_CLI_BIN);
   if (found) return { command: found, prefix: [] };
 
   // Last resort: the CLI's own entry script, run through bash so it does not
   // need its executable bit.
-  const shipped = path.join(PODIUM_CLI_DIR, 'src', 'podium');
-  if (fs.existsSync(shipped)) {
-    return { command: 'bash', prefix: [shipped] };
+  // Re-read the directory rather than trusting the value captured at load: an
+  // install can flip while the app is running, which is precisely what happened
+  // here.
+  for (const dir of ZELTRO_CLI_DIR_CANDIDATES) {
+    for (const name of [CLI_BIN, LEGACY_CLI_BIN]) {
+      const shipped = path.join(dir, 'src', name);
+      if (fs.existsSync(shipped)) {
+        return { command: 'bash', prefix: [shipped] };
+      }
+    }
   }
 
   // Nothing found. Return the bare name so the failure is the familiar ENOENT
   // rather than something invented here.
-  return { command: 'podium', prefix: [] };
+  return { command: CLI_BIN, prefix: [] };
 }
 
 // Terminal emulators that can be told "run this command", in the order worth
@@ -351,7 +392,7 @@ ipcMain.handle('open-system-terminal', async (
   command: string,
   args: string[] = []
 ): Promise<{ ok: boolean; error?: string }> => {
-  const resolved = resolveIfPodium(command, args);
+  const resolved = resolveIfZeltro(command, args);
   const quoted = [resolved.command, ...resolved.args]
     .map((part) => `'${part.replace(/'/g, `'\\''`)}'`)
     .join(' ');
@@ -401,7 +442,7 @@ function resolveOnPath(bin: string): string | null {
 // ---------------------------------------------------------------------------
 // SSH host profiles
 //
-// A Podium installation on another machine. Stored in the main process rather
+// A Zeltro installation on another machine. Stored in the main process rather
 // than localStorage because the executor lives here — the renderer only edits
 // them.
 //
@@ -440,12 +481,12 @@ interface SshProfile {
   user?: string;
   keyPath?: string;
   // Resolved by the connection test, editable in the form. Not a fixed path,
-  // because it genuinely varies: the four script installers put podium at
-  // /usr/local/bin -> /usr/local/share/podium-cli, while the .deb puts it at
-  // /usr/bin -> /opt/podium-cli, deliberately so the two can coexist. Hardcoding
+  // because it genuinely varies: the four script installers put zeltro at
+  // /usr/local/bin -> /usr/local/share/zeltro-cli, while the .deb puts it at
+  // /usr/bin -> /opt/zeltro-cli, deliberately so the two can coexist. Hardcoding
   // one would make a .deb install report "command not found", which — given a
-  // non-interactive PATH — is indistinguishable from "Podium is not installed".
-  podiumPath?: string;
+  // non-interactive PATH — is indistinguishable from "Zeltro is not installed".
+  zeltroPath?: string;
 }
 
 function sshProfilesPath(): string {
@@ -499,7 +540,7 @@ function readSshStore(): SshStore {
     }
     return {
       id: old.id, label: old.label, host: old.host, port: old.port,
-      credentialId: cred.id, podiumPath: old.podiumPath
+      credentialId: cred.id, zeltroPath: old.zeltroPath
     };
   });
   debugLog('Migrated SSH hosts to the credential model',
@@ -699,15 +740,15 @@ ipcMain.handle('browse-for-key', async (): Promise<string> => {
   return result.canceled ? '' : (result.filePaths[0] || '');
 });
 
-const REMOTE_PODIUM_CANDIDATES = ['/usr/local/bin/podium', '/usr/bin/podium'];
+const REMOTE_ZELTRO_CANDIDATES = ['/usr/local/bin/zeltro', '/usr/bin/zeltro'];
 
-// Podium's own scripts shell out to docker, git and sed. A non-interactive ssh
+// Zeltro's own scripts shell out to docker, git and sed. A non-interactive ssh
 // command inherits a PATH those are not on - verified on the Mac rig, where
-// `/usr/local/bin/podium status` ran and then died on
+// `/usr/local/bin/zeltro status` ran and then died on
 // "status.sh: line 137: docker: command not found" while
 // /usr/local/bin/docker existed the whole time.
 //
-// So resolving podium absolutely is necessary but NOT sufficient: the child
+// So resolving zeltro absolutely is necessary but NOT sufficient: the child
 // processes it spawns need a usable PATH too. Prepending rather than replacing,
 // so a host with its own additions keeps them.
 const REMOTE_PATH_PREFIX = 'PATH=/usr/local/bin:/opt/homebrew/bin:$PATH';
@@ -720,7 +761,7 @@ const REMOTE_PATH_PREFIX = 'PATH=/usr/local/bin:/opt/homebrew/bin:$PATH';
 ipcMain.handle('test-ssh-profile', async (
   _event: IpcMainInvokeEvent,
   profile: SshProfile
-): Promise<{ ok: boolean; stage: string; detail: string; podiumPath?: string }> => {
+): Promise<{ ok: boolean; stage: string; detail: string; zeltroPath?: string }> => {
   const { Client } = require('ssh2');
 
   return new Promise((resolve) => {
@@ -732,7 +773,7 @@ ipcMain.handle('test-ssh-profile', async (
       try { conn.end(); } catch { /* already closed */ }
       // Hand the resolved path back so the profile can remember it and the
       // form can show it, rather than probing on every call.
-      resolve({ ok, stage, detail, podiumPath: resolvedPath });
+      resolve({ ok, stage, detail, zeltroPath: resolvedPath });
     };
 
     const built = connectOptionsFor(profile);
@@ -747,23 +788,24 @@ ipcMain.handle('test-ssh-profile', async (
     const timer = setTimeout(() => done(false, 'connect', 'Timed out after 12s'), 12000);
 
     conn.on('ready', () => {
-      // Probe absolute paths rather than `command -v podium`, which needs a
+      // Probe absolute paths rather than `command -v zeltro`, which needs a
       // login shell to have a usable PATH — and a login shell sources rc files,
       // putting the user's aliases and version-manager chatter into a stream
       // being parsed as JSON.
       // Probe for the binary AND for configuration, in one round trip.
       //
-      // Locally these are separate states — checkPodiumStatus returns
+      // Locally these are separate states — checkZeltroStatus returns
       // not-installed, not-configured or configured, and the GUI shows the
       // installer for the middle one. A remote host has the same three states,
       // and without this an installed-but-unconfigured host reports either
       // "0 projects" or an unparseable-output error, neither of which tells
-      // anyone to run `podium configure`.
+      // anyone to run `zeltro configure`.
       //
-      // `podium configure` writes PROJECTS_DIR into that file, and every project
+      // `zeltro configure` writes PROJECTS_DIR into that file, and every project
       // command depends on it — same file path on macOS as on Linux.
-      const probe = REMOTE_PODIUM_CANDIDATES.map((c) => `test -x ${c} && echo BIN=${c}`).join('; ')
-        + '; grep -q "^PROJECTS_DIR=" /etc/podium-cli/.env 2>/dev/null && echo CONFIGURED';
+      const probe = REMOTE_ZELTRO_CANDIDATES.map((c) => `test -x ${c} && echo BIN=${c}`).join('; ')
+        + '; { grep -qs "^PROJECTS_DIR=" /etc/zeltro-cli/.env || grep -qs "^PROJECTS_DIR=" /etc/podium-cli/.env; }'
+        + ' && echo CONFIGURED';
 
       conn.exec(probe, (probeErr: any, probeStream: any) => {
         if (probeErr) return done(false, 'exec', probeErr.message);
@@ -776,14 +818,14 @@ ipcMain.handle('test-ssh-profile', async (
           const configured = lines.includes('CONFIGURED');
 
           if (!bin) {
-            return done(false, 'podium',
-              `Not found at ${REMOTE_PODIUM_CANDIDATES.join(' or ')} — set the path in the host's settings.`);
+            return done(false, 'zeltro',
+              `Not found at ${REMOTE_ZELTRO_CANDIDATES.join(' or ')} — set the path in the host's settings.`);
           }
           if (!configured) {
             // Distinct from "not installed": the fix is a command on that host,
             // not an install, and saying so is the whole value of the message.
             return done(false, 'configure',
-              'Podium is installed but not configured. Run `podium configure` on that host.');
+              'Zeltro is installed but not configured. Run `zeltro configure` on that host.');
           }
           resolvedPath = bin;
           runStatus(bin);
@@ -801,7 +843,7 @@ ipcMain.handle('test-ssh-profile', async (
         stream.on('close', (code: number) => {
           clearTimeout(timer);
           if (code !== 0) {
-            return done(false, 'podium', errOut.trim() || `podium exited ${code}`);
+            return done(false, 'zeltro', errOut.trim() || `zeltro exited ${code}`);
           }
           // Parse it, rather than trusting exit 0. The executor will parse this
           // exact output, so a host that connects but returns something
@@ -811,7 +853,7 @@ ipcMain.handle('test-ssh-profile', async (
             const projects = Array.isArray(parsed.projects) ? parsed.projects.length : 0;
             done(true, 'ok', `${projects} project${projects === 1 ? '' : 's'} · ${resolvedPath}`);
           } catch {
-            done(false, 'parse', 'podium ran but its output was not JSON');
+            done(false, 'parse', 'zeltro ran but its output was not JSON');
           }
         });
       });
@@ -829,21 +871,21 @@ ipcMain.handle('test-ssh-profile', async (
 
 // Exposed so the resolution can be exercised against a stripped PATH — the
 // exact condition that broke every packaged menu launch.
-ipcMain.handle('get-podium-command', async (): Promise<{ command: string; prefix: string[] }> =>
-  resolvePodium());
+ipcMain.handle('get-zeltro-command', async (): Promise<{ command: string; prefix: string[] }> =>
+  resolveZeltro());
 
 // Same, for the install check. It is a separate handler because it exercises a
-// separate code path: `resolvePodium` was already PATH-independent while
-// checkPodiumStatus still ran a bare `podium`, so testing the first said
+// separate code path: `resolveZeltro` was already PATH-independent while
+// checkZeltroStatus still ran a bare `zeltro`, so testing the first said
 // nothing about the second.
-ipcMain.handle('get-podium-status', async (): Promise<string> => checkPodiumStatus());
+ipcMain.handle('get-zeltro-status', async (): Promise<string> => checkZeltroStatus());
 
-// Whether this machine can run Podium locally at all. The dashboard uses it to
+// Whether this machine can run Zeltro locally at all. The dashboard uses it to
 // decide whether "local" is an option when creating a project, and to explain
 // an empty project list on a machine with no hosts configured yet.
 // --- Updates ---------------------------------------------------------------
 //
-// Both Podium repos are source checkouts, so an update is a git pull. This
+// Both Zeltro repos are source checkouts, so an update is a git pull. This
 // reports where each one stands relative to its remote, and can pull them.
 //
 // Read-only by default: checking must never modify a working tree. `git fetch`
@@ -856,20 +898,20 @@ function repoPaths(): Array<{ id: string; label: string; dir: string }> {
   // rather than guessing a path.
   const guiDir = path.resolve(__dirname, '..');
   if (fs.existsSync(path.join(guiDir, '.git'))) {
-    repos.push({ id: 'gui', label: 'Podium GUI', dir: guiDir });
+    repos.push({ id: 'gui', label: 'Zeltro GUI', dir: guiDir });
   }
 
-  // The CLI is wherever `podium` resolves to. The binary is a symlink into the
+  // The CLI is wherever `zeltro` resolves to. The binary is a symlink into the
   // install, so follow it rather than assuming /usr/local/share or /opt.
   try {
-    const podium = resolvePodium().command;
-    const real = fs.realpathSync(podium);           // <install>/src/podium
+    const zeltro = resolveZeltro().command;
+    const real = fs.realpathSync(zeltro);           // <install>/src/zeltro
     const cliDir = path.resolve(path.dirname(real), '..');
     if (fs.existsSync(path.join(cliDir, '.git'))) {
-      repos.push({ id: 'cli', label: 'Podium CLI', dir: cliDir });
+      repos.push({ id: 'cli', label: 'Zeltro CLI', dir: cliDir });
     }
   } catch {
-    // No podium on PATH, or not a checkout — normal on Windows.
+    // No zeltro on PATH, or not a checkout — normal on Windows.
   }
   return repos;
 }
@@ -947,7 +989,7 @@ ipcMain.handle('update-repo', async (
 
 // --- GitHub ----------------------------------------------------------------
 //
-// Creating a repo during `podium new` needs `gh` authenticated ON THE HOST that
+// Creating a repo during `zeltro new` needs `gh` authenticated ON THE HOST that
 // runs the command, since that is where the git operations happen. So this is
 // per host, like services and the AI agent.
 
@@ -957,7 +999,7 @@ interface GithubStatus {
   loggedIn: boolean;
   login?: string;
   scopes?: string[];
-  /** Scopes `podium new --github` needs that the token does not have. */
+  /** Scopes `zeltro new --github` needs that the token does not have. */
   missingScopes?: string[];
   error?: string;
 }
@@ -1092,11 +1134,11 @@ ipcMain.handle('github-logout', async (
 // Works for remote projects over sftp, because the file has to be next to the
 // code the agent is editing, and that code is on the host.
 
-// Dot-prefixed and Podium-named on purpose. A bare `uploads/` collides with
+// Dot-prefixed and Zeltro-named on purpose. A bare `uploads/` collides with
 // directories projects already have — WordPress has wp-content/uploads, Laravel
 // has storage/app/public/uploads — and a name that might be the project's own is
 // a name someone will eventually commit, deploy or delete by mistake.
-const UPLOAD_DIR = '.podium-uploads';
+const UPLOAD_DIR = '.zeltro-uploads';
 
 // Keep the name, drop the path and anything that could climb out of the folder.
 function safeUploadName(original: string): string {
@@ -1176,16 +1218,16 @@ ipcMain.handle('choose-files', async (): Promise<string[]> => {
 });
 
 ipcMain.handle('get-platform-capabilities', async (): Promise<{
-  platform: string; localPodium: boolean; remoteOnly: boolean;
+  platform: string; localZeltro: boolean; remoteOnly: boolean;
 }> => ({
   platform: process.platform,
-  localPodium: process.platform !== 'win32' && checkPodiumStatus() === 'configured',
+  localZeltro: process.platform !== 'win32' && checkZeltroStatus() === 'configured',
   remoteOnly: process.platform === 'win32'
 }));
 
-// Run `podium configure` on a remote host.
+// Run `zeltro configure` on a remote host.
 //
-// Offered when the connection test finds Podium installed but unconfigured.
+// Offered when the connection test finds Zeltro installed but unconfigured.
 // It needs sudo — it writes /etc/hosts and sets up Docker networks — and sudo
 // over a non-interactive ssh session cannot answer a password prompt. Hosts with
 // passwordless sudo succeed; the rest get told exactly that rather than a
@@ -1204,7 +1246,7 @@ ipcMain.handle('configure-ssh-host', async (
     if (probe.code !== 0) {
       return { ok: false, detail:
         'That host needs a password for sudo, which cannot be answered from here. '
-        + 'Run `podium configure` on it directly, once.' };
+        + 'Run `zeltro configure` on it directly, once.' };
     }
 
     const result = await exec.exec(['configure', '--non-interactive', '--json-output']);
@@ -1220,44 +1262,45 @@ ipcMain.handle('configure-ssh-host', async (
 // The renderer asks for commands by name. Rewrite the one command that is ours
 // and leave everything else (docker, git) alone — those genuinely are expected
 // to be on PATH, and silently rewriting them would hide a real misconfiguration.
-function resolveIfPodium(command: string, args: string[]): { command: string; args: string[] } {
-  if (command !== 'podium') return { command, args };
+function resolveIfZeltro(command: string, args: string[]): { command: string; args: string[] } {
+  if (command !== 'zeltro') return { command, args };
 
-  const podium = resolvePodium();
-  return { command: podium.command, args: [...podium.prefix, ...args] };
+  const zeltro = resolveZeltro();
+  return { command: zeltro.command, args: [...zeltro.prefix, ...args] };
 }
 
-// Read a single KEY=value out of Podium's config. Returns null when the file is
+// Read a single KEY=value out of Zeltro's config. Returns null when the file is
 // absent, the key is missing, or the value is empty.
 function readEnvValue(key: string): string | null {
   try {
-    if (!fs.existsSync(PODIUM_ENV_PATH)) return null;
+    const envPath = zeltroEnvPath();
+    if (!fs.existsSync(envPath)) return null;
 
-    const match = fs.readFileSync(PODIUM_ENV_PATH, 'utf8').match(new RegExp(`^${key}=(.*)$`, 'm'));
+    const match = fs.readFileSync(envPath, 'utf8').match(new RegExp(`^${key}=(.*)$`, 'm'));
     const value = match?.[1]?.trim().replace(/^["']|["']$/g, '') ?? '';
 
     return value === '' ? null : value;
   } catch (error) {
-    debugLog('Failed to read Podium config', { key, error: (error as Error).message });
+    debugLog('Failed to read Zeltro config', { key, error: (error as Error).message });
     return null;
   }
 }
 
-function checkPodiumStatus(): PodiumStatus {
+function checkZeltroStatus(): ZeltroStatus {
   try {
-    // Resolve rather than trusting PATH. This ran a bare `podium`, so on any
+    // Resolve rather than trusting PATH. This ran a bare `zeltro`, so on any
     // launch without /usr/local/bin on PATH — a .desktop entry, or a macOS app
-    // opened from Finder — it threw and the app decided Podium was not
+    // opened from Finder — it threw and the app decided Zeltro was not
     // installed, showing the installer instead of the dashboard. It is the
     // first decision the app makes, so getting it wrong replaces the whole UI.
-    const podium = resolvePodium();
-    execSync([...[podium.command, ...podium.prefix].map((part) => `'${part}'`), 'help', '--no-colors'].join(' '),
+    const zeltro = resolveZeltro();
+    execSync([...[zeltro.command, ...zeltro.prefix].map((part) => `'${part}'`), 'help', '--no-colors'].join(' '),
              { stdio: 'pipe' });
 
     // Installed. Configured means the env file exists AND names a projects
-    // directory — `podium configure` writes PROJECTS_DIR, and every project
+    // directory — `zeltro configure` writes PROJECTS_DIR, and every project
     // command depends on it.
-    if (!fs.existsSync(PODIUM_ENV_PATH)) {
+    if (!fs.existsSync(zeltroEnvPath())) {
       return 'not-configured';
     }
 
@@ -1293,19 +1336,19 @@ interface CommandResult {
   stderr: string;
 }
 
-// IPC handlers for communicating with Podium CLI
-ipcMain.handle('execute-podium-script', async (event: IpcMainInvokeEvent, scriptName: string, args: string[] = []): Promise<CommandResult> => {
+// IPC handlers for communicating with Zeltro CLI
+ipcMain.handle('execute-zeltro-script', async (event: IpcMainInvokeEvent, scriptName: string, args: string[] = []): Promise<CommandResult> => {
   return new Promise((resolve, reject) => {
-    if (!fs.existsSync(PODIUM_CLI_DIR)) {
-      reject(new Error('Podium CLI not found'));
+    if (!fs.existsSync(ZELTRO_CLI_DIR)) {
+      reject(new Error('Zeltro CLI not found'));
       return;
     }
 
     // Scripts live under src/scripts/, not scripts/.
-    const scriptPath: string = path.join(PODIUM_CLI_DIR, 'src', 'scripts', scriptName);
+    const scriptPath: string = path.join(ZELTRO_CLI_DIR, 'src', 'scripts', scriptName);
 
     const childProcess: ChildProcess = spawn('bash', [scriptPath, ...args], {
-      cwd: PODIUM_CLI_DIR,
+      cwd: ZELTRO_CLI_DIR,
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env, NO_COLOR: '1' }
     });
@@ -1335,7 +1378,7 @@ ipcMain.handle('execute-podium-script', async (event: IpcMainInvokeEvent, script
   });
 });
 
-// New handler for podium command
+// New handler for zeltro command
 // Function to refresh sudo timestamp for operations that need it
 async function refreshSudoTimestamp(): Promise<boolean> {
   return new Promise((resolve) => {
@@ -1362,10 +1405,10 @@ async function refreshSudoTimestamp(): Promise<boolean> {
   });
 }
 
-ipcMain.handle('execute-podium', async (event: IpcMainInvokeEvent, subcommand: string, args: string[] = []): Promise<CommandResult> => {
+ipcMain.handle('execute-zeltro', async (event: IpcMainInvokeEvent, subcommand: string, args: string[] = []): Promise<CommandResult> => {
   return new Promise(async (resolve, reject) => {
     // Commands that modify hosts file need sudo timestamp. `install` runs
-    // `podium setup` + `podium up` internally, so it needs one too.
+    // `zeltro setup` + `zeltro up` internally, so it needs one too.
     const sudoCommands = ['new', 'clone', 'setup', 'install'];
     if (sudoCommands.includes(subcommand)) {
       debugLog(`Command '${subcommand}' requires sudo, refreshing timestamp`);
@@ -1409,15 +1452,15 @@ ipcMain.handle('execute-podium', async (event: IpcMainInvokeEvent, subcommand: s
       });
 
       child.on('close', (code: number | null) => {
-        debugLog('Podium command finished', { subcommand, args, code });
+        debugLog('Zeltro command finished', { subcommand, args, code });
         resolve({ code: code ?? 1, stdout, stderr });
       });
 
       return child;
     };
 
-    const podium = resolvePodium();
-    const child: ChildProcess = run(podium.command, [...podium.prefix, ...allArgs]);
+    const zeltro = resolveZeltro();
+    const child: ChildProcess = run(zeltro.command, [...zeltro.prefix, ...allArgs]);
     child.on('error', (error: Error) => reject(error));
   });
 });
@@ -1433,7 +1476,7 @@ interface CatalogApp {
 // (src/scripts/build_catalog.sh), so it is read at runtime rather than
 // duplicated here — a hardcoded copy would rot on every installer change.
 ipcMain.handle('get-app-catalog', async (): Promise<{ apps: CatalogApp[]; error?: string }> => {
-  const catalogPath = path.join(PODIUM_CLI_DIR, 'src', 'catalog', 'apps.json');
+  const catalogPath = path.join(ZELTRO_CLI_DIR, 'src', 'catalog', 'apps.json');
 
   try {
     if (!fs.existsSync(catalogPath)) {
@@ -1458,7 +1501,7 @@ ipcMain.handle('get-app-catalog', async (): Promise<{ apps: CatalogApp[]; error?
 });
 
 // MinIO and Meilisearch are OPTIONAL shared services, off unless enabled per
-// machine with `podium enable-service`. `podium status` reports them as
+// machine with `zeltro enable-service`. `zeltro status` reports them as
 // "stopped" either way, which in the UI reads as "a service is down" rather
 // than "you never turned this on" — so the GUI filters them by what is actually
 // enabled in OPTIONAL_SERVICES.
@@ -1495,15 +1538,15 @@ function normaliseFrameworks(parsed: any): CatalogFramework[] {
 // offering it for a remote create would present frameworks that host may not
 // have, and the failure would arrive at creation time.
 //
-// The install directory is derived from the podium symlink rather than assumed:
-// script installs put it under /usr/local/share/podium-cli, the .deb under
-// /opt/podium-cli, and `readlink -f` on the binary resolves either.
+// The install directory is derived from the zeltro symlink rather than assumed:
+// script installs put it under /usr/local/share/zeltro-cli, the .deb under
+// /opt/zeltro-cli, and `readlink -f` on the binary resolves either.
 async function readRemoteCatalog(hostId: string, file: string): Promise<string | null> {
   const exec = executorFor(hostId) as any;
   if (typeof exec.execRaw !== 'function') return null;
 
   const result = await exec.execRaw(
-    `d=$(dirname "$(dirname "$(readlink -f /usr/local/bin/podium 2>/dev/null || readlink -f /usr/bin/podium)")")`
+    `d=$(dirname "$(dirname "$(readlink -f /usr/local/bin/zeltro 2>/dev/null || readlink -f /usr/bin/zeltro)")")`
     + `; cat "$d/src/catalog/${file}" 2>/dev/null || cat "$d/catalog/${file}" 2>/dev/null`);
 
   return result.code === 0 && result.stdout.trim().startsWith('{') ? result.stdout : null;
@@ -1526,7 +1569,7 @@ ipcMain.handle('get-framework-catalog', async (
     }
   }
 
-  const catalogPath = path.join(PODIUM_CLI_DIR, 'src', 'catalog', 'frameworks.json');
+  const catalogPath = path.join(ZELTRO_CLI_DIR, 'src', 'catalog', 'frameworks.json');
 
   try {
     if (!fs.existsSync(catalogPath)) {
@@ -1546,7 +1589,7 @@ ipcMain.handle('get-framework-catalog', async (
 
 // What the INSTALLED CLI actually supports, probed once.
 //
-// The cheap-models work lives on podium-cli `dev` and is not on its `master`,
+// The cheap-models work lives on zeltro-cli `dev` and is not on its `master`,
 // so a current install has no qwen and stores `--api-base none` as a literal
 // string. Offering qwen there produces an agent the CLI rejects. Rather than
 // couple the GUI's release to the CLI's, ask the CLI what it can do.
@@ -1555,7 +1598,7 @@ let cliCapabilities: { qwen: boolean; clearableEndpoint: boolean; unattended: bo
 ipcMain.handle('get-cli-capabilities', async (): Promise<{ qwen: boolean; clearableEndpoint: boolean; unattended: boolean }> => {
   if (cliCapabilities) return cliCapabilities;
 
-  const help = await runPodium(['ai-set', '--help']);
+  const help = await runZeltro(['ai-set', '--help']);
   const text = help.stdout + help.stderr;
 
   cliCapabilities = {
@@ -1575,7 +1618,7 @@ ipcMain.handle('get-cli-capabilities', async (): Promise<{ qwen: boolean; cleara
 
 // Does a freshly installed project actually serve anything?
 //
-// `podium install` exits 0 even when its readiness retries are exhausted — it
+// `zeltro install` exits 0 even when its readiness retries are exhausted — it
 // prints "returned HTTP 000 — it may still be initializing" and gives up, which
 // is the right call for a CLI that cannot wait forever. The GUI was reading only
 // the exit code, so a crash-looping app produced a green "installed" toast and a
@@ -1722,7 +1765,7 @@ ipcMain.handle('get-node-major', async (): Promise<number> => {
 // Returns 'unknown' on an older CLI that has no version command at all, which is
 // distinguishable from a real version and means "too old to say".
 ipcMain.handle('get-cli-version', async (): Promise<string> => {
-  const result = await runPodium(['version', '--json-output']);
+  const result = await runZeltro(['version', '--json-output']);
   if (result.code !== 0) return 'unknown';
 
   try {
@@ -1782,7 +1825,7 @@ ipcMain.handle('get-service-catalog', async (
     if (!Array.isArray(parsed.services)) {
       // An older CLI prints usage text here rather than JSON. Say so instead of
       // rendering an empty manager that looks like "no services exist".
-      return { always_on: [], services: [], error: 'This Podium CLI has no machine-readable service listing.' };
+      return { always_on: [], services: [], error: 'This Zeltro CLI has no machine-readable service listing.' };
     }
     return { always_on: parsed.always_on || [], services: parsed.services };
   } catch (error) {
@@ -1793,7 +1836,7 @@ ipcMain.handle('get-service-catalog', async (
 // Does this text name the host somewhere other than a comment?
 //
 // Found for real on a remote box: a compose comment reading "still resolved
-// podium-mariadb ... by name" made the guard report a project as depending on
+// zeltro-mariadb ... by name" made the guard report a project as depending on
 // MariaDB, which would have blocked disabling a service nothing used.
 function mentionedOutsideAComment(body: string, host: string): boolean {
   return body.split('\n').some((line) => {
@@ -1808,11 +1851,11 @@ function mentionedOutsideAComment(body: string, host: string): boolean {
 // Shared by the local scan and the remote grep so the two cannot disagree about
 // what "in use" means.
 const SERVICE_HOSTNAMES: Record<string, string> = {
-  mysql: 'podium-mariadb',
-  postgres: 'podium-postgres',
-  mongo: 'podium-mongo',
-  minio: 'podium-minio',
-  meilisearch: 'podium-meilisearch'
+  mysql: 'zeltro-mariadb',
+  postgres: 'zeltro-postgres',
+  mongo: 'zeltro-mongo',
+  minio: 'zeltro-minio',
+  meilisearch: 'zeltro-meilisearch'
 };
 
 // Same question as the local scan, asked over SSH. One grep per service across
@@ -1830,7 +1873,7 @@ async function servicesInUseRemote(hostId: string): Promise<Record<string, strin
   for (const [service, hostname] of Object.entries(SERVICE_HOSTNAMES)) {
     // `^[^#]*` refuses to cross a #, so a hostname mentioned in a comment does
     // not count. Found for real: a compose file whose comment reads "still
-    // resolved podium-mariadb ... by name" was reported as a project depending
+    // resolved zeltro-mariadb ... by name" was reported as a project depending
     // on MariaDB, which would have blocked disabling a service nothing used.
     const r = await exec.execRaw(
       `grep -rlE '^[^#]*${hostname}' '${dir}'/*/.env '${dir}'/*/docker-compose.y*ml 2>/dev/null | head -50`);
@@ -1848,7 +1891,7 @@ async function servicesInUseRemote(hostId: string): Promise<Record<string, strin
 //
 // Disabling a database a project is using leaves it unable to connect, and
 // nothing in the CLI stops that today. The compose files name the service
-// hostnames directly (DB_HOST: podium-mariadb and friends), so ask them rather
+// hostnames directly (DB_HOST: zeltro-mariadb and friends), so ask them rather
 // than inferring from the framework or trusting metadata.
 ipcMain.handle('get-services-in-use', async (
   _event: IpcMainInvokeEvent,
@@ -1875,7 +1918,7 @@ ipcMain.handle('get-services-in-use', async (
       if (!compose) continue;
 
       // Read .env as well as the compose file. A Laravel project names its
-      // database in .env (DB_HOST=podium-mariadb) and not in compose at all, so
+      // database in .env (DB_HOST=zeltro-mariadb) and not in compose at all, so
       // scanning compose alone found nothing on this machine — 12 of 15 local
       // projects declare DB_HOST there and every one was missed.
       let body = '';
@@ -1900,7 +1943,7 @@ ipcMain.handle('get-services-in-use', async (
 //
 // The build hand-off is a genuinely interactive agent session — it asks
 // clarifying questions and expects answers. Streaming a one-off would lose
-// that, so the GUI hosts a real pty and lets `podium ai` run in it exactly as
+// that, so the GUI hosts a real pty and lets `zeltro ai` run in it exactly as
 // it would in a terminal.
 // ---------------------------------------------------------------------------
 
@@ -1924,7 +1967,7 @@ ipcMain.handle('pty-start', async (
       ptySessions.delete(sessionId);
     }
 
-    const resolved = resolveIfPodium(command, args);
+    const resolved = resolveIfZeltro(command, args);
     const shell = pty.spawn(resolved.command, resolved.args, {
       name: 'xterm-color',
       cols: 100,
@@ -1958,7 +2001,7 @@ ipcMain.handle('pty-start', async (
 // A pty on a remote host, for an agent session on a remote project.
 //
 // Shawn's decision: a remote project runs its agent remotely. That is the only
-// coherent option — `podium resume` cds into the project directory and starts
+// coherent option — `zeltro resume` cds into the project directory and starts
 // the agent there, so the files, the container and the agent all live on the
 // same machine. Running the agent locally would mean an agent editing a
 // directory that does not exist here.
@@ -2059,11 +2102,11 @@ interface Classification {
   candidates: ClassifyCandidate[];
 }
 
-// Phase 1 of `podium create`, on its own. The CLI works out which stack fits and
+// Phase 1 of `zeltro create`, on its own. The CLI works out which stack fits and
 // returns JSON; the GUI renders the choices natively instead of the terminal
-// menus, then drives phase 2 with `podium install` / `podium new` directly.
+// menus, then drives phase 2 with `zeltro install` / `zeltro new` directly.
 //
-// Deliberately NOT `podium create` in one shot: that presents interactive menus
+// Deliberately NOT `zeltro create` in one shot: that presents interactive menus
 // a GUI cannot answer, and its non-interactive path silently takes the top
 // recommendation — which discards the user's choice, the whole point of asking.
 ipcMain.handle('classify-idea', async (event: IpcMainInvokeEvent, idea: string): Promise<Classification> => {
@@ -2083,16 +2126,16 @@ ipcMain.handle('classify-idea', async (event: IpcMainInvokeEvent, idea: string):
   // Confirm the CLI actually supports --classify-only before using it.
   //
   // This is not defensive padding. A CLI predating the flag does not reject it:
-  // it falls through to an ordinary `podium create --json-output`, which is
+  // it falls through to an ordinary `zeltro create --json-output`, which is
   // non-interactive, auto-picks the top recommendation and BUILDS THE PROJECT.
   // Observed on a machine running an older CLI — asking it to classify an idea
   // installed Gitea. The GUI and CLI ship separately, so this drift is normal
   // and has to be caught before the command runs, not after.
   if (!classifyOnlySupported) {
-    const help = await runPodium(['create', '--help']);
+    const help = await runZeltro(['create', '--help']);
     if (!/--classify-only/.test(help.stdout + help.stderr)) {
       return failure(
-        'This Podium CLI is too old to classify an idea safely — it has no ' +
+        'This Zeltro CLI is too old to classify an idea safely — it has no ' +
         '--classify-only flag, and running create would build a project ' +
         'straight away. Update the CLI, then try again.'
       );
@@ -2101,7 +2144,7 @@ ipcMain.handle('classify-idea', async (event: IpcMainInvokeEvent, idea: string):
   }
 
   // Classification is an AI round-trip — tens of seconds is normal.
-  const result = await runPodium(['create', '--classify-only', '--json-output', idea.trim()]);
+  const result = await runZeltro(['create', '--classify-only', '--json-output', idea.trim()]);
 
   // Judge by exit code, never by whether the output happens to parse.
   if (result.code !== 0) {
@@ -2123,12 +2166,12 @@ ipcMain.handle('classify-idea', async (event: IpcMainInvokeEvent, idea: string):
   }
 });
 
-// `podium create` is meaningless without an AI agent, and AI_AGENT is empty on a
+// `zeltro create` is meaningless without an AI agent, and AI_AGENT is empty on a
 // fresh install. ai-set reports it as JSON (its own --help documents this), so
 // there is no need to read the env file.
 // Full ai-set state, for the settings panel.
 ipcMain.handle('get-ai-agent-full', async (): Promise<any> => {
-  const result = await runPodium(['ai-set', '--json-output']);
+  const result = await runZeltro(['ai-set', '--json-output']);
   if (result.code !== 0) return { agent: '', model: '', api_base: '', has_api_key: false };
   try {
     return JSON.parse(result.stdout);
@@ -2170,19 +2213,19 @@ interface ProjectStatusResult {
 
 ipcMain.handle('get-project-status', async (): Promise<ProjectStatusResult> => {
   try {
-    const result = await ipcMain.emit('execute-podium-script', null, 'status.sh');
+    const result = await ipcMain.emit('execute-zeltro-script', null, 'status.sh');
     return { error: 'Not implemented' }; // This function needs proper implementation
   } catch (error) {
     return { error: (error as Error).message };
   }
 });
 
-ipcMain.handle('select-podium-directory', async (): Promise<string | null> => {
+ipcMain.handle('select-zeltro-directory', async (): Promise<string | null> => {
   if (!mainWindow) return null;
   
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openDirectory'],
-    title: 'Select Podium CLI Directory'
+    title: 'Select Zeltro CLI Directory'
   });
   
   if (!result.canceled && result.filePaths.length > 0) {
@@ -2203,7 +2246,7 @@ ipcMain.handle('execute-command', async (event: IpcMainInvokeEvent, command: str
   return new Promise((resolve, reject) => {
     debugLog('Executing command', { command, args, options });
 
-    const resolved = resolveIfPodium(command, args);
+    const resolved = resolveIfZeltro(command, args);
     const process: ChildProcess = spawn(resolved.command, resolved.args, {
       stdio: ['pipe', 'pipe', 'pipe'],
       ...options
@@ -2246,9 +2289,9 @@ ipcMain.handle('execute-command-stream', async (event: IpcMainInvokeEvent, comma
     debugLog('Executing command stream', { command, args, options });
     
     // Create temp file for progress tracking
-    const tempFile = `/tmp/podium-progress-${Date.now()}.log`;
+    const tempFile = `/tmp/zeltro-progress-${Date.now()}.log`;
     
-    const resolved = resolveIfPodium(command, args);
+    const resolved = resolveIfZeltro(command, args);
     const childProcess: ChildProcess = spawn(resolved.command, resolved.args, {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env, NO_COLOR: '1' },
@@ -2515,16 +2558,16 @@ interface ProjectMetadata {
   // backfill, and inventing a timestamp would be worse than an absent one.
   // Optional because the GUI's write path never supplies it.
   last_on?: string;
-  // Parked, not deleted. Written by `podium disable` / `podium enable`.
+  // Parked, not deleted. Written by `zeltro disable` / `zeltro enable`.
   // ONLY the exact string "disabled" disables — missing, empty or anything
   // unrecognised means enabled, so a project can never become unusable
   // because a read returned something unexpected.
   status?: string;
 }
 
-// Resolve the projects directory from Podium's own config rather than guessing
-// at a list of candidate paths. `podium projects-dir` prints the same value.
-// The projects directory on a given host. `podium projects-dir` prints it, and
+// Resolve the projects directory from Zeltro's own config rather than guessing
+// at a list of candidate paths. `zeltro projects-dir` prints the same value.
+// The projects directory on a given host. `zeltro projects-dir` prints it, and
 // a remote host's is whatever ITS config says — not this machine's.
 ipcMain.handle('get-projects-dir-on', async (
   _event: IpcMainInvokeEvent,
@@ -2539,14 +2582,14 @@ function getProjectsDir(): string {
   return readEnvValue('PROJECTS_DIR') ?? path.join(os.homedir(), 'podium-projects');
 }
 
-// Run a podium subcommand and collect its text output. The service panels use
+// Run a zeltro subcommand and collect its text output. The service panels use
 // this rather than driving docker directly, so custom container names and any
 // future CLI fixes are picked up for free.
 // ---------------------------------------------------------------------------
 // Executors
 //
-// One interface over "run a podium command", with a local and an SSH
-// implementation. Everything that shells out to podium goes through this, so
+// One interface over "run a zeltro command", with a local and an SSH
+// implementation. Everything that shells out to zeltro goes through this, so
 // remote support is a matter of which executor a call gets rather than a second
 // code path beside every existing one.
 //
@@ -2570,12 +2613,12 @@ interface Executor {
 
 class LocalExecutor implements Executor {
   readonly label = 'local';
-  exec(args: string[]): Promise<CommandResult> { return runPodium(args); }
+  exec(args: string[]): Promise<CommandResult> { return runZeltro(args); }
 
   execStream(args: string[], onData: (chunk: string) => void): Promise<CommandResult> {
     return new Promise((resolve) => {
-      const podium = resolvePodium();
-      const child = spawn(podium.command, [...podium.prefix, ...args], {
+      const zeltro = resolveZeltro();
+      const child = spawn(zeltro.command, [...zeltro.prefix, ...args], {
         cwd: os.homedir(),
         stdio: ['pipe', 'pipe', 'pipe'],
         env: { ...process.env, NO_COLOR: '1' }
@@ -2610,12 +2653,12 @@ class SshExecutor implements Executor {
     this.label = profile.label || profile.host;
   }
 
-  // Absolute podium path, and an explicit PATH for the processes podium itself
+  // Absolute zeltro path, and an explicit PATH for the processes zeltro itself
   // spawns. Both are required and for different reasons — see
-  // REMOTE_PODIUM_CANDIDATES and REMOTE_PATH_PREFIX. Shared by exec and
+  // REMOTE_ZELTRO_CANDIDATES and REMOTE_PATH_PREFIX. Shared by exec and
   // execStream so the two cannot drift apart on either point.
-  private podiumCommand(args: string[]): string {
-    const bin = this.profile.podiumPath || REMOTE_PODIUM_CANDIDATES[0];
+  private zeltroCommand(args: string[]): string {
+    const bin = this.profile.zeltroPath || REMOTE_ZELTRO_CANDIDATES[0];
     const quoted = args.map((a) => `'${a.replace(/'/g, `'\\''`)}'`).join(' ');
     return `${REMOTE_PATH_PREFIX} NO_COLOR=1 ${bin} ${quoted}`;
   }
@@ -2663,7 +2706,7 @@ class SshExecutor implements Executor {
     }
 
     return new Promise((resolve) => {
-      conn.exec(this.podiumCommand(args), (err: any, stream: any) => {
+      conn.exec(this.zeltroCommand(args), (err: any, stream: any) => {
         if (err) return resolve({ code: 1, stdout: '', stderr: `${this.label}: ${err.message}` });
 
         let stdout = '';
@@ -2686,7 +2729,7 @@ class SshExecutor implements Executor {
     }
 
     return new Promise((resolve) => {
-      conn.exec(this.podiumCommand(args), (err: any, stream: any) => {
+      conn.exec(this.zeltroCommand(args), (err: any, stream: any) => {
         if (err) return resolve({ code: 1, stdout: '', stderr: `${this.label}: ${err.message}` });
 
         let stdout = '';
@@ -2703,14 +2746,14 @@ class SshExecutor implements Executor {
   /**
    * An interactive pty on the remote host.
    *
-   * `pty: true` matters: `podium resume` starts an AI agent, which needs a
+   * `pty: true` matters: `zeltro resume` starts an AI agent, which needs a
    * terminal to render into and to read keystrokes from. Without it the agent
    * sees a pipe, and most of them refuse to run interactively at all.
    */
   async openPty(cwd: string, command: string, args: string[]): Promise<any> {
     const conn = await this.connect();
-    const bin = command === 'podium'
-      ? (this.profile.podiumPath || REMOTE_PODIUM_CANDIDATES[0])
+    const bin = command === 'zeltro'
+      ? (this.profile.zeltroPath || REMOTE_ZELTRO_CANDIDATES[0])
       : command;
     const quoted = args.map((a) => `'${a.replace(/'/g, `'\\''`)}'`).join(' ');
     const full = `cd ${JSON.stringify(cwd)} && ${REMOTE_PATH_PREFIX} ${bin} ${quoted}`;
@@ -2749,7 +2792,7 @@ class SshExecutor implements Executor {
     });
   }
 
-  /** Run a raw command rather than a podium subcommand. Used for probes. */
+  /** Run a raw command rather than a zeltro subcommand. Used for probes. */
   async execRaw(command: string): Promise<CommandResult> {
     let conn;
     try {
@@ -2814,8 +2857,8 @@ function disposeExecutors(): void {
   executors.clear();
 }
 
-// Run a podium command on a named host. `local` is the local install.
-ipcMain.handle('execute-podium-on', async (
+// Run a zeltro command on a named host. `local` is the local install.
+ipcMain.handle('execute-zeltro-on', async (
   _event: IpcMainInvokeEvent,
   hostId: string,
   subcommand: string,
@@ -2824,7 +2867,7 @@ ipcMain.handle('execute-podium-on', async (
 
 // Streaming variant. Emits on the same channel the local streaming path uses,
 // so the renderer's progress panes need no knowledge of which host is running.
-ipcMain.handle('execute-podium-stream-on', async (
+ipcMain.handle('execute-zeltro-stream-on', async (
   event: IpcMainInvokeEvent,
   hostId: string,
   subcommand: string,
@@ -2832,15 +2875,15 @@ ipcMain.handle('execute-podium-stream-on', async (
 ): Promise<CommandResult> => {
   return executorFor(hostId).execStream([subcommand, ...args], (chunk) => {
     if (!event.sender.isDestroyed()) {
-      event.sender.send('command-stream-data', { type: 'stdout', data: chunk, command: 'podium' });
+      event.sender.send('command-stream-data', { type: 'stdout', data: chunk, command: 'zeltro' });
     }
   });
 });
 
-function runPodium(args: string[]): Promise<CommandResult> {
+function runZeltro(args: string[]): Promise<CommandResult> {
   return new Promise((resolve) => {
-    const podium = resolvePodium();
-    const child = spawn(podium.command, [...podium.prefix, ...args], {
+    const zeltro = resolveZeltro();
+    const child = spawn(zeltro.command, [...zeltro.prefix, ...args], {
       cwd: os.homedir(),
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env, NO_COLOR: '1' }
@@ -2894,13 +2937,13 @@ function composePathFor(projectName: string): string | null {
   return fs.existsSync(composePath) ? composePath : null;
 }
 
-// Display metadata is no longer read here. `podium status --json-output` carries
+// Display metadata is no longer read here. `zeltro status --json-output` carries
 // it per project (CLI 36109a7), so the GUI parses it alongside operational state
 // instead of opening each project's docker-compose.yaml. That removed a
 // per-project filesystem read, the cache it fed, and the two bugs that existed
 // only because the two arrived by different routes.
 
-// Metadata writes go through `podium set-metadata` (CLI 36109a7) rather than
+// Metadata writes go through `zeltro set-metadata` (CLI 36109a7) rather than
 // editing docker-compose.yaml here.
 //
 // The careful part — replacing only the three keys the GUI owns and leaving the
@@ -2922,7 +2965,7 @@ ipcMain.handle('update-project-metadata', async (
   if (metadata.display_name) args.push('--name', metadata.display_name);
   if (metadata.description) args.push('--description', metadata.description);
 
-  const result = await runPodium(args);
+  const result = await runZeltro(args);
   if (result.code !== 0) {
     return { success: false, error: result.stderr || result.stdout || 'set-metadata failed' };
   }
@@ -2933,7 +2976,7 @@ ipcMain.handle('update-project-metadata', async (
 ipcMain.handle("get-service-stats", async (event: IpcMainInvokeEvent, serviceName: string): Promise<{ success: boolean; stats?: any; error?: string }> => {
   try {
     if (serviceName === "memcached") {
-      const memcached = await runPodium(["memcache-stats"]);
+      const memcached = await runZeltro(["memcache-stats"]);
       if (memcached.code !== 0) {
         return { success: false, error: memcached.stderr || "Failed to get stats" };
       }
@@ -2944,7 +2987,7 @@ ipcMain.handle("get-service-stats", async (event: IpcMainInvokeEvent, serviceNam
       return { success: false, error: "Unsupported service" };
     }
 
-    const result = await runPodium(["redis", "INFO"]);
+    const result = await runZeltro(["redis", "INFO"]);
     
     if (result.code !== 0) {
       return { success: false, error: result.stderr || "Failed to get stats" };
@@ -2992,7 +3035,7 @@ ipcMain.handle("flush-service-data", async (event: IpcMainInvokeEvent, serviceNa
       return { success: false, error: "Unsupported service" };
     }
 
-    const result = await runPodium([serviceName === "redis" ? "redis-flush" : "memcache-flush"]);
+    const result = await runZeltro([serviceName === "redis" ? "redis-flush" : "memcache-flush"]);
 
     if (result.code !== 0) {
       return { success: false, error: result.stderr || "Failed to flush data" };
