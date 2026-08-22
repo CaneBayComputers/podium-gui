@@ -654,7 +654,12 @@ async function run() {
     // A bright gradient behind white text is close to unreadable; the other
     // themes use darker fills where white is right, so this is scoped.
     check('Create with AI reads as black on the bright themes',
-      /:root\[data-theme="zeltro"\] \.btn-create,\s*:root\[data-theme="matrix"\] \.btn-create \{\s*color: #000/.test(splashCss));
+      /:root\[data-theme="zeltro"\] \.header-actions \.btn-create/.test(splashCss));
+    // .btn-create is also the tile's Modify with AI, a transparent outline
+    // button — an unscoped rule beat the one giving it its colour and forced
+    // black onto a see-through background.
+    check('the tile buttons keep their own colour',
+      !/:root\[data-theme="(zeltro|matrix)"\] \.btn-create[ ,{]/.test(splashCss));
 
     // --- General settings ---------------------------------------------------
     await win.evaluate(() => {

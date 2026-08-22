@@ -2463,8 +2463,8 @@ span.status-indicator {
     filter: brightness(1.15);
 }
 
-:root[data-theme="zeltro"] .btn-create,
-:root[data-theme="matrix"] .btn-create {
+:root[data-theme="zeltro"] .header-actions .btn-create,
+:root[data-theme="matrix"] .header-actions .btn-create {
     color: #000;
 }
 
