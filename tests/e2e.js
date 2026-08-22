@@ -521,9 +521,11 @@ async function run() {
     // Off until asked for, because turning it on downloads 150MB.
     check('dictation is off until enabled',
       await win.evaluate(() => window.__dictationEnabled()) === false);
-    const micsHidden = await win.evaluate(() =>
-      [...document.querySelectorAll('.mic-button')].every((b) => b.style.display === 'none'));
-    check('mic buttons are hidden while dictation is off', micsHidden);
+    const micsOff = await win.evaluate(() =>
+      [...document.querySelectorAll('.mic-button')].every(
+        (b) => b.disabled && b.classList.contains('mic-button-off')
+               && getComputedStyle(b).display !== 'none'));
+    check('mic buttons are shown but disabled while dictation is off', micsOff);
 
     // The resampler is arithmetic, so it can be checked exactly rather than
     // listened to: one second at 48k must become exactly 16000 samples, and a
@@ -660,6 +662,47 @@ async function run() {
     // black onto a see-through background.
     check('the tile buttons keep their own colour',
       !/:root\[data-theme="(zeltro|matrix)"\] \.btn-create[ ,{]/.test(splashCss));
+
+    // Dictation has two settings and they pick between four models. Whisper
+    // ships an English-only variant and a multilingual one at each size — not a
+    // model per language — so the choice is English or not, and the .en model is
+    // the same download while being better at English.
+    const dictModels = await win.evaluate(() => {
+      const before = [localStorage.getItem('zeltro-dictation-quality'),
+                      localStorage.getItem('zeltro-dictation-multilingual')];
+      const out = {};
+      for (const q of ['good', 'best']) {
+        for (const m of ['off', 'on']) {
+          localStorage.setItem('zeltro-dictation-quality', q);
+          localStorage.setItem('zeltro-dictation-multilingual', m);
+          out[`${q}-${m === 'on' ? 'multi' : 'en'}`] = window.__dictationModelId();
+        }
+      }
+      // Restore, so this does not decide what the rest of the run uses.
+      if (before[0] === null) localStorage.removeItem('zeltro-dictation-quality');
+      else localStorage.setItem('zeltro-dictation-quality', before[0]);
+      if (before[1] === null) localStorage.removeItem('zeltro-dictation-multilingual');
+      else localStorage.setItem('zeltro-dictation-multilingual', before[1]);
+      return out;
+    });
+    check('each quality and language pair selects the right model',
+      dictModels['good-en'] === 'Xenova/whisper-base.en'
+      && dictModels['good-multi'] === 'Xenova/whisper-base'
+      && dictModels['best-en'] === 'Xenova/whisper-small.en'
+      && dictModels['best-multi'] === 'Xenova/whisper-small',
+      JSON.stringify(dictModels));
+
+    // Greyed rather than hidden: hiding it meant the compose box quietly had a
+    // different set of buttons depending on a setting three tabs away, and
+    // nothing on screen said the feature existed.
+    const micSrc = require('fs').readFileSync(
+      require('path').join(require('./helpers').ROOT, 'src/renderer.ts'), 'utf8');
+    const micBlock = micSrc.slice(micSrc.indexOf('function refreshMicButtons'),
+                                 micSrc.indexOf('function refreshMicButtons') + 900);
+    check('the mic button is disabled rather than hidden when dictation is off',
+      /button\.disabled = !ready/.test(micBlock) && !/style\.display = show/.test(micBlock));
+    check('the disabled mic says where to turn dictation on',
+      /turn it on in Settings/.test(micBlock));
 
     // --- General settings ---------------------------------------------------
     await win.evaluate(() => {

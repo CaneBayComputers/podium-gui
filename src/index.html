@@ -476,6 +476,26 @@
                         </label>
                     </div>
 
+                    <div class="form-group">
+                        <label for="dictation-quality">Dictation quality</label>
+                        <select id="dictation-quality" data-testid="dictation-quality"
+                                onchange="setDictationQuality(this.value)">
+                            <option value="good">Good — 180 MB</option>
+                            <option value="best">Best — 547 MB</option>
+                        </select>
+                        <span class="form-help">Best is more accurate with accents or background noise, and slower.</span>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="dictation-language">Language</label>
+                        <select id="dictation-language" data-testid="dictation-language"
+                                onchange="setDictationLanguageMode(this.value === 'multi')">
+                            <option value="en">English</option>
+                            <option value="multi">Multilingual</option>
+                        </select>
+                        <span class="form-help">English is more accurate for English. Same download size.</span>
+                    </div>
+
                     <div id="dictation-status" data-testid="dictation-status"></div>
 
                     <div id="dictation-device-group" class="form-group" style="display: none;">
@@ -671,9 +691,9 @@
                             <label for="create-idea">What do you want to build?</label>
                             <textarea id="create-idea" rows="3" data-testid="create-idea"
                                       placeholder="e.g. track which guitar pedals I have lent out to friends"></textarea>
-                            <button class="btn btn-secondary btn-small mic-button" type="button"
+                            <button class="btn btn-secondary btn-small mic-button mic-button-off" type="button"
                                     data-testid="create-idea-mic" title="Dictate"
-                                    style="display: none;" onclick="toggleDictation(this)">🎤 Dictate</button>
+                                    disabled onclick="toggleDictation(this)">🎤 Dictate</button>
                             <span class="form-help">Plain English. Zeltro works out the stack and builds it.</span>
                             <div class="field-error" id="create-idea-error"></div>
                         </div>

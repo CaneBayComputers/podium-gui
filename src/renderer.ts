@@ -2914,6 +2914,10 @@ async function showSettings(tab: 'appearance' | 'layout' | 'hosts' | 'ai' = 'app
 
     const dictBox = document.getElementById('dictation-enabled') as HTMLInputElement | null;
     if (dictBox) dictBox.checked = dictationEnabled();
+    const qualityBox = document.getElementById('dictation-quality') as HTMLSelectElement | null;
+    if (qualityBox) qualityBox.value = dictationQuality();
+    const langBox = document.getElementById('dictation-language') as HTMLSelectElement | null;
+    if (langBox) langBox.value = dictationMultilingual() ? 'multi' : 'en';
     // Enabled but not loaded means a restart happened; bring it back rather
     // than showing a ticked box above an empty panel.
     if (dictationEnabled() && !whisperPipeline && dictationState !== 'downloading') {
@@ -3286,6 +3290,7 @@ let chosenCandidate: ClassifyCandidate | null = null;
 let currentIdea = '';
 
 async function showCreateWithAI(): Promise<void> {
+    refreshMicButtons();
     classification = null;
     chosenCandidate = null;
     currentIdea = '';
@@ -3978,7 +3983,63 @@ async function githubSignOut(): Promise<void> {
 // dictation is slow and later ones are not. Loading it at startup would make
 // every launch pay for a feature most sessions never touch.
 
-// Off until someone turns it on, because turning it on costs a 150MB download.
+// Which speech model to use. Named for the result rather than the model, since
+// "base" and "small" say nothing about the trade being made.
+//
+// Both are English-only: the .en variants are trained on English alone, which is
+// what makes them this accurate at this size.
+const DICTATION_MODELS: Record<string, { base: string; mb: number }> = {
+    good: { base: 'Xenova/whisper-base',  mb: 180 },
+    best: { base: 'Xenova/whisper-small', mb: 547 }
+};
+
+function dictationQuality(): 'good' | 'best' {
+    return storedSetting('zeltro-dictation-quality') === 'best' ? 'best' : 'good';
+}
+
+// English or multilingual, because that is the only choice there is: Whisper
+// ships an English-only variant and one covering 99 languages, not a model per
+// language. The multilingual one detects the language itself.
+function dictationMultilingual(): boolean {
+    return storedSetting('zeltro-dictation-multilingual') === 'on';
+}
+
+// The .en model is the same download as the multilingual one and more accurate
+// on English, having spent none of its capacity on the other 98 languages. So
+// English is a free upgrade rather than a restriction.
+function dictationModelId(): string {
+    const model = DICTATION_MODELS[dictationQuality()]!;
+    return dictationMultilingual() ? model.base : `${model.base}.en`;
+}
+
+
+async function setDictationLanguageMode(multilingual: boolean): Promise<void> {
+    if (multilingual === dictationMultilingual()) return;
+    localStorage.setItem('zeltro-dictation-multilingual', multilingual ? 'on' : 'off');
+    await reloadSpeechModel();
+}
+
+// Shared by both settings: each switches which model is loaded, so the one in
+// memory is the wrong one either way.
+async function reloadSpeechModel(): Promise<void> {
+    try { await whisperPipeline?.dispose?.(); } catch { /* nothing to free */ }
+    whisperPipeline = null;
+    whisperLoading = null;
+    refreshMicButtons();
+    // Only if dictation is already on: changing a setting should not trigger a
+    // download nobody asked for.
+    if (dictationEnabled()) await restoreDictation();
+    renderDictationStatus();
+}
+
+async function setDictationQuality(quality: string): Promise<void> {
+    if (quality !== 'good' && quality !== 'best') return;
+    if (quality === dictationQuality()) return;
+    localStorage.setItem('zeltro-dictation-quality', quality);
+    await reloadSpeechModel();
+}
+
+// Off until someone turns it on, because turning it on costs a download.
 // A feature that quietly downloads that on first click is a feature that
 // surprises people on a metered connection.
 function dictationEnabled(): boolean {
@@ -4181,12 +4242,23 @@ function renderDictationStatus(): void {
 }
 
 // Mic buttons exist only when dictation is on and ready. A button that responds
-// to a click with "go and enable this first" is a worse version of not being
-// there.
+// Greyed out rather than hidden when dictation is off.
+//
+// Hiding it meant the compose box quietly had a different set of buttons
+// depending on a setting three tabs away, and nothing on screen said the
+// feature existed. A disabled control is discoverable; an absent one is not.
 function refreshMicButtons(): void {
-    const show = dictationEnabled() && Boolean(whisperPipeline);
+    const ready = dictationEnabled() && Boolean(whisperPipeline);
     document.querySelectorAll('.mic-button').forEach((b) => {
-        (b as HTMLElement).style.display = show ? '' : 'none';
+        const button = b as HTMLButtonElement;
+        button.style.display = '';
+        button.disabled = !ready;
+        button.classList.toggle('mic-button-off', !ready);
+        button.title = ready
+            ? 'Dictate'
+            : dictationEnabled()
+                ? 'Preparing the speech model…'
+                : 'Dictation is off — turn it on in Settings';
     });
 }
 
@@ -4205,7 +4277,7 @@ async function loadWhisper(onProgress?: (msg: string) => void): Promise<any> {
         // missing file rather than a download.
         env.allowLocalModels = false;
 
-        const pipe = await pipeline('automatic-speech-recognition', 'Xenova/whisper-base.en', {
+        const pipe = await pipeline('automatic-speech-recognition', dictationModelId(), {
             progress_callback: (p: any) => {
                 if (p.status === 'progress' && p.total) {
                     onProgress?.(`Downloading speech model ${Math.round((p.loaded / p.total) * 100)}%`);
@@ -5761,6 +5833,10 @@ async function submitEditProject(): Promise<void> {
 (window as any).dismissTileNotice = dismissTileNotice;
 (window as any).__resampleTo16k = resampleTo16k;
 (window as any).setDictationEnabled = setDictationEnabled;
+(window as any).setDictationQuality = setDictationQuality;
+(window as any).setDictationLanguageMode = setDictationLanguageMode;
+(window as any).__dictationModelId = dictationModelId;
+(window as any).__dictationQuality = dictationQuality;
 (window as any).setGithubHost = setGithubHost;
 (window as any).loadGithubStatus = loadGithubStatus;
 (window as any).githubSignIn = githubSignIn;

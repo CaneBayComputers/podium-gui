@@ -2018,6 +2018,13 @@ span.status-indicator {
     .splash-reveal { animation: none; height: 190px; }
 }
 
+/* The mic when dictation is off: present but plainly unavailable, so the button
+   is discoverable and its tooltip can say where to turn it on. */
+.mic-button-off {
+    opacity: 0.35;
+    cursor: not-allowed;
+}
+
 .brand-row {
     display: flex;
     align-items: center;
