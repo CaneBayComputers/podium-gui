@@ -841,19 +841,7 @@
         <div id="initial-loading" class="initial-loading">
             <div class="initial-loading-content">
                 <div class="splash-robot" data-testid="splash-robot">
-                    <img src="../assets/logo-380.png" alt="" width="190" height="190"
-                         class="splash-robot-base">
-                    <!--
-                        Five offset copies, shown one or two at a time in short
-                        bursts with the solid robot visible between them. All are
-                        aria-hidden and every copy carries alt="" — six pictures
-                        of one robot should announce as nothing at all.
-                    -->
-                    <img src="../assets/logo-380.png" alt="" aria-hidden="true" class="ghost g1" width="190" height="190">
-                    <img src="../assets/logo-380.png" alt="" aria-hidden="true" class="ghost g2" width="190" height="190">
-                    <img src="../assets/logo-380.png" alt="" aria-hidden="true" class="ghost g3" width="190" height="190">
-                    <img src="../assets/logo-380.png" alt="" aria-hidden="true" class="ghost g4" width="190" height="190">
-                    <img src="../assets/logo-380.png" alt="" aria-hidden="true" class="ghost g5" width="190" height="190">
+                    <div class="splash-reveal"></div>
                 </div>
                 <h2>Loading Zeltro</h2>
                 <p>Initializing your development environment...</p>

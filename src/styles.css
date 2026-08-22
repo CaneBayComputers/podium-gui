@@ -1979,121 +1979,43 @@ span.status-indicator {
  *
  * Decorative — alt="" — because the <h1> beside it already says the name, and a
  * screen reader announcing "Zeltro Zeltro" is worse than silence. */
-/* Splash robot: bursts of offset copies, alternating with the solid robot.
+/* Splash robot, revealed top-down on a loop.
  *
- * During a burst the CENTRED copy is hidden and only the offset ones show, so
- * the robot appears to break apart rather than gain a halo. Between bursts the
- * solid robot is the only thing visible. Scattered, whole, scattered, whole.
+ * The robot is a BACKGROUND on a box that grows downward. The background is a
+ * fixed size and anchored to the top, so it does not scale with the box — the
+ * box growing uncovers more of a stationary image rather than stretching one.
+ * That is the whole trick; background-size: cover would squash him instead.
  *
- * It LOOPS. An earlier version resolved to a still robot, on the reasoning that
- * a permanent effect reads as broken — but the splash is only on screen while
- * something is loading, and a still robot above "Loading Zeltro" reads as
- * frozen. The animation stopping should mean the app is ready, and the splash
- * being replaced already says that.
- *
- * 0.7s. Longer versions read as a sequence to sit through rather than as
- * something busy happening.
- *
- * steps(1, end) throughout: each state snaps. An eased glitch is a wobble.
- *
- * No mix-blend-mode. It forces each ghost into its own compositing layer, and
- * cycling five of those made Chromium flash the whole window white.
+ * The outer box keeps its full height so the text below does not move as the
+ * inner one grows.
  */
 .splash-robot {
-    position: relative;
     width: 190px;
     height: 190px;
     margin: 0 auto 1.25rem;
 }
 
-.splash-robot img {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
+.splash-reveal {
+    width: 190px;
+    height: 0;
+    background-image: url('../assets/logo-380.png');
+    background-size: 190px 190px;
+    background-position: top center;
+    background-repeat: no-repeat;
+    animation: splash-reveal 2.4s ease-in-out infinite;
 }
 
-.splash-robot-base {
-    position: relative;
-    animation: splash-base 0.7s steps(1, end) infinite;
+/* Grows, holds him whole for a beat, then starts over. The hold matters: without
+   it the reveal reads as a flicker rather than as something being uncovered. */
+@keyframes splash-reveal {
+    0%        { height: 0; }
+    65%       { height: 190px; }
+    100%      { height: 190px; }
 }
 
-.ghost {
-    opacity: 0;
-    animation-duration: 0.7s;
-    animation-timing-function: steps(1, end);
-    animation-iteration-count: infinite;
-}
-
-.g1 { transform: translate(-11px,  -6px); animation-name: ghost-1; }
-.g2 { transform: translate( 10px,   5px); animation-name: ghost-2; }
-.g3 { transform: translate( -8px,   9px); animation-name: ghost-3; }
-.g4 { transform: translate( 12px,  -4px); animation-name: ghost-4; }
-.g5 { transform: translate( -5px, -10px); animation-name: ghost-5; }
-
-/* Four bursts per cycle: 0-10%, 22-32%, 44-54%, 66-76%. Every burst is a PAIR,
-   so the scattered frames read as displacement rather than as one copy sliding
-   sideways. The base is dark for each and visible in every gap. */
-@keyframes splash-base {
-    0%, 10%   { opacity: 0; }
-    11%, 21%  { opacity: 1; }
-    22%, 32%  { opacity: 0; }
-    33%, 43%  { opacity: 1; }
-    44%, 54%  { opacity: 0; }
-    55%, 65%  { opacity: 1; }
-    66%, 76%  { opacity: 0; }
-    77%, 100% { opacity: 1; }
-}
-
-/* bursts 1 and 3 */
-@keyframes ghost-1 {
-    0%, 10%   { opacity: .55; }
-    11%, 43%  { opacity: 0; }
-    44%, 54%  { opacity: .45; }
-    55%, 100% { opacity: 0; }
-}
-
-/* bursts 1 and 4 */
-@keyframes ghost-2 {
-    0%, 10%   { opacity: .4; }
-    11%, 65%  { opacity: 0; }
-    66%, 76%  { opacity: .5; }
-    77%, 100% { opacity: 0; }
-}
-
-/* bursts 2 and 4 */
-@keyframes ghost-3 {
-    0%, 21%   { opacity: 0; }
-    22%, 32%  { opacity: .6; }
-    33%, 65%  { opacity: 0; }
-    66%, 76%  { opacity: .35; }
-    77%, 100% { opacity: 0; }
-}
-
-/* burst 2 */
-@keyframes ghost-4 {
-    0%, 21%   { opacity: 0; }
-    22%, 32%  { opacity: .38; }
-    33%, 100% { opacity: 0; }
-}
-
-/* burst 3 */
-@keyframes ghost-5 {
-    0%, 43%   { opacity: 0; }
-    44%, 54%  { opacity: .42; }
-    55%, 100% { opacity: 0; }
-}
-
-/* Someone who asked the system not to animate things gets the solid robot and
-   nothing moving. A looping glitch is exactly the motion that setting is for. */
+/* Someone who asked the system not to animate things gets the whole robot. */
 @media (prefers-reduced-motion: reduce) {
-    .ghost { animation: none; opacity: 0; }
-    .splash-robot-base { animation: none; opacity: 1; }
-}
-
-/* The gh version sits directly above the buttons, which crowded them. */
-.gh-version {
-    margin-bottom: 1rem;
+    .splash-reveal { animation: none; height: 190px; }
 }
 
 .brand-row {
@@ -2539,6 +2461,11 @@ span.status-indicator {
 
 .btn-create:hover {
     filter: brightness(1.15);
+}
+
+:root[data-theme="zeltro"] .btn-create,
+:root[data-theme="matrix"] .btn-create {
+    color: #000;
 }
 
 #new-project-modal .modal-content,

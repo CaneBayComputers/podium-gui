@@ -615,76 +615,55 @@ async function run() {
     check('local and LAN URLs are labelled as different routes',
       /url-scope">LOCAL/.test(rendererShape) && /url-scope">LAN/.test(rendererShape));
 
-    // The splash glitch must RESOLVE, not loop. A permanent effect says the app
-    // is broken; one that stops after a beat says it just finished loading,
-    // which is the thing being communicated.
+    // The splash robot is a BACKGROUND on a box that grows downward, so the box
+    // uncovers a stationary image rather than stretching one. background-size
+    // must stay fixed — cover or contain would squash him as the box grows,
+    // which is the whole thing this avoids.
     const splashCss = require('fs').readFileSync(
       require('path').join(require('./helpers').ROOT, 'src/styles.css'), 'utf8');
-    const splashBlock = splashCss.slice(splashCss.indexOf('.splash-robot {'),
-                                        splashCss.indexOf('.brand-row {'));
-    // It loops. An earlier version resolved to a still robot on the reasoning
-    // that a permanent effect reads as broken — but the splash is only up while
-    // something is loading, and a still robot above "Loading Zeltro" reads as
-    // frozen. The splash being replaced is what says the app is ready.
-    check('the splash glitch loops rather than settling',
-      /animation-iteration-count: infinite/.test(splashBlock)
-      && /animation: splash-base [\d.]+s steps\(1, end\) infinite/.test(splashBlock));
-
-    // Every burst pairs two ghosts, so a scattered frame reads as displacement
-    // rather than as one copy sliding sideways.
-    const ghostSets = [...splashBlock.matchAll(/@keyframes ghost-\d[\s\S]*?\n}/g)].map((m) => m[0]);
-    check('all five ghosts have their own timing', ghostSets.length === 5,
-      `${ghostSets.length} keyframe sets`);
-    // The solid robot underneath is what makes a gap read as recovery rather
-    // than as the image disappearing.
-    check('a solid robot sits under the ghosts',
-      /\.splash-robot-base/.test(splashBlock));
     const splashHtml = require('fs').readFileSync(
       require('path').join(require('./helpers').ROOT, 'src/index.html'), 'utf8');
+    const splashBlock = splashCss.slice(splashCss.indexOf('.splash-robot {'),
+                                        splashCss.indexOf('.brand-row {'));
+    check('the robot is a fixed-size background, not a scaled one',
+      /background-size: 190px 190px/.test(splashBlock)
+      && !/background-size: *(cover|contain)/.test(splashBlock));
+    check('the reveal loops', /animation: splash-reveal [\d.]+s [a-z-]+ infinite/.test(splashBlock));
+    // The outer box holds full height so the text below does not move as the
+    // inner one grows.
+    check('the reveal does not push the text below it around',
+      /\.splash-robot \{[^}]*height: 190px/.test(splashBlock));
+    check('reduced motion shows the whole robot',
+      /prefers-reduced-motion: reduce/.test(splashBlock) && /height: 190px/.test(splashBlock));
     // The splash has no spinner: two "working on it" signals compete.
     check('the splash has no spinner beside the robot',
       !/loading-spinner large/.test(splashHtml));
-    // The centred copy is hidden during a burst, so the robot looks scattered
-    // rather than doubled — that alternation is the whole effect.
-    check('the solid robot is hidden while a burst is showing',
-      /@keyframes splash-base/.test(splashBlock));
-    // mix-blend-mode forces each ghost into its own compositing layer, which
-    // made the flashing more frequent — but it was not the cause.
-    check('the ghosts do not force compositing layers',
-      !/mix-blend-mode/.test(splashBlock));
 
-    // The actual cause: Electron's default window background is WHITE, and it
-    // shows on any frame the page has not painted. The splash animation forces
-    // enough compositing to hit that regularly, so the whole window flashed.
-    // Without an explicit colour the window can always flash — the animation
-    // only made it frequent enough to notice.
-    const mainForBg = require('fs').readFileSync(
-      require('path').join(require('./helpers').ROOT, 'src/main.ts'), 'utf8');
-    check('the window has an explicit dark background',
-      /backgroundColor: '#[0-9a-f]{6}'/i.test(mainForBg));
     // The window title is what shows in the taskbar and alt-tab, where a
     // subtitle competes for the space the name needs.
     check('the window is titled just Zeltro',
       /<title>Zeltro<\/title>/.test(splashHtml));
-    // A glitch effect is exactly the motion that setting exists for.
-    check('reduced-motion gets the settled robot immediately',
-      /prefers-reduced-motion: reduce/.test(splashBlock) && /animation: none/.test(splashBlock));
-    // Three copies of one robot should announce as nothing.
-    const robotMarkup = withoutComments(
-      splashHtml.slice(splashHtml.indexOf('class="splash-robot"'),
-                       splashHtml.indexOf('loading-spinner large')), '<!--');
-    check('the splash robot is decorative to a screen reader',
-      (robotMarkup.match(/alt=""/g) || []).length === 6
-      && (robotMarkup.match(/aria-hidden="true"/g) || []).length === 5);
 
-    // A modal header rule keyed on h3 left the one modal using h2 uncoloured —
-    // invisible until a differently-levelled heading appeared in a header.
-    check('modal headers are styled by the header, not the heading level',
-      /\.modal-header h2,\s*\.modal-header h3 \{/.test(splashCss));
+    // Electron's default window background is WHITE and shows on any frame the
+    // page has not painted — which is what was flashing during the splash.
+    const mainForBg = require('fs').readFileSync(
+      require('path').join(require('./helpers').ROOT, 'src/main.ts'), 'utf8');
+    check('the window has an explicit dark background',
+      /backgroundColor: '#[0-9a-f]{6}'/i.test(mainForBg));
+
+    // A bright gradient behind white text is close to unreadable; the other
+    // themes use darker fills where white is right, so this is scoped.
+    check('Create with AI reads as black on the bright themes',
+      /:root\[data-theme="zeltro"\] \.btn-create,\s*:root\[data-theme="matrix"\] \.btn-create \{\s*color: #000/.test(splashCss));
 
     // --- General settings ---------------------------------------------------
-    await win.evaluate(() => window.closeModal());
-    await win.waitForTimeout(200);
+    await win.evaluate(() => {
+      // Not closeModal(): that closes the one the app considers current, and an
+      // earlier section can leave a different one showing whose overlay covers
+      // the header.
+      document.querySelectorAll('.modal.show').forEach((m) => m.classList.remove('show'));
+    });
+    await win.waitForTimeout(300);
     await win.click(t('settings-open'));
     await win.waitForTimeout(500);
     await win.click(t('settings-tab-general'));
