@@ -648,11 +648,20 @@ async function run() {
     // rather than doubled — that alternation is the whole effect.
     check('the solid robot is hidden while a burst is showing',
       /@keyframes splash-base/.test(splashBlock));
-    // mix-blend-mode forces each ghost into its own compositing layer, and
-    // creating five of those in quick succession made Chromium flash the whole
-    // window white. Reported from real use; screenshots never showed it.
+    // mix-blend-mode forces each ghost into its own compositing layer, which
+    // made the flashing more frequent — but it was not the cause.
     check('the ghosts do not force compositing layers',
       !/mix-blend-mode/.test(splashBlock));
+
+    // The actual cause: Electron's default window background is WHITE, and it
+    // shows on any frame the page has not painted. The splash animation forces
+    // enough compositing to hit that regularly, so the whole window flashed.
+    // Without an explicit colour the window can always flash — the animation
+    // only made it frequent enough to notice.
+    const mainForBg = require('fs').readFileSync(
+      require('path').join(require('./helpers').ROOT, 'src/main.ts'), 'utf8');
+    check('the window has an explicit dark background',
+      /backgroundColor: '#[0-9a-f]{6}'/i.test(mainForBg));
     // The window title is what shows in the taskbar and alt-tab, where a
     // subtitle competes for the space the name needs.
     check('the window is titled just Zeltro',

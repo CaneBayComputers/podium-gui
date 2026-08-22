@@ -62,7 +62,21 @@ function createWindow(): void {
       additionalArguments: process.argv.includes('--dev') ? ['--debug-mode'] : []
     },
     icon: path.join(__dirname, '../assets/icon.png'),
-    title: 'Zeltro'
+    title: 'Zeltro',
+    // Electron's default window background is WHITE, and it shows through on
+    // any frame the page has not painted. That is what the splash animation was
+    // exposing: six images changing opacity forces enough compositing that
+    // Chromium occasionally presents the window before the page, and the whole
+    // screen flashes white.
+    //
+    // I first blamed mix-blend-mode and removing it helped — fewer layers, so
+    // fewer dropped frames — but it was treating the symptom. The window has
+    // always been able to flash; the animation only made it frequent enough to
+    // notice.
+    //
+    // Matches the default theme's --bg-primary so the base colour is never a
+    // colour the app does not use.
+    backgroundColor: '#0f0f23'
   });
 
   mainWindow.once('ready-to-show', () => {

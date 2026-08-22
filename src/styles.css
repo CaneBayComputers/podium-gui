@@ -1991,7 +1991,7 @@ span.status-indicator {
  * frozen. The animation stopping should mean the app is ready, and the splash
  * being replaced already says that.
  *
- * 0.85s. Longer versions read as a sequence to sit through rather than as
+ * 0.7s. Longer versions read as a sequence to sit through rather than as
  * something busy happening.
  *
  * steps(1, end) throughout: each state snaps. An eased glitch is a wobble.
@@ -2015,21 +2015,21 @@ span.status-indicator {
 
 .splash-robot-base {
     position: relative;
-    animation: splash-base 0.85s steps(1, end) infinite;
+    animation: splash-base 0.7s steps(1, end) infinite;
 }
 
 .ghost {
     opacity: 0;
-    animation-duration: 0.85s;
+    animation-duration: 0.7s;
     animation-timing-function: steps(1, end);
     animation-iteration-count: infinite;
 }
 
-.g1 { transform: translate(-17px,  -9px); animation-name: ghost-1; }
-.g2 { transform: translate( 15px,   8px); animation-name: ghost-2; }
-.g3 { transform: translate(-12px,  14px); animation-name: ghost-3; }
-.g4 { transform: translate( 19px,  -7px); animation-name: ghost-4; }
-.g5 { transform: translate( -8px, -16px); animation-name: ghost-5; }
+.g1 { transform: translate(-11px,  -6px); animation-name: ghost-1; }
+.g2 { transform: translate( 10px,   5px); animation-name: ghost-2; }
+.g3 { transform: translate( -8px,   9px); animation-name: ghost-3; }
+.g4 { transform: translate( 12px,  -4px); animation-name: ghost-4; }
+.g5 { transform: translate( -5px, -10px); animation-name: ghost-5; }
 
 /* Four bursts per cycle: 0-10%, 22-32%, 44-54%, 66-76%. Every burst is a PAIR,
    so the scattered frames read as displacement rather than as one copy sliding
