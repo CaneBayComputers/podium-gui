@@ -121,10 +121,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-# NOTE: publishing into packages.podiumcli.com is deliberately NOT done here.
-# SSH on that box is allowlisted to a few known IPs, and GitHub Actions runners
-# are not among them — allowlisting them would mean opening port 22 to most of
-# Azure, which is not a trade worth making for a package publish. Instead the
-# server polls: zeltro-repo-sync.timer checks the releases API every 10 minutes
-# and publishes anything new. Nothing inbound is opened and no credential that
-# could reach that box exists in CI.
+# There is no package repository to publish into. packages.podiumcli.com was
+# retired in the Zeltro rebrand — vhost, content, certificate and DNS all
+# removed — and no apt or Homebrew distribution is planned under either name.
+#
+# This workflow still builds installable artifacts and attaches them to a GitHub
+# release, which is a different thing from running a repository: a release asset
+# is downloaded once by a person, not polled by a package manager.

@@ -193,12 +193,7 @@ function createWindow(): void {
         {
           label: 'Donate',
           click: () => {
-            // Still podiumcli.com on purpose. The EC2 host holds Let's Encrypt
-            // certs for donate. and packages. at these exact hostnames; the
-            // zeltro.build equivalents resolve but serve nothing, so rewriting
-            // them would silently kill the donate button. Change when the certs
-            // and server_name aliases exist, not before.
-            shell.openExternal('https://donate.podiumcli.com');
+            shell.openExternal('https://donate.zeltro.build');
           }
         }
       ]
