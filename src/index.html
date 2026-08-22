@@ -26,7 +26,10 @@
         <header class="header">
             <div class="header-content">
                 <div class="logo">
-                    <h1>Zeltro CLI</h1>
+                    <div class="brand-row">
+                        <img src="../assets/head-96.png" class="brand-mark" alt="" width="32" height="32">
+                        <h1>Zeltro</h1>
+                    </div>
                     <span id="debug-indicator" class="debug-indicator" style="display: none;">DEBUG MODE - F5 to refresh</span>
                 </div>
                 <!-- Actions only. Help/Patreon/Donate live in the footer so the
@@ -405,15 +408,18 @@
                 </div>
 
                 <div class="settings-tabs">
+                    <button class="settings-tab" data-settings-tab="general"
+                            data-testid="settings-tab-general"
+                            onclick="switchSettingsTab('general')">⚙️ General</button>
                     <button class="settings-tab" data-settings-tab="appearance"
                             data-testid="settings-tab-appearance"
                             onclick="switchSettingsTab('appearance')">🎨 Appearance</button>
                     <button class="settings-tab" data-settings-tab="layout"
                             data-testid="settings-tab-layout"
-                            onclick="switchSettingsTab('layout')">🧩 Project layout</button>
+                            onclick="switchSettingsTab('layout')">🧩 Layout</button>
                     <button class="settings-tab" data-settings-tab="hosts"
                             data-testid="settings-tab-hosts"
-                            onclick="switchSettingsTab('hosts')">🖧 SSH Remotes</button>
+                            onclick="switchSettingsTab('hosts')">🖧 Remotes</button>
                     <button class="settings-tab" data-settings-tab="ai"
                             data-testid="settings-tab-ai"
                             onclick="switchSettingsTab('ai')">🤖 AI Agent</button>
@@ -449,7 +455,7 @@
                     </div>
                 </div>
 
-                <div class="modal-body" data-settings-panel="appearance">
+                <div class="modal-body" data-settings-panel="general" style="display: none;">
                     <div class="form-group">
                         <label class="checkbox-row">
                             <input type="checkbox" id="auto-update-check" data-testid="auto-update-check"
@@ -457,6 +463,21 @@
                             Check for updates when Zeltro starts
                         </label>
                     </div>
+                    <div class="form-group">
+                        <label class="checkbox-row">
+                            <input type="checkbox" id="warn-unreachable-hosts"
+                                   data-testid="warn-unreachable-hosts"
+                                   onchange="setWarnUnreachableHosts(this.checked)" checked>
+                            Warn when an SSH remote cannot be reached
+                        </label>
+                        <p class="settings-note">
+                            Turn this off if a remote is usually powered down. Its projects
+                            still disappear from the dashboard either way.
+                        </p>
+                    </div>
+                </div>
+
+                <div class="modal-body" data-settings-panel="appearance" style="display: none;">
 
                     <div class="form-group">
                         <label>Theme</label>
@@ -829,7 +850,7 @@
         <div id="initial-loading" class="initial-loading">
             <div class="initial-loading-content">
                 <div class="loading-spinner large"></div>
-                <h2>Loading Zeltro CLI</h2>
+                <h2>Loading Zeltro</h2>
                 <p>Initializing your development environment...</p>
             </div>
         </div>

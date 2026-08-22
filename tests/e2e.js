@@ -177,9 +177,10 @@ async function run() {
     }
     check('header no longer carries the secondary links',
       await win.locator(`.header-actions ${t('help-modal-open')}`).count() === 0);
-    check('title names the CLI',
-      (await win.textContent('.logo h1'))?.trim() === 'Zeltro CLI',
-      await win.textContent('.logo h1'));
+    // The window is Zeltro. "Zeltro CLI" is the other program — naming this one
+    // after it was a leftover from when the GUI was a thin front end for it.
+    check('the header names the app, not the CLI',
+      (await win.textContent('h1')).trim() === 'Zeltro')
     check('projects grid rendered', await win.locator(t('projects-grid')).count() === 1);
     check('services grid rendered', await win.locator(t('services-grid')).count() === 1);
 
@@ -606,6 +607,49 @@ async function run() {
     // LOCAL and LAN are different routes; unlabelled they look interchangeable.
     check('local and LAN URLs are labelled as different routes',
       /url-scope">LOCAL/.test(rendererShape) && /url-scope">LAN/.test(rendererShape));
+
+    // --- General settings ---------------------------------------------------
+    await win.evaluate(() => window.closeModal());
+    await win.waitForTimeout(200);
+    await win.click(t('settings-open'));
+    await win.waitForTimeout(500);
+    await win.click(t('settings-tab-general'));
+    await win.waitForTimeout(300);
+
+    const generalPanel = await win.evaluate(() => ({
+      update: !!document.querySelector('[data-settings-panel="general"] [data-testid="auto-update-check"]'),
+      warn: !!document.querySelector('[data-settings-panel="general"] [data-testid="warn-unreachable-hosts"]'),
+      // Behaviour is not appearance; the update setting used to live there.
+      strayInAppearance: !!document.querySelector('[data-settings-panel="appearance"] [data-testid="auto-update-check"]')
+    }));
+    check('General holds the app-wide settings',
+      generalPanel.update && generalPanel.warn && !generalPanel.strayInAppearance,
+      JSON.stringify(generalPanel));
+
+    // The toggle has to actually suppress the banner, not just store a value —
+    // a preference that changes nothing is worse than none.
+    const bannerToggle = await win.evaluate(async () => {
+      const shown = () => !!document.querySelector('[data-testid="host-errors"]');
+      window.setWarnUnreachableHosts(false);
+      await new Promise((r) => setTimeout(r, 200));
+      const off = shown();
+      window.setWarnUnreachableHosts(true);
+      await new Promise((r) => setTimeout(r, 200));
+      return { off, on: window.__warnUnreachableHosts() };
+    });
+    check('turning the warning off hides the unreachable-host banner',
+      bannerToggle.off === false && bannerToggle.on === true, JSON.stringify(bannerToggle));
+
+    // The window is Zeltro. "Zeltro CLI" is the other program, and naming this
+    // one after it was a leftover from when the GUI was a thin front end.
+    const shell = require('fs').readFileSync(
+      require('path').join(require('./helpers').ROOT, 'src/index.html'), 'utf8');
+    check('the header and splash name the app, not the CLI',
+      /<h1>Zeltro<\/h1>/.test(shell) && /Loading Zeltro<\/h2>/.test(shell)
+      && !/Zeltro CLI<\/(h1|h2)>/.test(shell));
+
+    await win.evaluate(() => window.closeModal());
+    await win.waitForTimeout(200);
 
     // --- Branding -----------------------------------------------------------
     //

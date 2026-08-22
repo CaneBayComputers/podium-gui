@@ -1013,7 +1013,7 @@ function renderProjects(): void {
 
     // A host that did not answer contributes no tiles, which is
     // indistinguishable from a host with no projects. Say which, and why.
-    const hostBanner = Object.keys(hostErrors).length > 0
+    const hostBanner = Object.keys(hostErrors).length > 0 && warnUnreachableHosts()
         ? `<div class="host-errors" data-testid="host-errors">${
             Object.entries(hostErrors).map(([id, err]) => {
                 const label = dashboardHosts.find((h) => h.id === id)?.label || id;
@@ -2898,6 +2898,8 @@ async function showSettings(tab: 'appearance' | 'layout' | 'hosts' | 'ai' = 'app
     // Reflect the stored preference rather than the markup's default.
     const autoBox = document.getElementById('auto-update-check') as HTMLInputElement | null;
     if (autoBox) autoBox.checked = autoUpdateCheckEnabled();
+    const warnBox = document.getElementById('warn-unreachable-hosts') as HTMLInputElement | null;
+    if (warnBox) warnBox.checked = warnUnreachableHosts();
 
     renderGithubHosts();
     if (!githubStatus) void loadGithubStatus();
@@ -5659,6 +5661,8 @@ async function submitEditProject(): Promise<void> {
 (window as any).showRemotesTab = showRemotesTab;
 (window as any).showUpdates = showUpdates;
 (window as any).setAutoUpdateCheck = setAutoUpdateCheck;
+(window as any).setWarnUnreachableHosts = setWarnUnreachableHosts;
+(window as any).__warnUnreachableHosts = warnUnreachableHosts;
 (window as any).dismissUpdateBanner = dismissUpdateBanner;
 (window as any).__autoUpdateCheck = autoUpdateCheckEnabled;
 (window as any).runUpdate = runUpdate;
@@ -5800,6 +5804,21 @@ function autoUpdateCheckEnabled(): boolean {
 function setAutoUpdateCheck(on: boolean): void {
     localStorage.setItem('zeltro-auto-update-check', on ? 'on' : 'off');
     if (!on) dismissUpdateBanner();
+}
+
+// Whether to warn about an SSH remote that did not answer.
+//
+// On by default: silently dropping a host's projects is the worse failure, and
+// someone who has not thought about it should be told. Off is for the case
+// Shawn described — a remote that is usually powered down, where the warning is
+// noise about a state you already know.
+function warnUnreachableHosts(): boolean {
+    return storedSetting('zeltro-warn-unreachable') !== 'off';
+}
+
+function setWarnUnreachableHosts(on: boolean): void {
+    localStorage.setItem('zeltro-warn-unreachable', on ? 'on' : 'off');
+    renderProjects();
 }
 
 function dismissUpdateBanner(): void {

@@ -1971,6 +1971,25 @@ span.status-indicator {
 }
 .url-scope + .url-link { margin-right: 0.7rem; }
 
+/* The mascot head beside the wordmark.
+ *
+ * .logo is a column so the tagline sits under the name, which put the mark on
+ * its own line above it. This row keeps the two together without changing that.
+ *
+ * Decorative — alt="" — because the <h1> beside it already says the name, and a
+ * screen reader announcing "Zeltro Zeltro" is worse than silence. */
+.brand-row {
+    display: flex;
+    align-items: center;
+}
+.brand-mark {
+    width: 32px;
+    height: 32px;
+    margin-right: 0.55rem;
+    vertical-align: middle;
+    flex: 0 0 auto;
+}
+
 .update-banner {
     display: flex;
     align-items: center;
