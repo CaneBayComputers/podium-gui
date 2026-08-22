@@ -23,9 +23,13 @@ A desktop front end for [Zeltro CLI](https://github.com/CaneBayComputers/zeltro-
 - **Embedded terminals, tabbed** — AI sessions run in real terminals inside the window. Several at once, each in its own tab; hiding the window leaves them running.
 - **AI agent setup** — choose between Claude, Codex, Gemini and Aider from the app. Zeltro installs the one you pick if it is not already on the machine.
 - **Live output** — creates and installs stream their CLI output as they run, and a failure keeps that output on screen instead of hiding it.
+- **Dictate into any prompt** — speech to text running locally in the app, with microphone, input gain and quality controls. Nothing is uploaded, and it works offline.
+- **Every machine in one dashboard** — add machines over SSH under **Settings → Hosts** and the project list unions across all of them. Start, stop, and run an AI session on whichever machine the project actually lives on. Each host needs the Zeltro CLI installed and configured on it; the app does not install it remotely.
+- **Attach files to a project** — hand the agent a spec, a screenshot or a data file along with the prompt.
+- **Any model endpoint** — Ollama for local models, or any OpenAI-compatible endpoint with your own key. It lists the models that endpoint actually offers rather than guessing.
 - **Five themes** — Retro, Dark, Light, Matrix and Zeltro, under **Settings → Appearance**, applied immediately including to open terminals.
 
-Projects get PHP 8.3, Python 3 or Node 22 containers with nginx, supervisor and the database drivers already compiled in, and a real hostname instead of a port number.
+Projects get PHP 8.3, Python 3 or Node 22 containers with nginx, supervisor and the database drivers already compiled in, and an address assigned for them, so two projects can never collide.
 
 ---
 
