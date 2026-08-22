@@ -1426,13 +1426,21 @@ function renderServices(): void {
         
         // Handle IP and port display
         let ipInfo = '';
-        if (service.ip_address) {
+        // The CLI currently emits the subnet with its quotes attached —
+        // VPC_SUBNET="10.247.177" is read from .env without stripping them, so
+        // ip_address arrives as "10.247.177".8 and renders exactly like that.
+        // Reported to the CLI; stripping here so a real address is shown until
+        // that lands, and harmlessly after. An address is never quoted, so this
+        // cannot discard anything meaningful.
+        const cleanIp = (service.ip_address || '').replace(/"/g, '');
+
+        if (cleanIp) {
             if (service.port) {
-                ipInfo = `${service.ip_address}:${service.port}`;
+                ipInfo = `${cleanIp}:${service.port}`;
             } else if (serviceName === 'phpmyadmin') {
-                ipInfo = `${service.ip_address}:80`; // Default port for phpMyAdmin
+                ipInfo = `${cleanIp}:80`; // Default port for phpMyAdmin
             } else {
-                ipInfo = service.ip_address;
+                ipInfo = cleanIp;
             }
         } else if (service.port) {
             ipInfo = `Port ${service.port}`;
@@ -3933,7 +3941,7 @@ function renderGithubStatus(): void {
                  This token is missing ${escapeHtml(missing.join(', '))} — creating a
                  repository will fail until it is replaced.</p>`
             : ''}
-        <p class="settings-note">${escapeHtml(st.version || '')}</p>
+        <p class="settings-note gh-version">${escapeHtml(st.version || '')}</p>
         <button class="btn btn-secondary btn-small" onclick="loadGithubStatus()">Check again</button>
         <button class="btn btn-danger btn-small" data-testid="github-signout"
                 onclick="githubSignOut()">Sign out</button>`;

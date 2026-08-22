@@ -628,7 +628,7 @@ async function run() {
     // frozen. The splash being replaced is what says the app is ready.
     check('the splash glitch loops rather than settling',
       /animation-iteration-count: infinite/.test(splashBlock)
-      && /splash-base 1\.2s steps\(1, end\) infinite/.test(splashBlock));
+      && /animation: splash-base [\d.]+s steps\(1, end\) infinite/.test(splashBlock));
 
     // Every burst pairs two ghosts, so a scattered frame reads as displacement
     // rather than as one copy sliding sideways.
