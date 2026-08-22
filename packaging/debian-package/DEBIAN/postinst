@@ -1,22 +1,22 @@
 #!/bin/bash
 set -e
 
-# Post-installation script for Podium GUI
+# Post-installation script for Zeltro GUI
 
-echo "Installing Podium GUI..."
+echo "Installing Zeltro GUI..."
 
-# Install Podium CLI if not already installed
-if ! command -v podium &> /dev/null; then
-    echo "Installing Podium CLI dependency..."
+# Install Zeltro CLI if not already installed
+if ! command -v zeltro &> /dev/null; then
+    echo "Installing Zeltro CLI dependency..."
     echo "This will install Docker, Node.js, and other required packages..."
-    curl -fsSL https://raw.githubusercontent.com/CaneBayComputers/podium-cli/master/install.sh | bash
+    curl -fsSL https://raw.githubusercontent.com/CaneBayComputers/zeltro-cli/master/install.sh | bash
 else
-    echo "Podium CLI is already installed"
+    echo "Zeltro CLI is already installed"
 fi
 
 # Install GUI dependencies
 echo "Installing Node.js dependencies..."
-cd /usr/local/share/podium-gui
+cd /usr/local/share/zeltro-gui
 npm install --production
 
 # Create desktop entry
@@ -50,14 +50,14 @@ else
     systemctl start docker.service || echo "Note: Could not start Docker service"
 fi
 
-echo "✅ Podium GUI installed successfully!"
+echo "✅ Zeltro GUI installed successfully!"
 echo ""
 echo "🚀 Next steps:"
 echo "   1. Log out and back in (or run: newgrp docker)"
-echo "   2. Launch Podium GUI from your applications menu"
-echo "   3. Or run: podium gui"
+echo "   2. Launch Zeltro GUI from your applications menu"
+echo "   3. Or run: zeltro gui"
 echo ""
-echo "📖 Documentation: https://podiumdev.io/docs"
+echo "📖 Documentation: https://zeltrodev.io/docs"
 echo ""
 
 exit 0

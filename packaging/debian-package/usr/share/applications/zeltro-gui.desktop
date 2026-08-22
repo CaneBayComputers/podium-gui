@@ -1,13 +1,13 @@
 [Desktop Entry]
 Version=1.0
 Type=Application
-Name=Podium
+Name=Zeltro
 Comment=Professional PHP Development Environment with Desktop Interface
-Exec=podium-gui
-Icon=podium-gui
+Exec=zeltro-gui
+Icon=zeltro-gui
 Terminal=false
 StartupNotify=true
 Categories=Development;IDE;WebDevelopment;
 Keywords=php;laravel;wordpress;docker;development;gui;
-StartupWMClass=Podium
+StartupWMClass=Zeltro
 MimeType=application/x-php;text/x-php;

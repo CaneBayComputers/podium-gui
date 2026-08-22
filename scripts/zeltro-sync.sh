@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Keep this machine's Podium CLI and GUI current with the workstation `shawn`.
+# Keep this machine's Zeltro CLI and GUI current with the workstation `shawn`.
 #
 # SOURCE-BASED. Both are checkouts here; an update is a git pull plus, for the
 # GUI, a tsc build. The previous version built a 74MB deb/rpm/pacman on the
@@ -14,7 +14,7 @@
 #
 # Runs on the dell-laptop's Mint, Fedora and Arch installs. Distro-agnostic:
 # all it needs from the system is git, node/npm and a working electron, which
-# the Podium installers already set up.
+# the Zeltro installers already set up.
 set -uo pipefail
 
 SRC_HOST=shawn
@@ -47,9 +47,9 @@ case "$(uname -s)" in
         ;;
 esac
 
-GUI_REPO=$HOME_DIR/repos/podium/podium-gui
+GUI_REPO=$HOME_DIR/repos/zeltro/zeltro-gui
 
-log() { echo "[podium-sync] $*"; }
+log() { echo "[zeltro-sync] $*"; }
 
 # The Mac rig has /sbin/sha256sum, but that is not standard on macOS — the
 # portable spelling is `shasum -a 256`. Used to notice whether
@@ -108,7 +108,7 @@ pull_repo() {
 }
 
 # --- CLI -------------------------------------------------------------------
-for R in /usr/local/share/podium-cli "$HOME_DIR/repos/podium/podium-cli"; do
+for R in /usr/local/share/zeltro-cli "$HOME_DIR/repos/zeltro/zeltro-cli"; do
     [ -d "$R/.git" ] || continue
     CLI_REPO=$R
     pull_repo "$R" "CLI"
@@ -116,20 +116,20 @@ for R in /usr/local/share/podium-cli "$HOME_DIR/repos/podium/podium-cli"; do
 done
 [ -n "$CLI_REPO" ] || log "CLI: no checkout found"
 
-# `podium` must resolve for a .desktop launch too, which does not inherit
+# `zeltro` must resolve for a .desktop launch too, which does not inherit
 # /usr/local/bin from a login shell's PATH — hence both locations.
-if [ -n "$CLI_REPO" ] && [ -x "$CLI_REPO/src/podium" ]; then
-    # Compare RESOLVED against RESOLVED. /usr/local/share/podium-cli is itself a
+if [ -n "$CLI_REPO" ] && [ -x "$CLI_REPO/src/zeltro" ]; then
+    # Compare RESOLVED against RESOLVED. /usr/local/share/zeltro-cli is itself a
     # symlink on some installs, so readlink -f on the link resolved further than
     # the literal target string — the guard never matched and every run relinked
     # and logged "linked ...", claiming a change it had not made.
-    want=$(resolve_path "$CLI_REPO/src/podium")
+    want=$(resolve_path "$CLI_REPO/src/zeltro")
     # /usr/bin is protected by SIP on macOS and cannot be written to at all.
-    LINK_TARGETS="/usr/local/bin/podium /usr/bin/podium"
-    [ "$PLATFORM" = mac ] && LINK_TARGETS="/usr/local/bin/podium"
+    LINK_TARGETS="/usr/local/bin/zeltro /usr/bin/zeltro"
+    [ "$PLATFORM" = mac ] && LINK_TARGETS="/usr/local/bin/zeltro"
     for link in $LINK_TARGETS; do
         [ "$(resolve_path "$link")" = "$want" ] && continue
-        ln -sfn "$CLI_REPO/src/podium" "$link" && log "linked $link -> $CLI_REPO/src/podium"
+        ln -sfn "$CLI_REPO/src/zeltro" "$link" && log "linked $link -> $CLI_REPO/src/zeltro"
     done
 fi
 
@@ -201,7 +201,7 @@ fi
 # It installs for the NEXT run rather than re-execing now. Re-execing would
 # repeat the pull, which would then report "already current" and skip the build
 # it was re-execed to perform. One cycle's delay on a timer costs nothing.
-SELF_SRC=$GUI_REPO/scripts/podium-sync.sh
+SELF_SRC=$GUI_REPO/scripts/zeltro-sync.sh
 SELF_DST=$(readlink -f "$0")
 if [ -f "$SELF_SRC" ] && [ "$SELF_SRC" != "$SELF_DST" ] && ! cmp -s "$SELF_SRC" "$SELF_DST"; then
     install -m 755 "$SELF_SRC" "$SELF_DST" &&
@@ -210,20 +210,20 @@ fi
 
 # --- Launcher --------------------------------------------------------------
 # Symlinked into the checkout, so a pull updates the launcher itself too.
-LAUNCHER=$GUI_REPO/scripts/podium-gui-dev.sh
+LAUNCHER=$GUI_REPO/scripts/zeltro-gui-dev.sh
 if [ -f "$LAUNCHER" ]; then
     chmod +x "$LAUNCHER" 2>/dev/null
-    if [ "$(resolve_path "$BIN_DIR/podium-gui")" != "$LAUNCHER" ]; then
-        ln -sfn "$LAUNCHER" "$BIN_DIR/podium-gui" && log "linked $BIN_DIR/podium-gui"
+    if [ "$(resolve_path "$BIN_DIR/zeltro-gui")" != "$LAUNCHER" ]; then
+        ln -sfn "$LAUNCHER" "$BIN_DIR/zeltro-gui" && log "linked $BIN_DIR/zeltro-gui"
     fi
 fi
 
-# Generated, not copied. The template carries `Icon=podium-gui`, a theme-name
+# Generated, not copied. The template carries `Icon=zeltro-gui`, a theme-name
 # lookup that only resolved while the deb was installed — and this script
 # removes that package, so the menu entry lost its icon. A .desktop cannot
 # compute a path, so substitute the real one from wherever the repo actually is.
-# Shell aliases, matching the workstation: `pgui` and `podium-gui-run`. Kept out
-# of the `podium-gui` name, which already cd's into the repo.
+# Shell aliases, matching the workstation: `pgui` and `zeltro-gui-run`. Kept out
+# of the `zeltro-gui` name, which already cd's into the repo.
 #
 # Before the desktop-entry section, which is Linux-only — the aliases are just
 # as useful on macOS, where they are the ONLY way in, there being no menu entry.
@@ -237,13 +237,13 @@ fi
 if [ -f "$ALIASES" ] && ! grep -q "alias pgui=" "$ALIASES" 2>/dev/null; then
     cat >> "$ALIASES" <<ALIASEOF
 
-# Launch the Podium GUI from the source checkout (builds first, then detaches).
-# Deliberately not called \`podium-gui\`, which already cd's into the repo.
-alias podium-gui-run='$BIN_DIR/podium-gui'
-alias pgui='$BIN_DIR/podium-gui'
+# Launch the Zeltro GUI from the source checkout (builds first, then detaches).
+# Deliberately not called \`zeltro-gui\`, which already cd's into the repo.
+alias zeltro-gui-run='$BIN_DIR/zeltro-gui'
+alias pgui='$BIN_DIR/zeltro-gui'
 ALIASEOF
     chown "$OWNER" "$ALIASES" 2>/dev/null
-    log "added pgui / podium-gui-run aliases to $(basename "$ALIASES")"
+    log "added pgui / zeltro-gui-run aliases to $(basename "$ALIASES")"
 fi
 
 # Desktop entries are a freedesktop.org concept; macOS has no equivalent and
@@ -253,8 +253,8 @@ if [ "$PLATFORM" = mac ]; then
     exit 0
 fi
 
-DESKTOP_SRC=$GUI_REPO/scripts/podium-gui.desktop
-DESKTOP_DST=/usr/share/applications/podium-gui-source.desktop
+DESKTOP_SRC=$GUI_REPO/scripts/zeltro-gui.desktop
+DESKTOP_DST=/usr/share/applications/zeltro-gui-source.desktop
 if [ -f "$DESKTOP_SRC" ]; then
     ICON=$GUI_REPO/packaging/icons/256x256.png
     TMP_DESKTOP=$(mktemp)

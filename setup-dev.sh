@@ -1,7 +1,7 @@
 #!/bin/bash
-# Podium GUI Development Setup
+# Zeltro GUI Development Setup
 
-echo "🎭 Setting up Podium GUI development environment..."
+echo "🎭 Setting up Zeltro GUI development environment..."
 
 # Check for Node.js
 if ! command -v node &> /dev/null; then

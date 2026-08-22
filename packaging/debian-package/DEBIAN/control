@@ -1,16 +1,16 @@
-Package: podium-gui
+Package: zeltro-gui
 Version: 1.0.0-beta4
 Section: devel
 Priority: optional
 Architecture: amd64
 Depends: git, curl, ca-certificates, gnupg, lsb-release, apt-transport-https, unzip, jq, software-properties-common, build-essential, mariadb-client, p7zip-full, trash-cli, net-tools, docker.io | docker-ce, nodejs (>= 20.0.0), npm
 Maintainer: Cane Bay Computers <canebaycomputers@gmail.com>
-Description: Podium GUI - Professional PHP Development Platform Interface
- Podium GUI is the premium graphical interface for the Podium development
+Description: Zeltro GUI - Professional PHP Development Platform Interface
+ Zeltro GUI is the premium graphical interface for the Zeltro development
  platform. It provides an intuitive, modern desktop application for managing
  PHP projects, Docker services, and development environments.
  .
- The GUI automatically installs and manages Podium CLI as a dependency,
+ The GUI automatically installs and manages Zeltro CLI as a dependency,
  providing a complete development solution with visual project management,
  real-time monitoring, and one-click operations.
  .
@@ -21,4 +21,4 @@ Description: Podium GUI - Professional PHP Development Platform Interface
   * Cross-framework support (Laravel, WordPress, PHP)
   * Integrated Docker service management
   * Team collaboration and LAN sharing
-Homepage: https://podiumdev.io
+Homepage: https://zeltrodev.io

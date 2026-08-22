@@ -21,7 +21,7 @@ const fs = require('fs');
 const { _electron: electron } = require('playwright');
 
 const ROOT = path.join(__dirname, '..');
-const BINARY = path.join(ROOT, 'release', 'linux-unpacked', 'podium-gui');
+const BINARY = path.join(ROOT, 'release', 'linux-unpacked', 'zeltro-gui');
 
 let passed = 0;
 let failed = 0;
@@ -39,7 +39,7 @@ function check(name, condition, detail = '') {
 }
 
 async function run() {
-  console.log('\nPodium GUI — packaged smoke test\n');
+  console.log('\nZeltro GUI — packaged smoke test\n');
 
   if (!fs.existsSync(BINARY)) {
     console.error(`No packaged build at ${BINARY}\nRun: npm run pack`);
@@ -119,8 +119,8 @@ async function run() {
     console.log('\nmain process');
     // The bug that broke every packaged menu launch. In the package there is no
     // repo checkout to fall back on, so this matters more here than in dev.
-    const podium = await app.evaluate(async ({ ipcMain }) => {
-      const handler = ipcMain._invokeHandlers.get('get-podium-command');
+    const zeltro = await app.evaluate(async ({ ipcMain }) => {
+      const handler = ipcMain._invokeHandlers.get('get-zeltro-command');
       if (!handler) return { error: 'not registered' };
       const before = process.env.PATH;
       process.env.PATH = '/nonexistent';
@@ -128,10 +128,10 @@ async function run() {
       process.env.PATH = before;
       return { stripped };
     });
-    check('packaged app resolves podium with PATH stripped',
-      !podium.error &&
-      (podium.stripped?.command?.startsWith('/') || podium.stripped?.command === 'bash'),
-      JSON.stringify(podium));
+    check('packaged app resolves zeltro with PATH stripped',
+      !zeltro.error &&
+      (zeltro.stripped?.command?.startsWith('/') || zeltro.stripped?.command === 'bash'),
+      JSON.stringify(zeltro));
 
     fs.mkdirSync(path.join(ROOT, 'debug'), { recursive: true });
     await win.screenshot({

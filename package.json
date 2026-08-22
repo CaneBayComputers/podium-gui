@@ -1,7 +1,7 @@
 {
-  "name": "podium-gui",
+  "name": "zeltro-gui",
   "version": "1.0.0-beta.1",
-  "description": "Professional GUI for Podium PHP Development Platform",
+  "description": "Professional GUI for Zeltro PHP Development Platform",
   "main": "dist/main.js",
   "scripts": {
     "build-ts": "tsc",
@@ -48,8 +48,8 @@
     "ssh2": "^1.17.0"
   },
   "build": {
-    "appId": "com.canebaycomputers.podium",
-    "productName": "Podium",
+    "appId": "com.canebaycomputers.zeltro",
+    "productName": "Zeltro",
     "directories": {
       "output": "release",
       "buildResources": "packaging"
@@ -79,11 +79,11 @@
       "icon": "packaging/icons",
       "maintainer": "Cane Bay Computers <canebaycomputers@gmail.com>",
       "vendor": "Cane Bay Computers",
-      "synopsis": "Desktop front end for Podium CLI",
-      "description": "Podium GUI is the desktop front end for Podium CLI. Create projects with AI, install from the app library, and manage Docker-backed local development without the terminal. Requires Podium CLI, which the post-install step installs if it is missing.",
+      "synopsis": "Desktop front end for Zeltro CLI",
+      "description": "Zeltro GUI is the desktop front end for Zeltro CLI. Create projects with AI, install from the app library, and manage Docker-backed local development without the terminal. Requires Zeltro CLI, which the post-install step installs if it is missing.",
       "desktop": {
-        "Name": "Podium",
-        "StartupWMClass": "Podium"
+        "Name": "Zeltro",
+        "StartupWMClass": "Zeltro"
       }
     },
     "deb": {

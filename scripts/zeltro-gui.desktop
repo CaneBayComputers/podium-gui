@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Zeltro GUI (source)
+GenericName=PHP Development Platform
+Comment=Zeltro, running from the source checkout
+Exec=/usr/local/bin/zeltro-gui
+Icon=zeltro-gui
+Terminal=false
+Categories=Development;IDE;
+StartupNotify=true
+StartupWMClass=zeltro-gui

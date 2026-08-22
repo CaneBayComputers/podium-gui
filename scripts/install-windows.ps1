@@ -1,9 +1,9 @@
-# Set up podium-gui on a fresh Windows box, and open SSH so it can be driven
+# Set up zeltro-gui on a fresh Windows box, and open SSH so it can be driven
 # remotely afterwards.
 #
-# Windows is REMOTE-ONLY for Podium: there is no local CLI to install, because
-# Podium is Docker plus bash scripts. The GUI here talks to Podium on other
-# machines over SSH. So this installs the GUI and nothing else Podium-related -
+# Windows is REMOTE-ONLY for Zeltro: there is no local CLI to install, because
+# Zeltro is Docker plus bash scripts. The GUI here talks to Zeltro on other
+# machines over SSH. So this installs the GUI and nothing else Zeltro-related -
 # projects live on the Linux and Mac hosts you add under Settings.
 #
 # Every step is idempotent. Re-running is the supported way to update.
@@ -44,9 +44,9 @@ trap {
     exit 1
 }
 
-$REPO_URL  = 'https://github.com/CaneBayComputers/podium-gui.git'
+$REPO_URL  = 'https://github.com/CaneBayComputers/zeltro-gui.git'
 $BRANCH    = 'dev'
-$REPO_DIR  = 'C:\podium-gui'
+$REPO_DIR  = 'C:\zeltro-gui'
 $NODE_VER  = '20.19.3'
 
 function Say  ($m) { Write-Host "  $m" }
@@ -65,7 +65,7 @@ if ($EnableSsh -and -not $isAdmin) {
 }
 
 Write-Host ""
-Write-Host "Podium GUI - Windows setup" -ForegroundColor Green
+Write-Host "Zeltro GUI - Windows setup" -ForegroundColor Green
 Say "user: $($id.Name)"
 Say "windows: $((Get-CimInstance Win32_OperatingSystem).Caption)"
 
@@ -120,8 +120,8 @@ if ($wantSsh) {
     if ((Get-Service sshd).Status -ne 'Running') { Start-Service sshd; Say "service started" }
     else { Say "service already running" }
 
-    if (-not (Get-NetFirewallRule -Name 'sshd-podium' -ErrorAction SilentlyContinue)) {
-        New-NetFirewallRule -Name 'sshd-podium' -DisplayName 'OpenSSH Server (Podium)' `
+    if (-not (Get-NetFirewallRule -Name 'sshd-zeltro' -ErrorAction SilentlyContinue)) {
+        New-NetFirewallRule -Name 'sshd-zeltro' -DisplayName 'OpenSSH Server (Zeltro)' `
             -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22 | Out-Null
         Say "firewall rule added for port 22"
     } else { Say "firewall rule already present" }
@@ -227,7 +227,7 @@ if (-not (Have git) -or -not (Have node)) {
 # From source rather than a packaged installer: there is no Windows build
 # target configured, an unsigned .exe trips SmartScreen, and a checkout updates
 # with `git pull` instead of a rebuild-and-reinstall cycle.
-Step "Podium GUI"
+Step "Zeltro GUI"
 if (Test-Path "$REPO_DIR\.git") {
     Say "updating existing checkout at $REPO_DIR"
     git -C $REPO_DIR fetch -q origin
@@ -275,7 +275,7 @@ try {
 } finally { Pop-Location }
 
 # A launcher, so starting it is not a command to remember.
-$launcher = "$REPO_DIR\podium-gui.bat"
+$launcher = "$REPO_DIR\zeltro-gui.bat"
 Set-Content -Path $launcher -Encoding ASCII -Value @"
 @echo off
 cd /d "$REPO_DIR"
@@ -283,7 +283,7 @@ call npm run build-ts >nul 2>&1
 start "" npx electron dist\main.js
 "@
 $desktop = [Environment]::GetFolderPath('Desktop')
-$sc = (New-Object -ComObject WScript.Shell).CreateShortcut("$desktop\Podium GUI.lnk")
+$sc = (New-Object -ComObject WScript.Shell).CreateShortcut("$desktop\Zeltro GUI.lnk")
 $sc.TargetPath = $launcher
 $sc.WorkingDirectory = $REPO_DIR
 $sc.Save()
@@ -296,13 +296,13 @@ $ips = (Get-NetIPAddress -AddressFamily IPv4 |
 Write-Host ""
 Write-Host "Done." -ForegroundColor Green
 Say "repo:     $REPO_DIR"
-Say "launch:   the 'Podium GUI' desktop shortcut"
+Say "launch:   the 'Zeltro GUI' desktop shortcut"
 if ($wantSsh) {
     Say "ssh:      ssh $($id.Name.Split('\')[-1])@$($ips -join ' or ')"
 }
 Write-Host ""
-Say "Podium projects live on the hosts you add under Settings > SSH Hosts."
-Say "Windows has no local Podium - that is by design, not a missing step."
+Say "Zeltro projects live on the hosts you add under Settings > SSH Hosts."
+Say "Windows has no local Zeltro - that is by design, not a missing step."
 if ($wantSsh) {
     Write-Host ""
     # The one change here that could make SSH awkward if PowerShell misbehaves

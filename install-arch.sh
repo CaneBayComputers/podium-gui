@@ -1,8 +1,8 @@
 #!/bin/bash
 
-# Podium GUI Installer — Arch Linux
+# Zeltro GUI Installer — Arch Linux
 #
-# Installs the Podium CLI first if it is missing, then the desktop GUI. The GUI
+# Installs the Zeltro CLI first if it is missing, then the desktop GUI. The GUI
 # is a front end for the CLI and is useless without it, so it is never
 # installable alone.
 
@@ -11,14 +11,14 @@ set -e
 for arg in "$@"; do
     case $arg in
         --help)
-            echo "Podium GUI Arch Installer"
+            echo "Zeltro GUI Arch Installer"
             echo ""
             echo "Usage: $0 [options]"
             echo ""
             echo "Options:"
             echo "  --help           Show this help message"
             echo ""
-            echo "Installs the Podium CLI first if it is not already present, then"
+            echo "Installs the Zeltro CLI first if it is not already present, then"
             echo "builds and installs the desktop GUI. Run from a local checkout to"
             echo "install that checkout instead of cloning."
             exit 0
@@ -33,10 +33,10 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-INSTALL_DIR="/usr/local/share/podium-gui"
+INSTALL_DIR="/usr/local/share/zeltro-gui"
 BIN_DIR="/usr/local/bin"
-GUI_REPO_URL="https://github.com/CaneBayComputers/podium-gui.git"
-CLI_INSTALLER_URL="https://raw.githubusercontent.com/CaneBayComputers/podium-cli/master/install-arch.sh"
+GUI_REPO_URL="https://github.com/CaneBayComputers/zeltro-gui.git"
+CLI_INSTALLER_URL="https://raw.githubusercontent.com/CaneBayComputers/zeltro-cli/master/install-arch.sh"
 
 # Electron bundles its own Node to RUN the app, but the build tooling does not.
 # Playwright (the e2e harness) requires 20+, and node-gyp needs a modern
@@ -44,7 +44,7 @@ CLI_INSTALLER_URL="https://raw.githubusercontent.com/CaneBayComputers/podium-cli
 # node merely EXISTS is not enough — the version is what matters.
 NODE_MIN_MAJOR=20
 
-echo -e "${BLUE}Podium GUI Installer${NC}"
+echo -e "${BLUE}Zeltro GUI Installer${NC}"
 echo "===================="
 
 if ! pwd &>/dev/null; then
@@ -53,7 +53,7 @@ if ! pwd &>/dev/null; then
 fi
 
 # Detect a local checkout, preferring the directory this script lives in so
-# running it by path from the parent (./podium-gui/install-ubuntu.sh) installs
+# running it by path from the parent (./zeltro-gui/install-ubuntu.sh) installs
 # THAT checkout rather than silently cloning over the top of it. Under
 # `curl | bash` there is no file on disk, so neither candidate matches and the
 # clone path runs — which is correct for that install method.
@@ -96,7 +96,7 @@ if sudo -n true 2>/dev/null; then
     echo -e "${GREEN}✓ Passwordless sudo available${NC}"
 else
     echo
-    echo -e "${YELLOW}Podium needs sudo to install system packages.${NC}"
+    echo -e "${YELLOW}Zeltro needs sudo to install system packages.${NC}"
     echo -e "${YELLOW}You'll be asked for your password once — it won't be asked again during the install.${NC}"
     echo
     if ! sudo -v; then
@@ -116,20 +116,20 @@ trap 'rc=$?; kill $SUDO_KEEPALIVE_PID 2>/dev/null || true; exit $rc' INT TERM EX
 ###############################
 # Step 1: the CLI comes first
 ###############################
-# The GUI shells out to `podium` for everything. Installing it without the CLI
+# The GUI shells out to `zeltro` for everything. Installing it without the CLI
 # produces an app that opens and then fails on its first action, so bootstrap
 # the CLI here rather than leaving the user to discover the dependency.
-echo -e "${CYAN}Checking for Podium CLI...${NC}"
+echo -e "${CYAN}Checking for Zeltro CLI...${NC}"
 
-if command -v podium >/dev/null 2>&1; then
-    echo -e "${GREEN}✓ Podium CLI already installed${NC}"
+if command -v zeltro >/dev/null 2>&1; then
+    echo -e "${GREEN}✓ Zeltro CLI already installed${NC}"
 else
-    echo -e "${YELLOW}Podium CLI not found — installing it first.${NC}"
+    echo -e "${YELLOW}Zeltro CLI not found — installing it first.${NC}"
 
-    # A sibling checkout is the common case for developers: repos/podium/
-    # holding both podium-cli and podium-gui.
+    # A sibling checkout is the common case for developers: repos/zeltro/
+    # holding both zeltro-cli and zeltro-gui.
     CLI_LOCAL=""
-    for _sibling in "$SELF_DIR/../podium-cli" "$CURRENT_DIR/../podium-cli"; do
+    for _sibling in "$SELF_DIR/../zeltro-cli" "$CURRENT_DIR/../zeltro-cli"; do
         if [[ -n "$_sibling" && -f "$_sibling/install-arch.sh" ]]; then
             CLI_LOCAL="$(cd "$_sibling" && pwd -P)"
             break
@@ -140,23 +140,23 @@ else
         echo -e "${BLUE}Using local CLI checkout:${NC} $CLI_LOCAL"
         ( cd "$CLI_LOCAL" && bash install-arch.sh )
     else
-        echo -e "${BLUE}Downloading the Podium CLI installer...${NC}"
+        echo -e "${BLUE}Downloading the Zeltro CLI installer...${NC}"
         curl -fsSL "$CLI_INSTALLER_URL" | bash
     fi
 
     # PATH in this shell may predate the symlink the CLI installer just created.
     hash -r 2>/dev/null || true
-    if ! command -v podium >/dev/null 2>&1 && [[ -x "$BIN_DIR/podium" ]]; then
+    if ! command -v zeltro >/dev/null 2>&1 && [[ -x "$BIN_DIR/zeltro" ]]; then
         export PATH="$BIN_DIR:$PATH"
     fi
 
-    if ! command -v podium >/dev/null 2>&1; then
-        echo -e "${RED}Error: the Podium CLI still isn't available after installing it.${NC}"
+    if ! command -v zeltro >/dev/null 2>&1; then
+        echo -e "${RED}Error: the Zeltro CLI still isn't available after installing it.${NC}"
         echo "Install it manually, then re-run this script:"
-        echo "  https://github.com/CaneBayComputers/podium-cli"
+        echo "  https://github.com/CaneBayComputers/zeltro-cli"
         exit 1
     fi
-    echo -e "${GREEN}✓ Podium CLI installed${NC}"
+    echo -e "${GREEN}✓ Zeltro CLI installed${NC}"
 fi
 
 ###############################
@@ -212,7 +212,7 @@ fi
 # Step 4: place the GUI
 ###############################
 if [[ -n "$LOCAL_REPO_DIR" ]]; then
-    echo -e "${GREEN}✓ Detected existing Podium GUI checkout${NC}"
+    echo -e "${GREEN}✓ Detected existing Zeltro GUI checkout${NC}"
     echo -e "${CYAN}Using local directory:${NC} $LOCAL_REPO_DIR"
 
     if [[ -e "$INSTALL_DIR" && ! -L "$INSTALL_DIR" ]]; then
@@ -224,7 +224,7 @@ if [[ -n "$LOCAL_REPO_DIR" ]]; then
     sudo ln -sfn "$LOCAL_REPO_DIR" "$INSTALL_DIR"
     APP_DIR="$LOCAL_REPO_DIR"
 else
-    echo -e "${CYAN}Installing Podium GUI...${NC}"
+    echo -e "${CYAN}Installing Zeltro GUI...${NC}"
     if [[ -d "$INSTALL_DIR/.git" ]]; then
         echo -e "${BLUE}Updating existing installation...${NC}"
         sudo git -C "$INSTALL_DIR" fetch --all --quiet
@@ -255,7 +255,7 @@ npm run build-ts
 
 # node-pty is native and must match Electron's ABI, not the system Node's.
 # Without this the embedded build terminal fails to load at runtime. It is not
-# fatal — the GUI degrades to "run podium ai yourself" — so a failure here is a
+# fatal — the GUI degrades to "run zeltro ai yourself" — so a failure here is a
 # warning rather than an abort.
 echo -e "${BLUE}Rebuilding native modules for Electron...${NC}"
 if ! npx --yes @electron/rebuild -f -w node-pty; then
@@ -267,40 +267,40 @@ fi
 # Step 6: launcher
 ###############################
 echo -e "${CYAN}Creating launcher...${NC}"
-sudo tee "$BIN_DIR/podium-gui" >/dev/null << LAUNCHER
+sudo tee "$BIN_DIR/zeltro-gui" >/dev/null << LAUNCHER
 #!/bin/bash
-# Podium GUI launcher.
+# Zeltro GUI launcher.
 #   --no-focus  open unfocused and behind other windows (background launches)
 APP_DIR="$INSTALL_DIR"
 cd "\$APP_DIR" || exit 1
 exec "\$APP_DIR/node_modules/.bin/electron" "\$APP_DIR/dist/main.js" "\$@"
 LAUNCHER
-sudo chmod +x "$BIN_DIR/podium-gui"
+sudo chmod +x "$BIN_DIR/zeltro-gui"
 
 ###############################
 # Step 7: desktop entry
 ###############################
 echo -e "${CYAN}Installing desktop entry...${NC}"
-sudo tee /usr/share/applications/podium-gui.desktop >/dev/null << 'DESKTOP'
+sudo tee /usr/share/applications/zeltro-gui.desktop >/dev/null << 'DESKTOP'
 [Desktop Entry]
 Version=1.0
 Type=Application
-Name=Podium
+Name=Zeltro
 GenericName=PHP Development Platform
-Comment=Manage Podium projects, services and installs
-Exec=podium-gui
-Icon=podium-gui
+Comment=Manage Zeltro projects, services and installs
+Exec=zeltro-gui
+Icon=zeltro-gui
 Terminal=false
 StartupNotify=true
-StartupWMClass=Podium
+StartupWMClass=Zeltro
 Categories=Development;IDE;
-Keywords=php;laravel;wordpress;docker;development;podium;
+Keywords=php;laravel;wordpress;docker;development;zeltro;
 DESKTOP
 
 for size in 16 32 48 64 128 256; do
-    icon="$APP_DIR/packaging/debian-package/usr/share/icons/hicolor/${size}x${size}/apps/podium-gui.png"
+    icon="$APP_DIR/packaging/debian-package/usr/share/icons/hicolor/${size}x${size}/apps/zeltro-gui.png"
     if [[ -f "$icon" ]]; then
-        sudo install -Dm644 "$icon" "/usr/share/icons/hicolor/${size}x${size}/apps/podium-gui.png"
+        sudo install -Dm644 "$icon" "/usr/share/icons/hicolor/${size}x${size}/apps/zeltro-gui.png"
     fi
 done
 if command -v gtk-update-icon-cache >/dev/null 2>&1; then
@@ -316,7 +316,7 @@ fi
 echo
 echo -e "${GREEN}🎉 Installation Complete!${NC}"
 echo "=========================="
-echo -e "${GREEN}✓ Podium GUI installed${NC}"
+echo -e "${GREEN}✓ Zeltro GUI installed${NC}"
 echo
 
 # A full system upgrade during the CLI install can replace the running kernel,
@@ -327,17 +327,17 @@ if [ ! -d "/usr/lib/modules/$(uname -r)" ]; then
     echo
 fi
 
-if [[ ! -f /etc/podium-cli/.env ]]; then
+if [[ ! -f /etc/zeltro-cli/.env ]]; then
     echo -e "${CYAN}🚀 Next Steps:${NC}"
-    echo -e "  1. Run ${BLUE}podium configure${NC} to set up your environment"
+    echo -e "  1. Run ${BLUE}zeltro configure${NC} to set up your environment"
     echo -e "     (or just launch the GUI — it will walk you through it)"
-    echo -e "  2. Launch it: ${BLUE}podium-gui${NC}, or find ${BLUE}Podium${NC} in your applications menu"
+    echo -e "  2. Launch it: ${BLUE}zeltro-gui${NC}, or find ${BLUE}Zeltro${NC} in your applications menu"
 else
     echo -e "${CYAN}🚀 Launch it:${NC}"
-    echo -e "  ${BLUE}podium-gui${NC}, or find ${BLUE}Podium${NC} in your applications menu"
+    echo -e "  ${BLUE}zeltro-gui${NC}, or find ${BLUE}Zeltro${NC} in your applications menu"
 fi
 
 echo
 echo -e "${CYAN}🗑️  To uninstall:${NC}"
-echo -e "  ${BLUE}sudo rm -rf $INSTALL_DIR $BIN_DIR/podium-gui /usr/share/applications/podium-gui.desktop${NC}"
+echo -e "  ${BLUE}sudo rm -rf $INSTALL_DIR $BIN_DIR/zeltro-gui /usr/share/applications/zeltro-gui.desktop${NC}"
 echo

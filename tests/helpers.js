@@ -1,4 +1,4 @@
-// Shared helpers for driving the Podium GUI with Playwright.
+// Shared helpers for driving the Zeltro GUI with Playwright.
 //
 // Playwright supports Electron natively — this is a first-class API, not a
 // workaround. `electron.launch()` gives full DOM access in the renderer AND
@@ -31,7 +31,7 @@ const DEBUG_DIR = path.join(ROOT, 'debug');
 // they start from nothing, and no test can damage a real configuration however
 // badly it fails. Reused across launches within a run so state persists between
 // them, which several tests rely on.
-const TEST_USER_DATA = path.join(os.tmpdir(), `podium-gui-test-${process.pid}`);
+const TEST_USER_DATA = path.join(os.tmpdir(), `zeltro-gui-test-${process.pid}`);
 
 function testUserDataDir() { return TEST_USER_DATA; }
 

@@ -1,8 +1,8 @@
 #!/bin/bash
 set -e
 
-# Mac installer script for Podium GUI
-echo "🚀 Installing Podium GUI for macOS..."
+# Mac installer script for Zeltro GUI
+echo "🚀 Installing Zeltro GUI for macOS..."
 
 # Check if running as root
 if [[ $EUID -eq 0 ]]; then
@@ -10,26 +10,26 @@ if [[ $EUID -eq 0 ]]; then
    exit 1
 fi
 
-# Install Podium CLI if not already installed
-if ! command -v podium &> /dev/null; then
-    echo "📦 Installing Podium CLI dependency..."
+# Install Zeltro CLI if not already installed
+if ! command -v zeltro &> /dev/null; then
+    echo "📦 Installing Zeltro CLI dependency..."
     echo "This will install Docker, Node.js, and other required packages via Homebrew..."
-    curl -fsSL https://raw.githubusercontent.com/CaneBayComputers/podium-cli/master/install-mac.sh | bash
+    curl -fsSL https://raw.githubusercontent.com/CaneBayComputers/zeltro-cli/master/install-mac.sh | bash
 else
-    echo "✅ Podium CLI is already installed"
+    echo "✅ Zeltro CLI is already installed"
 fi
 
-# Verify Podium CLI installation
-if ! command -v podium &> /dev/null; then
-    echo "❌ Podium CLI installation failed"
+# Verify Zeltro CLI installation
+if ! command -v zeltro &> /dev/null; then
+    echo "❌ Zeltro CLI installation failed"
     exit 1
 fi
 
 # Install GUI application
-echo "📦 Installing Podium GUI..."
+echo "📦 Installing Zeltro GUI..."
 
 # Create application directory
-APP_DIR="/Applications/Podium GUI.app"
+APP_DIR="/Applications/Zeltro GUI.app"
 if [[ -d "$APP_DIR" ]]; then
     echo "🗑️  Removing existing installation..."
     rm -rf "$APP_DIR"
@@ -49,13 +49,13 @@ cat > "$APP_DIR/Contents/Info.plist" << 'EOF'
 <plist version="1.0">
 <dict>
     <key>CFBundleExecutable</key>
-    <string>podium-gui</string>
+    <string>zeltro-gui</string>
     <key>CFBundleIdentifier</key>
-    <string>com.canebaycomputers.podium-gui</string>
+    <string>com.canebaycomputers.zeltro-gui</string>
     <key>CFBundleName</key>
-    <string>Podium GUI</string>
+    <string>Zeltro GUI</string>
     <key>CFBundleDisplayName</key>
-    <string>Podium GUI</string>
+    <string>Zeltro GUI</string>
     <key>CFBundleVersion</key>
     <string>1.0.0</string>
     <key>CFBundleShortVersionString</key>
@@ -73,7 +73,7 @@ cat > "$APP_DIR/Contents/Info.plist" << 'EOF'
 EOF
 
 # Create executable wrapper script
-cat > "$APP_DIR/Contents/MacOS/podium-gui" << 'EOF'
+cat > "$APP_DIR/Contents/MacOS/zeltro-gui" << 'EOF'
 #!/bin/bash
 cd "$(dirname "$0")/../Resources"
 if command -v electron &> /dev/null; then
@@ -86,7 +86,7 @@ else
 fi
 EOF
 
-chmod +x "$APP_DIR/Contents/MacOS/podium-gui"
+chmod +x "$APP_DIR/Contents/MacOS/zeltro-gui"
 
 # Install Node dependencies if needed
 cd "$APP_DIR/Contents/Resources"
@@ -98,14 +98,14 @@ fi
 # Create command line alias
 echo "🔗 Creating command line alias..."
 mkdir -p /usr/local/bin
-ln -sf "$APP_DIR/Contents/MacOS/podium-gui" /usr/local/bin/podium-gui 2>/dev/null || \
-    sudo ln -sf "$APP_DIR/Contents/MacOS/podium-gui" /usr/local/bin/podium-gui
+ln -sf "$APP_DIR/Contents/MacOS/zeltro-gui" /usr/local/bin/zeltro-gui 2>/dev/null || \
+    sudo ln -sf "$APP_DIR/Contents/MacOS/zeltro-gui" /usr/local/bin/zeltro-gui
 
-echo "✅ Podium GUI installed successfully!"
+echo "✅ Zeltro GUI installed successfully!"
 echo ""
 echo "🚀 Next steps:"
-echo "   1. Launch from Applications folder or run: podium-gui"
-echo "   2. Or use the CLI command: podium gui"
+echo "   1. Launch from Applications folder or run: zeltro-gui"
+echo "   2. Or use the CLI command: zeltro gui"
 echo ""
-echo "📖 Documentation: https://github.com/CaneBayComputers/podium-cli"
+echo "📖 Documentation: https://github.com/CaneBayComputers/zeltro-cli"
 echo ""
