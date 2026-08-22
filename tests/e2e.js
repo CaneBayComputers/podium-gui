@@ -622,13 +622,19 @@ async function run() {
       require('path').join(require('./helpers').ROOT, 'src/styles.css'), 'utf8');
     const splashBlock = splashCss.slice(splashCss.indexOf('.splash-robot {'),
                                         splashCss.indexOf('.brand-row {'));
-    check('the splash glitch runs once rather than looping',
-      !/infinite/.test(splashBlock) && /animation-iteration-count: 1/.test(splashBlock));
-    // Every ghost ends at zero, so the last frame is the solid robot.
-    const ghostEnds = [...splashBlock.matchAll(/@keyframes ghost-\d[\s\S]*?\n}/g)].map((m) => m[0]);
-    check('every ghost ends hidden, leaving a solid robot',
-      ghostEnds.length === 5 && ghostEnds.every((k) => /100% *} *$|100% *{ *opacity: 0|, *100% *{ *opacity: 0/.test(k)),
-      `${ghostEnds.length} ghost keyframe sets`);
+    // It loops. An earlier version resolved to a still robot on the reasoning
+    // that a permanent effect reads as broken — but the splash is only up while
+    // something is loading, and a still robot above "Loading Zeltro" reads as
+    // frozen. The splash being replaced is what says the app is ready.
+    check('the splash glitch loops rather than settling',
+      /animation-iteration-count: infinite/.test(splashBlock)
+      && /splash-base 1\.2s steps\(1, end\) infinite/.test(splashBlock));
+
+    // Every burst pairs two ghosts, so a scattered frame reads as displacement
+    // rather than as one copy sliding sideways.
+    const ghostSets = [...splashBlock.matchAll(/@keyframes ghost-\d[\s\S]*?\n}/g)].map((m) => m[0]);
+    check('all five ghosts have their own timing', ghostSets.length === 5,
+      `${ghostSets.length} keyframe sets`);
     // The solid robot underneath is what makes a gap read as recovery rather
     // than as the image disappearing.
     check('a solid robot sits under the ghosts',

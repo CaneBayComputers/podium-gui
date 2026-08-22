@@ -1983,17 +1983,21 @@ span.status-indicator {
  *
  * During a burst the CENTRED copy is hidden and only the offset ones show, so
  * the robot appears to break apart rather than gain a halo. Between bursts the
- * solid robot is the only thing visible. That alternation — scattered, whole,
- * scattered, whole — is what reads as a signal breaking up and recovering.
+ * solid robot is the only thing visible. Scattered, whole, scattered, whole.
  *
- * It RESOLVES rather than looping. A permanent effect says the app is broken;
- * one that stops says it just finished loading, which is the thing being
- * communicated. Every animation is finite and ends on the solid robot.
+ * It LOOPS. An earlier version resolved to a still robot, on the reasoning that
+ * a permanent effect reads as broken — but the splash is only on screen while
+ * something is loading, and a still robot above "Loading Zeltro" reads as
+ * frozen. The animation stopping should mean the app is ready, and the splash
+ * being replaced already says that.
+ *
+ * 1.2s. Longer versions read as a sequence to sit through rather than as
+ * something busy happening.
  *
  * steps(1, end) throughout: each state snaps. An eased glitch is a wobble.
  *
- * 2.6s. The first pass was half this and read as a flicker rather than a
- * sequence — long enough to see the alternation is the point of it.
+ * No mix-blend-mode. It forces each ghost into its own compositing layer, and
+ * cycling five of those made Chromium flash the whole window white.
  */
 .splash-robot {
     position: relative;
@@ -2009,19 +2013,16 @@ span.status-indicator {
     height: 100%;
 }
 
-/* Hidden exactly when a burst is on, so the offset copies are alone on screen
-   and the robot looks scattered rather than doubled. */
 .splash-robot-base {
     position: relative;
-    animation: splash-base 2.6s steps(1, end) 1 both;
+    animation: splash-base 1.2s steps(1, end) infinite;
 }
 
 .ghost {
     opacity: 0;
-    animation-duration: 2.6s;
+    animation-duration: 1.2s;
     animation-timing-function: steps(1, end);
-    animation-iteration-count: 1;
-    animation-fill-mode: both;
+    animation-iteration-count: infinite;
 }
 
 .g1 { transform: translate(-17px,  -9px); animation-name: ghost-1; }
@@ -2030,61 +2031,61 @@ span.status-indicator {
 .g4 { transform: translate( 19px,  -7px); animation-name: ghost-4; }
 .g5 { transform: translate( -8px, -16px); animation-name: ghost-5; }
 
-/* Four bursts: 0-11%, 24-35%, 48-59%, 72-80%. The base is dark for each and
-   visible in every gap, ending visible. */
+/* Four bursts per cycle: 0-10%, 22-32%, 44-54%, 66-76%. Every burst is a PAIR,
+   so the scattered frames read as displacement rather than as one copy sliding
+   sideways. The base is dark for each and visible in every gap. */
 @keyframes splash-base {
-    0%, 11%   { opacity: 0; }
-    12%, 23%  { opacity: 1; }
-    24%, 35%  { opacity: 0; }
-    36%, 47%  { opacity: 1; }
-    48%, 59%  { opacity: 0; }
-    60%, 71%  { opacity: 1; }
-    72%, 80%  { opacity: 0; }
-    81%, 100% { opacity: 1; }
+    0%, 10%   { opacity: 0; }
+    11%, 21%  { opacity: 1; }
+    22%, 32%  { opacity: 0; }
+    33%, 43%  { opacity: 1; }
+    44%, 54%  { opacity: 0; }
+    55%, 65%  { opacity: 1; }
+    66%, 76%  { opacity: 0; }
+    77%, 100% { opacity: 1; }
 }
 
-/* burst 1, burst 3 */
+/* bursts 1 and 3 */
 @keyframes ghost-1 {
-    0%, 6%    { opacity: .55; }
-    7%, 47%   { opacity: 0; }
-    48%, 54%  { opacity: .45; }
+    0%, 10%   { opacity: .55; }
+    11%, 43%  { opacity: 0; }
+    44%, 54%  { opacity: .45; }
     55%, 100% { opacity: 0; }
 }
 
-/* burst 1 (paired), burst 4 */
+/* bursts 1 and 4 */
 @keyframes ghost-2 {
-    0%, 11%   { opacity: .4; }
-    12%, 71%  { opacity: 0; }
-    72%, 78%  { opacity: .5; }
-    79%, 100% { opacity: 0; }
+    0%, 10%   { opacity: .4; }
+    11%, 65%  { opacity: 0; }
+    66%, 76%  { opacity: .5; }
+    77%, 100% { opacity: 0; }
 }
 
-/* burst 2, alone for most of it */
+/* bursts 2 and 4 */
 @keyframes ghost-3 {
-    0%, 23%   { opacity: 0; }
-    24%, 31%  { opacity: .6; }
-    32%, 100% { opacity: 0; }
+    0%, 21%   { opacity: 0; }
+    22%, 32%  { opacity: .6; }
+    33%, 65%  { opacity: 0; }
+    66%, 76%  { opacity: .35; }
+    77%, 100% { opacity: 0; }
 }
 
-/* burst 2 tail, burst 3 (paired) */
+/* burst 2 */
 @keyframes ghost-4 {
-    0%, 29%   { opacity: 0; }
-    30%, 35%  { opacity: .35; }
-    36%, 53%  { opacity: 0; }
-    54%, 59%  { opacity: .42; }
-    60%, 100% { opacity: 0; }
+    0%, 21%   { opacity: 0; }
+    22%, 32%  { opacity: .38; }
+    33%, 100% { opacity: 0; }
 }
 
-/* burst 4 (paired), then done */
+/* burst 3 */
 @keyframes ghost-5 {
-    0%, 74%   { opacity: 0; }
-    75%, 80%  { opacity: .38; }
-    81%, 100% { opacity: 0; }
+    0%, 43%   { opacity: 0; }
+    44%, 54%  { opacity: .42; }
+    55%, 100% { opacity: 0; }
 }
 
-/* Someone who asked the system not to animate things gets the solid robot
-   immediately. A glitch is exactly the motion that setting exists for, and the
-   robot is decoration either way. */
+/* Someone who asked the system not to animate things gets the solid robot and
+   nothing moving. A looping glitch is exactly the motion that setting is for. */
 @media (prefers-reduced-motion: reduce) {
     .ghost { animation: none; opacity: 0; }
     .splash-robot-base { animation: none; opacity: 1; }
