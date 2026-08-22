@@ -627,10 +627,13 @@ async function run() {
       require('path').join(require('./helpers').ROOT, 'src/index.html'), 'utf8');
     const splashBlock = splashCss.slice(splashCss.indexOf('.splash-robot {'),
                                         splashCss.indexOf('.brand-row {'));
+    // The size comes from a variable now, so the splash and a busy tile can
+    // share the reveal at different sizes. What matters is unchanged: the
+    // background is a fixed size, not one that tracks the growing box.
     check('the robot is a fixed-size background, not a scaled one',
-      /background-size: 190px 190px/.test(splashBlock)
+      /background-size: var\(--reveal-size\) var\(--reveal-size\)/.test(splashBlock)
       && !/background-size: *(cover|contain)/.test(splashBlock));
-    check('the reveal loops', /animation: splash-reveal [\d.]+s [a-z-]+ infinite/.test(splashBlock));
+    check('the reveal loops', /animation: robot-reveal [\d.]+s [a-z-]+ infinite/.test(splashBlock));
     // The outer box holds full height so the text below does not move as the
     // inner one grows.
     check('the reveal does not push the text below it around',
@@ -703,6 +706,50 @@ async function run() {
       /button\.disabled = !ready/.test(micBlock) && !/style\.display = show/.test(micBlock));
     check('the disabled mic says where to turn dictation on',
       /turn it on in Settings/.test(micBlock));
+
+    // Starting a project blocks its own tile, not the window. Everything else
+    // on the dashboard stays usable, and the thing that is working is the thing
+    // that looks like it.
+    const tileBusy = await win.evaluate(async () => {
+      const p = window.__visibleProjects()[0]?.name;
+      if (!p) return null;
+      window.setTileBusy(p, 'Starting…');
+      await new Promise((r) => setTimeout(r, 300));
+      const card = document.querySelector(`.project-card[data-project="${CSS.escape(p)}"]`);
+      const busy = card?.querySelector('.tile-busy');
+      const cr = card?.getBoundingClientRect(), br = busy?.getBoundingClientRect();
+      const out = {
+        scopedToCard: Boolean(cr && br && br.width <= cr.width + 1 && br.height <= cr.height + 1),
+        fullScreen: getComputedStyle(document.getElementById('loading-overlay')).display,
+        ownButtonsOff: [...card.querySelectorAll('.project-actions button')].every((b) => b.disabled),
+        othersUsable: [...document.querySelectorAll('.project-card[data-project]')]
+          .filter((c) => c.dataset.project !== p)
+          .every((c) => ![...c.querySelectorAll('button')].every((b) => b.disabled)),
+        robot: Boolean(busy?.querySelector('.robot-reveal'))
+      };
+      window.clearTileBusy(p);
+      out.clears = !document.querySelector('.tile-busy');
+      return out;
+    });
+    if (tileBusy) {
+      check('a busy tile covers only its own card', tileBusy.scopedToCard, JSON.stringify(tileBusy));
+      check('starting a project does not block the window', tileBusy.fullScreen === 'none');
+      check('a busy tile disables its own buttons and nothing else',
+        tileBusy.ownButtonsOff && tileBusy.othersUsable, JSON.stringify(tileBusy));
+      check('the busy tile shows the robot rather than a spinner', tileBusy.robot);
+      check('clearing removes the overlay', tileBusy.clears);
+    }
+
+    // A throw must not leave a tile blocked for the rest of the session with its
+    // own buttons dead and nothing to un-stick it.
+    const busySrc = require('fs').readFileSync(
+      require('path').join(require('./helpers').ROOT, 'src/renderer.ts'), 'utf8');
+    for (const fn of ['startProject', 'stopProject', 'disableProject', 'enableProject']) {
+      const body = busySrc.slice(busySrc.indexOf(`async function ${fn}`),
+                                busySrc.indexOf(`async function ${fn}`) + 1200);
+      check(`${fn} clears its tile even if the command throws`,
+        /finally \{\s*clearTileBusy/.test(body), 'expected the clear in a finally');
+    }
 
     // --- General settings ---------------------------------------------------
     await win.evaluate(() => {

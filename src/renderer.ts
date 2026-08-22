@@ -1077,6 +1077,7 @@ function renderProjects(): void {
 
         return `
             <div class="project-card ${emojiClass}${disabled ? ' project-disabled' : ''}"
+                 data-project="${escapeHtml(project.name)}"
                  ${disabled ? 'data-testid="disabled-card"' : ''}>
                 <div class="project-status-dot ${statusClass}" title="${disabled ? 'Disabled — parked, not deleted' : ''}">${statusDot}</div>
                 <div class="project-header">
@@ -1504,10 +1505,16 @@ function zeltroFor(projectName: string, subcommand: string, args: string[] = [])
 
 async function startProject(projectName: string): Promise<void> {
     try {
-        showLoadingOverlay('Starting Project', `Starting ${projectName}...`);
-        const result = await zeltroFor(projectName, 'up', [projectName, '--json-output']);
-        
-        hideLoadingOverlay();
+        setTileBusy(projectName, 'Starting…');
+        // In a finally, not after the await: a throw here would otherwise leave
+        // the tile blocked for the rest of the session with its own buttons
+        // disabled, and nothing to un-stick it but a restart.
+        let result;
+        try {
+            result = await zeltroFor(projectName, 'up', [projectName, '--json-output']);
+        } finally {
+            clearTileBusy(projectName);
+        }
         
         if (result.code === 0) {
             showSuccess(`Project ${projectName} started successfully`);
@@ -1534,10 +1541,16 @@ async function startProject(projectName: string): Promise<void> {
 
 async function stopProject(projectName: string): Promise<void> {
     try {
-        showLoadingOverlay('Stopping Project', `Stopping ${projectName}...`);
-        const result = await zeltroFor(projectName, 'down', [projectName, '--json-output']);
-        
-        hideLoadingOverlay();
+        setTileBusy(projectName, 'Stopping…');
+        // In a finally, not after the await: a throw here would otherwise leave
+        // the tile blocked for the rest of the session with its own buttons
+        // disabled, and nothing to un-stick it but a restart.
+        let result;
+        try {
+            result = await zeltroFor(projectName, 'down', [projectName, '--json-output']);
+        } finally {
+            clearTileBusy(projectName);
+        }
         
         if (result.code === 0) {
             showSuccess(`Project ${projectName} stopped successfully`);
@@ -1625,7 +1638,13 @@ async function disableProject(projectName: string): Promise<void> {
         + `Files, database and volumes are all kept — nothing is deleted.\n\n`
         + `Find it again with the "Disabled" filter.`)) return;
 
-    const result = await zeltroFor(projectName, 'disable', [projectName, '--json-output']);
+    setTileBusy(projectName, 'Disabling…');
+    let result;
+    try {
+        result = await zeltroFor(projectName, 'disable', [projectName, '--json-output']);
+    } finally {
+        clearTileBusy(projectName);
+    }
     if (result.code === 0) {
         // Say where it went. A project vanishing from the grid with only a
         // "done" toast is indistinguishable from having deleted it.
@@ -1638,7 +1657,13 @@ async function disableProject(projectName: string): Promise<void> {
 }
 
 async function enableProject(projectName: string): Promise<void> {
-    const result = await zeltroFor(projectName, 'enable', [projectName, '--json-output']);
+    setTileBusy(projectName, 'Enabling…');
+    let result;
+    try {
+        result = await zeltroFor(projectName, 'enable', [projectName, '--json-output']);
+    } finally {
+        clearTileBusy(projectName);
+    }
     if (result.code === 0) {
         // enable deliberately does not start it, so do not imply that it did.
         showSuccess(`${projectName} enabled. Start it when you are ready.`);
@@ -3240,13 +3265,11 @@ async function saveAiSettings(): Promise<void> {
         aiSettingsStreaming = false;
 
         if (result.code === 0) {
-            // Confirm what actually landed rather than trusting the exit code —
-            // the clearing semantics are the fiddly part of this panel.
-            const now = await ipcRenderer.invoke('get-ai-agent-full');
-            debugAiState(now);
-            showSuccess(agent
-                ? `AI agent set to ${agent}${now.api_base ? ` via ${now.api_base}` : ''}.`
-                : 'AI agent cleared.');
+            // Read back rather than trusting the exit code — the clearing
+            // semantics are the fiddly part of this panel — but do not announce
+            // it. Closing the panel is the confirmation; reciting the setting
+            // back tells someone what they just typed.
+            debugAiState(await ipcRenderer.invoke('get-ai-agent-full'));
             closeModal();
         } else {
             showError(`Could not set the AI agent (exit ${result.code}). See the output above.`);
@@ -3682,9 +3705,10 @@ function reattachTileTerminals(): void {
         host.appendChild(session.wrapper);
     }
 
-    // Notices are restored the same way the panes are: the grid was just
-    // rebuilt, so anything written directly into a tile is gone.
+    // Notices and busy overlays are restored the same way the panes are: the
+    // grid was just rebuilt, so anything written directly into a tile is gone.
     paintTileNotices();
+    paintTileBusy();
 
     if (pendingFocus && document.contains(pendingFocus.el)) {
         pendingFocus.el.focus({ preventScroll: true });
@@ -4448,6 +4472,46 @@ function stopDictation(button: HTMLElement): void {
 // seconds — barely better than the toast it was meant to replace. Re-applied
 // after each render, next to the terminals, which are restored the same way.
 const tileNotices = new Map<string, string>();
+
+// Projects that are mid-action, and what to say about each.
+//
+// Held in state like the notices, because the grid is rebuilt on every
+// ten-second poll — an overlay written straight into a card would vanish partway
+// through the very operation it is reporting.
+const busyTiles = new Map<string, string>();
+
+// Starting one project used to block the whole window. It is one tile's
+// business: everything else stays usable, and the thing that is working is the
+// thing that looks like it.
+function setTileBusy(project: string, label: string): void {
+    busyTiles.set(project, label);
+    paintTileBusy();
+}
+
+function clearTileBusy(project: string): void {
+    busyTiles.delete(project);
+    document.querySelector(`[data-testid="tile-busy-${CSS.escape(project)}"]`)?.remove();
+    const card = document.querySelector(`.project-card[data-project="${CSS.escape(project)}"]`);
+    card?.querySelectorAll('button').forEach((b) => ((b as HTMLButtonElement).disabled = false));
+}
+
+function paintTileBusy(): void {
+    for (const [project, label] of busyTiles) {
+        const card = document.querySelector(`.project-card[data-project="${CSS.escape(project)}"]`);
+        if (!card || card.querySelector('.tile-busy')) continue;
+
+        // Its own buttons go dead: a second Start while the first is running is
+        // never what someone means.
+        card.querySelectorAll('button').forEach((b) => ((b as HTMLButtonElement).disabled = true));
+
+        const busy = document.createElement('div');
+        busy.className = 'tile-busy';
+        busy.setAttribute('data-testid', `tile-busy-${project}`);
+        busy.innerHTML = `<div class="robot-reveal tile-robot"></div>
+            <span>${escapeHtml(label)}</span>`;
+        card.appendChild(busy);
+    }
+}
 
 function showTileNotice(project: string, message: string): void {
     tileNotices.set(project, message);

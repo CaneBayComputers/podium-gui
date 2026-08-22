@@ -1995,19 +1995,45 @@ span.status-indicator {
     margin: 0 auto 1.25rem;
 }
 
-.splash-reveal {
-    width: 190px;
+.robot-reveal {
+    --reveal-size: 190px;
+    width: var(--reveal-size);
     height: 0;
     background-image: url('../assets/logo-380.png');
-    background-size: 190px 190px;
+    /* Fixed to the variable, NOT to the box: the box growing uncovers a
+       stationary image rather than stretching one. */
+    background-size: var(--reveal-size) var(--reveal-size);
     background-position: top center;
     background-repeat: no-repeat;
-    animation: splash-reveal 2.4s ease-in-out infinite;
+    animation: robot-reveal 2.4s ease-in-out infinite;
+}
+
+/* Smaller, and quicker, because a tile action is usually over in a second or
+   two and a leisurely reveal would still be on its first pass. */
+.tile-robot {
+    --reveal-size: 64px;
+    animation-duration: 1.4s;
+}
+
+/* Covers only its own card. Starting one project is one tile's business. */
+.tile-busy {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    background: rgba(10, 12, 30, 0.82);
+    border-radius: inherit;
+    font-size: 0.85rem;
+    color: var(--text-primary);
+    z-index: 5;
 }
 
 /* Grows, holds him whole for a beat, then starts over. The hold matters: without
    it the reveal reads as a flicker rather than as something being uncovered. */
-@keyframes splash-reveal {
+@keyframes robot-reveal {
     0%        { height: 0; }
     65%       { height: 190px; }
     100%      { height: 190px; }
@@ -2015,7 +2041,7 @@ span.status-indicator {
 
 /* Someone who asked the system not to animate things gets the whole robot. */
 @media (prefers-reduced-motion: reduce) {
-    .splash-reveal { animation: none; height: 190px; }
+    .robot-reveal { animation: none; height: var(--reveal-size); }
 }
 
 /* The mic when dictation is off: present but plainly unavailable, so the button
