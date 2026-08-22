@@ -26,6 +26,13 @@ const failures = [];
 // `//` sits inside a string, and getting that wrong would silently stop matching
 // real code — a far worse failure than a false positive.
 function withoutComments(source, lineComment = '//') {
+  // HTML comments are blocks, not lines, and are stripped wholesale. Needed
+  // because a comment EXPLAINING an attribute counts as an occurrence of it —
+  // which broke an assertion about how many alt="" attributes the splash robot
+  // has, the third time in this codebase that a comment has failed a check
+  // written about the code it describes.
+  if (lineComment === '<!--') return source.replace(/<!--[\s\S]*?-->/g, '');
+
   const re = lineComment === '#' ? /^\s*#/ : /^\s*\/\//;
   return source.split('\n').filter((l) => !re.test(l)).join('\n');
 }
@@ -607,6 +614,58 @@ async function run() {
     // LOCAL and LAN are different routes; unlabelled they look interchangeable.
     check('local and LAN URLs are labelled as different routes',
       /url-scope">LOCAL/.test(rendererShape) && /url-scope">LAN/.test(rendererShape));
+
+    // The splash glitch must RESOLVE, not loop. A permanent effect says the app
+    // is broken; one that stops after a beat says it just finished loading,
+    // which is the thing being communicated.
+    const splashCss = require('fs').readFileSync(
+      require('path').join(require('./helpers').ROOT, 'src/styles.css'), 'utf8');
+    const splashBlock = splashCss.slice(splashCss.indexOf('.splash-robot {'),
+                                        splashCss.indexOf('.brand-row {'));
+    check('the splash glitch runs once rather than looping',
+      !/infinite/.test(splashBlock) && /animation-iteration-count: 1/.test(splashBlock));
+    // Every ghost ends at zero, so the last frame is the solid robot.
+    const ghostEnds = [...splashBlock.matchAll(/@keyframes ghost-\d[\s\S]*?\n}/g)].map((m) => m[0]);
+    check('every ghost ends hidden, leaving a solid robot',
+      ghostEnds.length === 5 && ghostEnds.every((k) => /100% *} *$|100% *{ *opacity: 0|, *100% *{ *opacity: 0/.test(k)),
+      `${ghostEnds.length} ghost keyframe sets`);
+    // The solid robot underneath is what makes a gap read as recovery rather
+    // than as the image disappearing.
+    check('a solid robot sits under the ghosts',
+      /\.splash-robot-base/.test(splashBlock));
+    const splashHtml = require('fs').readFileSync(
+      require('path').join(require('./helpers').ROOT, 'src/index.html'), 'utf8');
+    // The splash has no spinner: two "working on it" signals compete.
+    check('the splash has no spinner beside the robot',
+      !/loading-spinner large/.test(splashHtml));
+    // The centred copy is hidden during a burst, so the robot looks scattered
+    // rather than doubled — that alternation is the whole effect.
+    check('the solid robot is hidden while a burst is showing',
+      /@keyframes splash-base/.test(splashBlock));
+    // mix-blend-mode forces each ghost into its own compositing layer, and
+    // creating five of those in quick succession made Chromium flash the whole
+    // window white. Reported from real use; screenshots never showed it.
+    check('the ghosts do not force compositing layers',
+      !/mix-blend-mode/.test(splashBlock));
+    // The window title is what shows in the taskbar and alt-tab, where a
+    // subtitle competes for the space the name needs.
+    check('the window is titled just Zeltro',
+      /<title>Zeltro<\/title>/.test(splashHtml));
+    // A glitch effect is exactly the motion that setting exists for.
+    check('reduced-motion gets the settled robot immediately',
+      /prefers-reduced-motion: reduce/.test(splashBlock) && /animation: none/.test(splashBlock));
+    // Three copies of one robot should announce as nothing.
+    const robotMarkup = withoutComments(
+      splashHtml.slice(splashHtml.indexOf('class="splash-robot"'),
+                       splashHtml.indexOf('loading-spinner large')), '<!--');
+    check('the splash robot is decorative to a screen reader',
+      (robotMarkup.match(/alt=""/g) || []).length === 6
+      && (robotMarkup.match(/aria-hidden="true"/g) || []).length === 5);
+
+    // A modal header rule keyed on h3 left the one modal using h2 uncoloured —
+    // invisible until a differently-levelled heading appeared in a header.
+    check('modal headers are styled by the header, not the heading level',
+      /\.modal-header h2,\s*\.modal-header h3 \{/.test(splashCss));
 
     // --- General settings ---------------------------------------------------
     await win.evaluate(() => window.closeModal());

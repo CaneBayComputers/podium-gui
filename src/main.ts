@@ -62,7 +62,7 @@ function createWindow(): void {
       additionalArguments: process.argv.includes('--dev') ? ['--debug-mode'] : []
     },
     icon: path.join(__dirname, '../assets/icon.png'),
-    title: 'Zeltro - PHP Development Platform'
+    title: 'Zeltro'
   });
 
   mainWindow.once('ready-to-show', () => {
@@ -90,7 +90,7 @@ function createWindow(): void {
     // that is the taskbar highlight, and a background launch should not be
     // asking for attention at all.
     if (process.platform === 'linux') {
-      const title = 'Zeltro - PHP Development Platform';
+      const title = 'Zeltro';
       const wm = (state: string) =>
         `xdotool search --name '${title}' set_window --urgency 0 2>/dev/null; ` +
         `wmctrl -r '${title}' -b ${state} 2>/dev/null`;
